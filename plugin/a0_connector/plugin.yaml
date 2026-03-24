@@ -1,0 +1,9 @@
+name: a0_connector
+title: A0 Connector
+description: Clean HTTP and WebSocket connector surface for CLI and external clients. Provides versioned API endpoints and a dedicated /connector WebSocket namespace with API-key authentication.
+version: 0.1.0
+settings_sections:
+  - external
+  - developer
+per_project_config: false
+per_agent_config: false
