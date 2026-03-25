@@ -1,13 +1,10 @@
 """Socket.IO handler for the /connector namespace.
 
 This handler provides a clean, CLI-friendly WebSocket interface for Agent Zero.
-It authenticates via API key (no CSRF, no session cookies) and exposes connector-
+It authenticates via session cookies (login with username/password) and exposes
 native events rather than frontend state-sync snapshots.
-
-Namespace:  /connector
-Auth:       API key (auth.api_key, Authorization: Bearer, or X-API-KEY header)
-Security:   No origin restriction; no session/CSRF required.
-
+Auth:       Session-based (login with username/password, no CSRF needed)
+Security:   Requires valid session cookie from /login. No CSRF or API key required.
 Client → Server events:
   hello              { protocol, client, client_version }
   subscribe_context  { context_id, from: int }
@@ -53,7 +50,7 @@ class ConnectorHandler(WebSocketHandler):
 
     @classmethod
     def requires_auth(cls) -> bool:
-        return False
+        return True
 
     @classmethod
     def requires_csrf(cls) -> bool:
@@ -61,7 +58,7 @@ class ConnectorHandler(WebSocketHandler):
 
     @classmethod
     def requires_api_key(cls) -> bool:
-        return True
+        return False
 
     # ------------------------------------------------------------------
     # Lifecycle

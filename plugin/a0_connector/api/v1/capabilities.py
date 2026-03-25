@@ -27,7 +27,7 @@ class Capabilities(ApiHandler):
         return {
             "protocol": "a0-connector.v1",
             "version": "0.1.0",
-            "auth": ["api_key"],
+            "auth": ["session"],
             "transports": ["http", "websocket"],
             "streaming": True,
             "websocket_namespace": "/connector",

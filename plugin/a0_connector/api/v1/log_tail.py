@@ -10,7 +10,7 @@ from helpers.api import ApiHandler, Request, Response
 class LogTail(ApiHandler):
     @classmethod
     def requires_auth(cls) -> bool:
-        return False
+        return True
 
     @classmethod
     def requires_csrf(cls) -> bool:
@@ -18,7 +18,7 @@ class LogTail(ApiHandler):
 
     @classmethod
     def requires_api_key(cls) -> bool:
-        return True
+        return False
 
     async def process(self, input: dict, request: Request) -> dict | Response:
         from usr.plugins.a0_connector.helpers.event_bridge import get_context_log_entries
