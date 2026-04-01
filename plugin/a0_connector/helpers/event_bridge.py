@@ -1,11 +1,4 @@
-"""Context event streaming bridge for the a0-connector plugin.
-
-Translates internal Agent Zero log entries into normalized connector events
-that are suitable for external/CLI clients.
-
-This is intentionally transport-neutral: it does not write to websockets
-directly; callers decide how to deliver events.
-"""
+"""Context event streaming bridge for the a0-connector plugin."""
 from __future__ import annotations
 
 import asyncio
@@ -14,8 +7,6 @@ from typing import Any, AsyncIterator, Callable
 
 from helpers.print_style import PrintStyle
 
-
-# --- Connector event types ---------------------------------------------------
 
 EVENT_USER_MESSAGE = "user_message"
 EVENT_ASSISTANT_DELTA = "assistant_delta"
@@ -31,47 +22,52 @@ EVENT_STATUS = "status"
 EVENT_MESSAGE_COMPLETE = "message_complete"
 EVENT_CONTEXT_UPDATED = "context_updated"
 
-# Map from A0 log entry types to connector event types
 _LOG_TYPE_MAP: dict[str, str] = {
-    "user": EVENT_USER_MESSAGE,
+    "agent": EVENT_STATUS,
     "ai_response": EVENT_ASSISTANT_MESSAGE,
+    "browser": EVENT_TOOL_OUTPUT,
+    "code": EVENT_CODE_START,
+    "code_exe": EVENT_CODE_OUTPUT,
+    "code_output": EVENT_CODE_OUTPUT,
+    "error": EVENT_ERROR,
+    "hint": EVENT_STATUS,
+    "info": EVENT_STATUS,
+    "input": EVENT_USER_MESSAGE,
+    "mcp": EVENT_TOOL_START,
+    "progress": EVENT_STATUS,
+    "response": EVENT_ASSISTANT_MESSAGE,
+    "subagent": EVENT_STATUS,
     "tool": EVENT_TOOL_START,
     "tool_output": EVENT_TOOL_OUTPUT,
-    "code": EVENT_CODE_START,
-    "code_output": EVENT_CODE_OUTPUT,
+    "user": EVENT_USER_MESSAGE,
+    "util": EVENT_STATUS,
     "warning": EVENT_WARNING,
-    "error": EVENT_ERROR,
-    "info": EVENT_STATUS,
 }
 
 
 def log_entry_to_connector_event(
     log_entry: dict[str, Any],
-    sequence: int,
     context_id: str,
-) -> dict[str, Any] | None:
-    """Convert a raw A0 log entry dict to a connector event dict.
-
-    Returns ``None`` if the entry should be skipped.
-    """
-    entry_type = log_entry.get("type", "")
+) -> dict[str, Any]:
+    entry_type = str(log_entry.get("type", "")).strip()
     event_type = _LOG_TYPE_MAP.get(entry_type, EVENT_STATUS)
-
-    content = log_entry.get("content", "")
-    heading = log_entry.get("heading", "")
-    kvps = log_entry.get("kvps") or {}
+    item_no = int(log_entry.get("no", 0) or 0)
 
     data: dict[str, Any] = {}
-    if content:
+    content = log_entry.get("content")
+    heading = log_entry.get("heading")
+    kvps = log_entry.get("kvps")
+
+    if isinstance(content, str) and content:
         data["text"] = content
-    if heading:
+    if isinstance(heading, str) and heading:
         data["heading"] = heading
-    if kvps:
+    if isinstance(kvps, dict) and kvps:
         data["meta"] = kvps
 
     return {
         "context_id": context_id,
-        "sequence": sequence,
+        "sequence": item_no + 1,
         "event": event_type,
         "timestamp": log_entry.get("timestamp", ""),
         "data": data,
@@ -82,47 +78,26 @@ def get_context_log_entries(
     context_id: str,
     after: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Return normalized connector events for a context log.
-
-    Args:
-        context_id: The Agent Zero context ID.
-        after: Return only entries with sequence number > after (0 = all).
-
-    Returns:
-        A tuple of (events list, last_sequence).
-    """
+    """Return connector events plus the next log cursor for the context."""
     try:
         from agent import AgentContext
+
         context = AgentContext.get(context_id)
         if context is None:
             return [], 0
 
-        raw_entries = context.log.output()
-        events: list[dict[str, Any]] = []
-        last_seq = 0
-        for i, entry in enumerate(raw_entries):
-            seq = i + 1
-            if seq <= after:
-                continue
-            # entry might be a LogItem or dict depending on version
-            if hasattr(entry, "to_dict"):
-                entry_dict = entry.to_dict()
-            elif hasattr(entry, "__dict__"):
-                entry_dict = vars(entry)
-            elif isinstance(entry, dict):
-                entry_dict = entry
-            else:
-                continue
-
-            event = log_entry_to_connector_event(entry_dict, seq, context_id)
-            if event is not None:
-                events.append(event)
-                last_seq = seq
-
-        return events, last_seq
-    except Exception as e:
-        PrintStyle.error(f"[a0-connector] event_bridge error for context {context_id}: {e}")
-        return [], 0
+        log_output = context.log.output(start=max(int(after or 0), 0))
+        events = [
+            log_entry_to_connector_event(entry, context_id)
+            for entry in log_output.items
+            if isinstance(entry, dict)
+        ]
+        return events, int(log_output.end)
+    except Exception as exc:
+        PrintStyle.error(
+            f"[a0-connector] event_bridge error for context {context_id}: {exc}"
+        )
+        return [], max(int(after or 0), 0)
 
 
 async def stream_context_events(
@@ -132,30 +107,20 @@ async def stream_context_events(
     timeout: float = 300.0,
     emit_fn: Callable[[dict[str, Any]], Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Async generator that streams new connector events as they appear.
-
-    Args:
-        context_id: The context to watch.
-        from_sequence: Only yield events with sequence > this value.
-        poll_interval: How often to poll for new log entries (seconds).
-        timeout: Maximum streaming duration (seconds).
-        emit_fn: Optional async callable to call for each event (in addition to yielding).
-    """
-    last_seq = from_sequence
+    cursor = max(int(from_sequence or 0), 0)
     deadline = time.monotonic() + timeout
 
     while time.monotonic() < deadline:
-        events, new_seq = get_context_log_entries(context_id, after=last_seq)
+        events, next_cursor = get_context_log_entries(context_id, after=cursor)
         for event in events:
             if emit_fn is not None:
                 try:
                     result = emit_fn(event)
                     if asyncio.iscoroutine(result):
                         await result
-                except Exception as e:
-                    PrintStyle.error(f"[a0-connector] emit_fn error: {e}")
+                except Exception as exc:
+                    PrintStyle.error(f"[a0-connector] emit_fn error: {exc}")
             yield event
-        if new_seq > last_seq:
-            last_seq = new_seq
 
+        cursor = max(cursor, next_cursor)
         await asyncio.sleep(poll_interval)

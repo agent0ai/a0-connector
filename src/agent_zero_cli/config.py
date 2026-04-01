@@ -6,6 +6,7 @@ from pathlib import Path
 @dataclass
 class CLIConfig:
     instance_url: str = "http://localhost:5080"
+    api_key: str = ""
     theme: str = "dark"
 
 

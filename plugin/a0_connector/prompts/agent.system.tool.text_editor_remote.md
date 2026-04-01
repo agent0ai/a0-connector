@@ -6,7 +6,7 @@ This is different from `text_editor` which operates on the Agent Zero server's f
 Use `text_editor_remote` when the user asks you to edit files on their local machine while connected via the CLI.
 
 ## Requirements
-- A CLI client must be connected to this context via the `/connector` WebSocket namespace.
+- A CLI client must be connected to this context via the shared `/ws` namespace.
 - The CLI client must have enabled remote file editing support.
 
 ## Operations
@@ -57,3 +57,4 @@ Applies line-range patches to the file. Use the same format as the standard `tex
 - Always read the file first before patching to get current line numbers.
 - Paths are evaluated on the **remote machine's filesystem**, not the Agent Zero server.
 - If no CLI is connected, the tool will return an error message.
+- The transport uses `connector_file_op` and `connector_file_op_result` with a shared `op_id`.

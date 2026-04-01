@@ -1,5 +1,3 @@
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -26,15 +24,24 @@ class FakeRichLog:
 class FakeInput:
     def __init__(self) -> None:
         self.disabled = False
+        self.focused = False
+
+    def focus(self) -> None:
+        self.focused = True
 
 
 class DummyAgentZeroCLI(AgentZeroCLI):
     def __init__(self) -> None:
-        super().__init__(config=CLIConfig(instance_url="http://example.test"))
-        self.rendered_entries: list[dict] = []
+        super().__init__(
+            config=CLIConfig(
+                instance_url="http://example.test",
+                api_key="dev-a0-connector",
+            )
+        )
+        self.rendered_events: list[dict] = []
 
-    def _render_log_entry(self, log: FakeRichLog, entry: dict) -> None:
-        self.rendered_entries.append(entry)
+    def _render_connector_event(self, log: FakeRichLog, event: dict) -> None:
+        self.rendered_events.append(event)
 
 
 @pytest.fixture
@@ -44,38 +51,90 @@ def dummy_app() -> DummyAgentZeroCLI:
     input_widget = FakeInput()
     app.query_one = lambda selector, cls=None: log if selector == "#chat-log" else input_widget
     app._test_log = log
+    app._test_input = input_widget
     return app
 
 
-def test_state_push_renders_entries_even_when_log_version_smaller(dummy_app: DummyAgentZeroCLI) -> None:
-    payload = {
-        "data": {
-            "snapshot": {
-                "logs": [
-                    {"no": 10, "type": "info", "content": "first"},
-                    {"no": 11, "type": "info", "content": "second"},
-                ],
-                "log_version": 2,
-                "log_progress_active": True,
-            }
+def test_validate_capabilities_accepts_current_ws_contract(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app._validate_capabilities(
+        {
+            "protocol": "a0-connector.v1",
+            "auth": ["api_key"],
+            "websocket_namespace": "/ws",
+            "websocket_handlers": ["plugins/a0_connector/ws_connector"],
         }
+    )
+
+
+def test_validate_capabilities_rejects_old_namespace(dummy_app: DummyAgentZeroCLI) -> None:
+    with pytest.raises(ValueError, match="Unsupported WebSocket namespace"):
+        dummy_app._validate_capabilities(
+            {
+                "protocol": "a0-connector.v1",
+                "auth": ["api_key"],
+                "websocket_namespace": "/connector",
+                "websocket_handlers": ["plugins/a0_connector/ws_connector"],
+            }
+        )
+
+
+def test_context_snapshot_renders_events_for_current_context(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.current_context = "ctx-1"
+
+    dummy_app._handle_context_snapshot(
+        {
+            "context_id": "ctx-1",
+            "events": [
+                {"event": "assistant_message", "data": {"text": "Hello"}},
+                {"event": "status", "data": {"text": "Done"}},
+            ],
+        }
+    )
+
+    assert dummy_app.rendered_events == [
+        {"event": "assistant_message", "data": {"text": "Hello"}},
+        {"event": "status", "data": {"text": "Done"}},
+    ]
+
+
+def test_context_event_ignores_other_contexts(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.current_context = "ctx-1"
+
+    dummy_app._handle_context_event(
+        {
+            "context_id": "ctx-2",
+            "event": "assistant_message",
+            "data": {"text": "Ignored"},
+        }
+    )
+
+    assert dummy_app.rendered_events == []
+    assert dummy_app.agent_active is False
+    assert dummy_app._test_input.disabled is False
+
+
+def test_context_complete_reenables_input(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.current_context = "ctx-1"
+    dummy_app.agent_active = True
+    dummy_app._test_input.disabled = True
+
+    dummy_app._handle_context_complete({"context_id": "ctx-1"})
+
+    assert dummy_app.agent_active is False
+    assert dummy_app._test_input.disabled is False
+    assert dummy_app._test_input.focused is True
+
+
+def test_handle_file_op_returns_error_for_unknown_operation(dummy_app: DummyAgentZeroCLI) -> None:
+    result = dummy_app._handle_file_op(
+        {"op_id": "op-1", "op": "unknown", "path": "/tmp/example.txt"}
+    )
+
+    assert result == {
+        "op_id": "op-1",
+        "ok": False,
+        "error": "Unknown op: unknown",
     }
-
-    dummy_app._handle_state_push_ui(payload)
-
-    assert [entry["no"] for entry in dummy_app.rendered_entries] == [10, 11]
-
-
-def test_log_guid_reset_clears_log_and_resets_cursor(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.log_cursor = 7
-    dummy_app.log_guid = "old-guid"
-
-    payload = {"data": {"snapshot": {"log_guid": "new-guid", "logs": []}}}
-
-    dummy_app._handle_state_push_ui(payload)
-
-    assert dummy_app._test_log.cleared is True
-    assert dummy_app.log_cursor == 0
 
 
 class CapturingChatListScreen(ChatListScreen):
@@ -96,7 +155,7 @@ class ChatListTestApp(App[None]):
         await self.push_screen(self._screen)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_chat_list_uses_safe_ids_and_maps_back_to_context() -> None:
     contexts = [
         {"id": "ctx-1", "name": "One", "created_at": "2026-02-06", "last_message": "Hello"},

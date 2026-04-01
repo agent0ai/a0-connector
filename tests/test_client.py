@@ -1,16 +1,22 @@
-import sys
+import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 
 from agent_zero_cli.client import A0Client
+from agent_zero_cli.config import load_config
 
 
 class FakeResponse:
-    def __init__(self, status_code: int = 200, json_data: dict | None = None, headers: dict | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        status_code: int = 200,
+        json_data: dict | None = None,
+        headers: dict | None = None,
+    ) -> None:
         self.status_code = status_code
         self._json_data = json_data or {}
         self.headers = headers or {}
@@ -20,141 +26,218 @@ class FakeResponse:
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            request = httpx.Request("GET", "http://example.com")
+            request = httpx.Request("POST", "http://example.test")
             response = httpx.Response(self.status_code, request=request)
             raise httpx.HTTPStatusError("error", request=request, response=response)
+
+
+class FakeSocketIOClient:
+    def __init__(self, *, call_response: dict | None = None) -> None:
+        self.handlers: dict[tuple[str | None, str], object] = {}
+        self.connect_calls: list[tuple[str, dict]] = []
+        self.call_calls: list[tuple[str, dict, str | None]] = []
+        self.emit_calls: list[tuple[str, dict, str | None]] = []
+        self.call_response = call_response or {"results": [{"ok": True, "data": {}}]}
+        self.connected = False
+
+    def on(self, event: str, namespace: str | None = None):
+        def decorator(func):
+            self.handlers[(namespace, event)] = func
+            return func
+
+        return decorator
+
+    async def connect(self, url: str, **kwargs) -> None:
+        self.connect_calls.append((url, kwargs))
+        self.connected = True
+
+    async def call(
+        self,
+        event: str,
+        data: dict,
+        namespace: str | None = None,
+    ) -> dict:
+        self.call_calls.append((event, data, namespace))
+        return self.call_response
+
+    async def emit(
+        self,
+        event: str,
+        data: dict,
+        namespace: str | None = None,
+    ) -> None:
+        self.emit_calls.append((event, data, namespace))
+
+    async def disconnect(self) -> None:
+        self.connected = False
 
 
 pytestmark = pytest.mark.anyio
 
 
+def test_load_config_reads_api_key_from_cli_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / ".cli-config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "instance_url": "http://127.0.0.1:50001",
+                "api_key": "dev-a0-connector",
+                "theme": "dark",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config()
+
+    assert config.instance_url == "http://127.0.0.1:50001"
+    assert config.api_key == "dev-a0-connector"
+    assert config.theme == "dark"
+
+
+async def test_check_health_posts_capabilities() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(return_value=FakeResponse(status_code=200))
+
+    result = await client.check_health()
+
+    assert result is True
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/capabilities",
+        json={},
+        headers={},
+    )
+
+
 async def test_check_health_returns_false_on_connect_error() -> None:
     client = A0Client("http://localhost:5080")
-    request = httpx.Request("GET", "http://localhost:5080/health")
+    request = httpx.Request(
+        "POST", "http://localhost:5080/api/plugins/a0_connector/v1/capabilities"
+    )
     client.http = Mock()
-    client.http.get = AsyncMock(side_effect=httpx.ConnectError("boom", request=request))
+    client.http.post = AsyncMock(side_effect=httpx.ConnectError("boom", request=request))
 
     result = await client.check_health()
 
     assert result is False
 
 
-async def test_check_health_returns_false_on_timeout() -> None:
-    client = A0Client("http://localhost:5080")
-    request = httpx.Request("GET", "http://localhost:5080/health")
+async def test_verify_api_key_uses_x_api_key_header() -> None:
+    client = A0Client("http://localhost:5080", api_key="dev-a0-connector")
     client.http = Mock()
-    client.http.get = AsyncMock(side_effect=httpx.TimeoutException("boom", request=request))
+    client.http.post = AsyncMock(return_value=FakeResponse(status_code=200))
 
-    result = await client.check_health()
-
-    assert result is False
-
-
-async def test_check_health_returns_true_on_200() -> None:
-    client = A0Client("http://localhost:5080")
-    client.http = Mock()
-    client.http.get = AsyncMock(return_value=FakeResponse(status_code=200))
-
-    result = await client.check_health()
+    result = await client.verify_api_key()
 
     assert result is True
-
-
-async def test_needs_auth_200_sets_csrf_and_runtime_id() -> None:
-    client = A0Client("http://localhost:5080")
-    client.http = Mock()
-    client.http.get = AsyncMock(
-        return_value=FakeResponse(
-            status_code=200,
-            json_data={"token": "csrf-123", "runtime_id": "runtime-1"},
-        )
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/chats_list",
+        json={},
+        headers={"X-API-KEY": "dev-a0-connector"},
     )
 
-    result = await client.needs_auth()
+
+async def test_verify_api_key_returns_false_on_401() -> None:
+    client = A0Client("http://localhost:5080", api_key="bad-key")
+    client.http = Mock()
+    client.http.post = AsyncMock(return_value=FakeResponse(status_code=401))
+
+    result = await client.verify_api_key()
 
     assert result is False
-    assert client.csrf_token == "csrf-123"
-    assert client.runtime_id == "runtime-1"
 
 
-async def test_needs_auth_302_to_login_returns_true() -> None:
-    client = A0Client("http://localhost:5080")
-    client.http = Mock()
-    client.http.get = AsyncMock(
-        return_value=FakeResponse(status_code=302, headers={"location": "/login"})
-    )
+async def test_connect_websocket_uses_ws_auth_payload() -> None:
+    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    fake_sio = FakeSocketIOClient()
+    client.sio = fake_sio
 
-    result = await client.needs_auth()
+    await client.connect_websocket()
 
-    assert result is True
-
-
-async def test_fetch_csrf_token_stores_token_and_runtime_id() -> None:
-    client = A0Client("http://localhost:5080")
-    client.http = Mock()
-    client.http.get = AsyncMock(
-        return_value=FakeResponse(
-            status_code=200,
-            json_data={"token": "csrf-xyz", "runtime_id": "runtime-9"},
+    assert fake_sio.connect_calls == [
+        (
+            "http://127.0.0.1:50001",
+            {
+                "namespaces": ["/ws"],
+                "headers": {
+                    "Origin": "http://127.0.0.1:50001",
+                    "Referer": "http://127.0.0.1:50001/",
+                },
+                "auth": {
+                    "api_key": "dev-a0-connector",
+                    "handlers": ["plugins/a0_connector/ws_connector"],
+                },
+                "transports": ["websocket"],
+            },
         )
+    ]
+
+
+async def test_send_message_uses_prefixed_ws_event() -> None:
+    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    fake_sio = FakeSocketIOClient(
+        call_response={
+            "results": [
+                {
+                    "ok": True,
+                    "data": {"context_id": "ctx-1", "status": "accepted"},
+                }
+            ]
+        }
+    )
+    client.sio = fake_sio
+
+    result = await client.send_message("hello", "ctx-1")
+
+    assert result == {"context_id": "ctx-1", "status": "accepted"}
+    event, payload, namespace = fake_sio.call_calls[0]
+    assert event == "connector_send_message"
+    assert namespace == "/ws"
+    assert payload["context_id"] == "ctx-1"
+    assert payload["message"] == "hello"
+    assert "client_message_id" in payload
+
+
+async def test_file_op_requests_are_returned_via_result_event() -> None:
+    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    fake_sio = FakeSocketIOClient()
+    client.sio = fake_sio
+    client.on_file_op = AsyncMock(
+        return_value={
+            "op_id": "op-1",
+            "ok": True,
+            "result": {"path": "/tmp/example.txt"},
+        }
     )
 
-    token = await client._fetch_csrf_token()
+    await client.connect_websocket()
 
-    assert token == "csrf-xyz"
-    assert client.csrf_token == "csrf-xyz"
-    assert client.runtime_id == "runtime-9"
-
-
-async def test_build_cookie_header_includes_session_and_csrf_cookie() -> None:
-    client = A0Client("http://localhost:5080")
-    cookies = httpx.Cookies()
-    cookies.set("session", "abc", domain="localhost", path="/")
-    client.http = SimpleNamespace(cookies=cookies)
-    client.csrf_token = "csrf-777"
-    client.runtime_id = "runtime-77"
-
-    header = client._build_cookie_header()
-
-    assert "session=abc" in header
-    assert "csrf_token_runtime-77=csrf-777" in header
-
-
-async def test_request_state_unwraps_results_data() -> None:
-    client = A0Client("http://localhost:5080")
-    client.sio = Mock()
-    client.sio.call = AsyncMock(
-        return_value={"results": [{"data": {"runtime_epoch": 5, "seq_base": 10}}]}
+    handler = fake_sio.handlers[("/ws", "connector_file_op")]
+    await handler(
+        {
+            "handlerId": "plugins.a0_connector.api.ws_connector.WsConnector",
+            "eventId": "evt-1",
+            "correlationId": "corr-1",
+            "ts": "2026-04-01T00:00:00Z",
+            "data": {
+                "op_id": "op-1",
+                "op": "read",
+                "path": "/tmp/example.txt",
+            },
+        }
     )
 
-    result = await client.request_state("ctx-1")
-
-    assert result == {"runtime_epoch": 5, "seq_base": 10}
-
-
-async def test_api_call_retries_once_on_403() -> None:
-    client = A0Client("http://localhost:5080")
-    client.csrf_token = "csrf-old"
-    client._ensure_csrf = AsyncMock()
-    client._fetch_csrf_token = AsyncMock()
-    client.http = Mock()
-    client.http.request = AsyncMock(
-        side_effect=[FakeResponse(status_code=403), FakeResponse(status_code=200)]
-    )
-
-    response = await client._api_call("GET", "/health")
-
-    assert response.status_code == 200
-    assert client.http.request.await_count == 2
-    client._fetch_csrf_token.assert_awaited_once()
-
-
-async def test_create_chat_returns_ctxid() -> None:
-    client = A0Client("http://localhost:5080")
-    client._api_call = AsyncMock(
-        return_value=FakeResponse(status_code=200, json_data={"ctxid": "ctx-123"})
-    )
-
-    ctxid = await client.create_chat()
-
-    assert ctxid == "ctx-123"
+    client.on_file_op.assert_awaited_once()
+    assert fake_sio.emit_calls == [
+        (
+            "connector_file_op_result",
+            {
+                "op_id": "op-1",
+                "ok": True,
+                "result": {"path": "/tmp/example.txt"},
+            },
+            "/ws",
+        )
+    ]

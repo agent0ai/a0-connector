@@ -1,35 +1,26 @@
-"""GET /api/plugins/a0_connector/v1/projects_list
-
-Returns a list of available Agent Zero projects.
-"""
+"""POST /api/plugins/a0_connector/v1/projects_list."""
 from __future__ import annotations
 
-from helpers.api import ApiHandler, Request, Response
+from helpers.api import Request, Response
+import usr.plugins.a0_connector.api.v1.base as connector_base
 
 
-class ProjectsList(ApiHandler):
-    @classmethod
-    def requires_auth(cls) -> bool:
-        return True
-
-    @classmethod
-    def requires_csrf(cls) -> bool:
-        return False
-
-    @classmethod
-    def requires_api_key(cls) -> bool:
-        return False
-
+class ProjectsList(connector_base.ProtectedConnectorApiHandler):
     async def process(self, input: dict, request: Request) -> dict | Response:
-        from helpers import projects as proj_module
+        from helpers import projects as projects_helper
 
-        result = []
-        try:
-            all_projects = proj_module.get_projects()
-            for p in all_projects:
-                name = p.get("name") if isinstance(p, dict) else str(p)
-                result.append({"name": name})
-        except Exception:
-            pass
+        projects: list[dict[str, str]] = []
+        for item in projects_helper.get_active_projects_list() or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            projects.append(
+                {
+                    "name": name,
+                    "title": str(item.get("title", "")).strip() or name,
+                }
+            )
 
-        return {"projects": result}
+        return {"projects": projects}
