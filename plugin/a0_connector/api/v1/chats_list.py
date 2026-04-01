@@ -1,35 +1,31 @@
-"""GET /api/plugins/a0_connector/v1/chats_list
-
-Returns all active Agent Zero contexts in a connector-friendly format.
-"""
+"""POST /api/plugins/a0_connector/v1/chats_list."""
 from __future__ import annotations
 
-from helpers.api import ApiHandler, Request, Response
+from helpers.api import Request, Response
+import usr.plugins.a0_connector.api.v1.base as connector_base
 
 
-class ChatsList(ApiHandler):
-    @classmethod
-    def requires_auth(cls) -> bool:
-        return True
-
-    @classmethod
-    def requires_csrf(cls) -> bool:
-        return False
-
-    @classmethod
-    def requires_api_key(cls) -> bool:
-        return False
-
+class ChatsList(connector_base.ProtectedConnectorApiHandler):
     async def process(self, input: dict, request: Request) -> dict | Response:
         from agent import AgentContext
 
-        chats = []
-        for ctx in AgentContext.get_all():
-            chats.append({
-                "id": ctx.id,
-                "name": getattr(ctx, "name", ctx.id),
-                "agent_profile": getattr(ctx.agent0.config, "profile", "default")
-                    if ctx.agent0 else "default",
-            })
+        contexts: list[dict[str, object]] = []
+        for context in AgentContext.all():
+            data = context.output()
+            contexts.append(
+                {
+                    "id": context.id,
+                    "name": data.get("name") or context.name or context.id,
+                    "created_at": data.get("created_at"),
+                    "last_message": data.get("last_message"),
+                    "running": data.get("running", False),
+                    "agent_profile": getattr(context.agent0.config, "profile", "default")
+                    if context.agent0
+                    else "default",
+                }
+            )
 
-        return {"chats": chats}
+        return {
+            "contexts": contexts,
+            "chats": contexts,
+        }

@@ -1,6 +1,6 @@
 name: a0_connector
 title: A0 Connector
-description: Clean HTTP and WebSocket connector surface for CLI and external clients. Provides versioned API endpoints and a dedicated /connector WebSocket namespace with API-key authentication.
+description: Current Agent Zero connector plugin for HTTP plus /ws integration, using API-key auth via mcp_server_token and handler activation through auth.handlers.
 version: 0.1.0
 settings_sections:
   - external

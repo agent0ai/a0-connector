@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import os
-import subprocess
-from pathlib import Path
 from typing import Any
 
 from textual.app import App, ComposeResult
@@ -16,7 +13,6 @@ from rich.syntax import Syntax
 from agent_zero_cli.client import A0Client
 from agent_zero_cli.config import CLIConfig, load_config
 from agent_zero_cli.screens.chat_list import ChatListScreen
-from agent_zero_cli.screens.login import LoginScreen
 from agent_zero_cli.widgets.chat_input import ChatInput
 
 
@@ -37,6 +33,10 @@ _EVENT_CATEGORY: dict[str, str] = {
     "context_updated": "info",
 }
 
+_PROTOCOL_VERSION = "a0-connector.v1"
+_WS_NAMESPACE = "/ws"
+_WS_HANDLER = "plugins/a0_connector/ws_connector"
+
 
 class AgentZeroCLI(App):
     """Agent Zero CLI - Terminal Chat Interface."""
@@ -53,9 +53,11 @@ class AgentZeroCLI(App):
     def __init__(self, config: CLIConfig | None = None) -> None:
         super().__init__()
         self.config = config or load_config()
-        self.client = A0Client(self.config.instance_url)
+        self.client = A0Client(
+            self.config.instance_url,
+            api_key=self.config.api_key,
+        )
         self.current_context: str | None = None
-        self._install_prompt_future: asyncio.Future[bool] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -93,27 +95,35 @@ class AgentZeroCLI(App):
         input_widget = self.query_one("#message-input", ChatInput)
 
         log.write("[dim]Connecting to Agent Zero...[/dim]")
-        if not await self.client.check_health():
+        capabilities = await self._fetch_capabilities(log)
+        if capabilities is None:
             log.write(f"[red]No Agent Zero instance found at {self.config.instance_url}[/red]")
-            should_install = await self._prompt_install(log, input_widget)
-            if should_install:
-                await self._run_install(log)
-                if not await self.client.check_health():
-                    log.write("[red]Agent Zero is still unreachable after install.[/red]")
-                    input_widget.disabled = True
-                    return
-            else:
-                log.write("[dim]Update .cli-config.json or start Agent Zero manually.[/dim]")
-                input_widget.disabled = True
-                return
+            log.write("[dim]Start Agent Zero and verify the connector plugin is installed.[/dim]")
+            input_widget.disabled = True
+            return
 
-        # Auth check and login
-        if await self.client.needs_auth():
-            login_ok = await self.push_screen_wait(LoginScreen(self.client))
-            if not login_ok:
-                log.write("[red]Authentication failed. Exiting.[/red]")
-                self.exit(return_code=1)
-                return
+        try:
+            self._validate_capabilities(capabilities)
+        except ValueError as exc:
+            log.write(f"[red]{exc}[/red]")
+            input_widget.disabled = True
+            return
+
+        if not self.config.api_key:
+            log.write("[red]No API key configured. Set `api_key` in `.cli-config.json`.[/red]")
+            input_widget.disabled = True
+            return
+
+        try:
+            api_key_ok = await self.client.verify_api_key()
+        except Exception as exc:
+            log.write(f"[red]API check failed: {exc}[/red]")
+            input_widget.disabled = True
+            return
+        if not api_key_ok:
+            log.write("[red]API key rejected by the connector endpoint.[/red]")
+            input_widget.disabled = True
+            return
 
         # Wire up callbacks
         self.client.on_connect = lambda: self._run_on_ui(self._set_connected, True)
@@ -133,39 +143,53 @@ class AgentZeroCLI(App):
         self.client.on_file_op = self._handle_file_op
 
         # Connect WebSocket and initialize
-        await self.client.connect_websocket()
-        await self.client.send_hello()
+        try:
+            await self.client.connect_websocket()
+            await self.client.send_hello()
+        except Exception as exc:
+            log.write(f"[red]WebSocket connection failed: {exc}[/red]")
+            input_widget.disabled = True
+            return
 
         # Create initial chat context
-        self.current_context = await self.client.create_chat()
-        await self.client.subscribe_context(self.current_context)
+        try:
+            self.current_context = await self.client.create_chat()
+            await self.client.subscribe_context(self.current_context)
+        except Exception as exc:
+            log.write(f"[red]Failed to create the initial chat: {exc}[/red]")
+            input_widget.disabled = True
+            return
 
         log.write("[green]Connected to Agent Zero.[/green]")
         input_widget.disabled = False
 
-    # ------------------------------------------------------------------
-    # Install prompt (unchanged)
-    # ------------------------------------------------------------------
+    async def _fetch_capabilities(self, log: RichLog) -> dict[str, Any] | None:
+        try:
+            return await self.client.fetch_capabilities()
+        except Exception as exc:
+            log.write(f"[dim]Capabilities probe failed: {exc}[/dim]")
+            return None
 
-    async def _prompt_install(self, log: RichLog, input_widget: ChatInput) -> bool:
-        log.write("[dim]Would you like to install Agent Zero? (y/n)[/dim]")
-        loop = asyncio.get_running_loop()
-        self._install_prompt_future = loop.create_future()
-        input_widget.disabled = False
-        input_widget.focus()
-        result = await self._install_prompt_future
-        self._install_prompt_future = None
-        return result
+    def _validate_capabilities(self, capabilities: dict[str, Any]) -> None:
+        protocol = capabilities.get("protocol")
+        namespace = capabilities.get("websocket_namespace")
+        handlers = capabilities.get("websocket_handlers") or []
+        auth_modes = capabilities.get("auth") or []
 
-    async def _run_install(self, log: RichLog) -> None:
-        log.write("[dim]Launching install.sh...[/dim]")
-        install_path = self._install_script_path()
-        with self.suspend():
-            subprocess.run(["/bin/bash", str(install_path)], check=False)
-        log.write("[dim]Install finished. Retrying connection...[/dim]")
-
-    def _install_script_path(self) -> Path:
-        return Path(__file__).resolve().parents[3] / "install.sh"
+        if protocol != _PROTOCOL_VERSION:
+            raise ValueError(
+                f"Unsupported connector protocol: expected {_PROTOCOL_VERSION}, got {protocol!r}"
+            )
+        if namespace != _WS_NAMESPACE:
+            raise ValueError(
+                f"Unsupported WebSocket namespace: expected {_WS_NAMESPACE}, got {namespace!r}"
+            )
+        if not isinstance(handlers, list) or _WS_HANDLER not in handlers:
+            raise ValueError(
+                f"Connector handler activation is missing {_WS_HANDLER!r} in capabilities"
+            )
+        if "api_key" not in auth_modes:
+            raise ValueError("Connector capabilities do not advertise API-key auth")
 
     # ------------------------------------------------------------------
     # UI helpers
@@ -383,18 +407,6 @@ class AgentZeroCLI(App):
         text = event.value.strip()
         event.input.value = ""
         if not text:
-            return
-
-        # Handle install prompt
-        if self._install_prompt_future and not self._install_prompt_future.done():
-            response = text.lower()
-            if response in {"y", "yes"}:
-                self._install_prompt_future.set_result(True)
-            elif response in {"n", "no"}:
-                self._install_prompt_future.set_result(False)
-            else:
-                log = self.query_one("#chat-log", RichLog)
-                log.write("[yellow]Please answer y or n.[/yellow]")
             return
 
         # Handle commands

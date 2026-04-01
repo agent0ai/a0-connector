@@ -1,43 +1,29 @@
-"""GET /api/plugins/a0_connector/v1/capabilities
-
-Returns the connector protocol version, auth modes, transports, and available
-features. This is the discovery endpoint for CLI and external clients.
-"""
+"""POST /api/plugins/a0_connector/v1/capabilities."""
 from __future__ import annotations
 
-from helpers.api import ApiHandler, Request, Response
+from helpers.api import Request, Response
+import usr.plugins.a0_connector.api.v1.base as connector_base
 
 
-class Capabilities(ApiHandler):
-    """Return connector capabilities and protocol version."""
-
-    @classmethod
-    def requires_auth(cls) -> bool:
-        return False
-
-    @classmethod
-    def requires_csrf(cls) -> bool:
-        return False
-
-    @classmethod
-    def requires_api_key(cls) -> bool:
-        return False  # Capabilities endpoint is public (no secrets exposed)
+class Capabilities(connector_base.PublicConnectorApiHandler):
+    """Return the connector discovery contract for current Agent Zero."""
 
     async def process(self, input: dict, request: Request) -> dict | Response:
         return {
             "protocol": "a0-connector.v1",
             "version": "0.1.0",
-            "auth": ["session"],
+            "auth": ["api_key"],
             "transports": ["http", "websocket"],
             "streaming": True,
-            "websocket_namespace": "/connector",
+            "websocket_namespace": "/ws",
+            "websocket_handlers": ["plugins/a0_connector/ws_connector"],
             "attachments": {
                 "mode": "base64",
                 "max_files": 20,
             },
             "features": [
                 "chat_create",
-                "chat_list",
+                "chats_list",
                 "chat_get",
                 "chat_reset",
                 "chat_delete",
