@@ -4,19 +4,10 @@ Screen {
 
 #chat-log {
     height: 1fr;
-    border: round #0f6db8;
     padding: 1 1 0 1;
     background: #0f141b;
     overflow-x: hidden;
-}
-
-#status-bar {
-    height: 2; /* border-top consumes one row at height:1 */
-    padding: 0 1;
-    background: #101a24;
-    color: $text-muted;
-    border-top: solid #0f6db8;
-    overflow: hidden hidden;
+    border-bottom: solid #0f6db8;
 }
 
 #message-input {
@@ -25,6 +16,11 @@ Screen {
     border: round #0f6db8;
     background: #0f141b;
     padding: 0 1;
+}
+
+/* Subtle highlight while progress placeholder is shown (see WebUI .progress-active). */
+#message-input.progress-active {
+    border: round #1886c9;
 }
 
 #message-input:focus {

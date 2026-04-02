@@ -14,7 +14,6 @@ from agent_zero_cli.config import CLIConfig, load_config, save_env
 from agent_zero_cli.screens.chat_list import ChatListScreen
 from agent_zero_cli.screens.host_input import HostInputScreen
 from agent_zero_cli.screens.login import LoginResult, LoginScreen
-from agent_zero_cli.widgets.activity_bar import ActivityBar
 from agent_zero_cli.widgets.chat_input import ChatInput
 
 
@@ -60,11 +59,23 @@ class AgentZeroCLI(App):
     CSS_PATH = "styles/app.tcss"
     TITLE = "Agent Zero CLI"
     BINDINGS = [
-        Binding("ctrl+c", "quit", "Exit", show=True),
-        Binding("f5", "clear_chat", "Clear", show=True, priority=True),
-        Binding("f6", "list_chats", "Chats", show=True, priority=True),
-        Binding("f7", "nudge_agent", "Nudge", show=True, priority=True),
-        Binding("f8", "pause_agent", "Pause", show=True, priority=True),
+        Binding("Ctrl+C", "Quit", "Exit", show=True),
+        Binding("F5", "clear_chat", "Clear", show=True, priority=True),
+        Binding("F6", "list_chats", "Chats", show=True, priority=True),
+        Binding("F7", "nudge_agent", "Nudge", show=True, priority=True),
+        Binding("F8", "pause_agent", "Pause", show=True, priority=True),
+        # Textual's App injects ctrl+p -> command_palette with description "palette" if absent.
+        # Use show=False: Footer already renders this key on the right (-command-palette); show=True
+        # would duplicate it in the main shortcut row (see textual.widgets._footer.Footer.compose).
+        Binding(
+            "ctrl+p",
+            "command_palette",
+            "Commands",
+            show=False,
+            priority=True,
+            key_display="^P",
+            tooltip="Open the command palette",
+        ),
     ]
 
     connected = reactive(False)
@@ -84,7 +95,6 @@ class AgentZeroCLI(App):
 
     def compose(self) -> ComposeResult:
         yield RichLog(id="chat-log", wrap=True, highlight=True, markup=True)
-        yield ActivityBar(id="status-bar")
         yield ChatInput(id="message-input")
         yield Footer()
 
@@ -95,14 +105,14 @@ class AgentZeroCLI(App):
         self.run_worker(self._startup(), exclusive=True, name="startup")
 
     def _set_activity(self, label: str, detail: str = "") -> None:
-        """Animate the activity bar with a label and optional detail."""
+        """Show agent progress inside the chat input placeholder (WebUI-style)."""
         self._last_status_label = label
-        self.query_one("#status-bar", ActivityBar).set_activity(label, detail)
+        self.query_one("#message-input", ChatInput).set_activity(label, detail)
 
     def _set_idle(self) -> None:
-        """Return the activity bar to idle state."""
+        """Restore the normal chat input placeholder."""
         self._last_status_label = ""
-        self.query_one("#status-bar", ActivityBar).set_idle()
+        self.query_one("#message-input", ChatInput).set_idle()
 
     @staticmethod
     def _extract_detail(event_type: str, data: dict[str, Any]) -> str:

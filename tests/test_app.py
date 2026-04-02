@@ -27,26 +27,22 @@ class FakeInput:
     def __init__(self) -> None:
         self.disabled = False
         self.focused = False
+        self.activity_label = ""
+        self.activity_detail = ""
+        self.activity_idle = True
 
     def focus(self) -> None:
         self.focused = True
 
-
-class FakeStatusBar:
-    def __init__(self) -> None:
-        self.label = ""
-        self.detail = ""
-        self.idle = True
-
     def set_activity(self, label: str, detail: str = "") -> None:
-        self.label = label
-        self.detail = detail
-        self.idle = False
+        self.activity_label = label
+        self.activity_detail = detail
+        self.activity_idle = False
 
     def set_idle(self) -> None:
-        self.label = ""
-        self.detail = ""
-        self.idle = True
+        self.activity_label = ""
+        self.activity_detail = ""
+        self.activity_idle = True
 
 
 class DummyAgentZeroCLI(AgentZeroCLI):
@@ -68,19 +64,15 @@ def dummy_app() -> DummyAgentZeroCLI:
     app = DummyAgentZeroCLI()
     log = FakeRichLog()
     input_widget = FakeInput()
-    status_bar = FakeStatusBar()
 
     def _query_one(selector: str, cls: object = None) -> object:
         if selector == "#chat-log":
             return log
-        if selector == "#status-bar":
-            return status_bar
         return input_widget
 
     app.query_one = _query_one
     app._test_log = log
     app._test_input = input_widget
-    app._test_status = status_bar
     return app
 
 
