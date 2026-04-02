@@ -5,6 +5,7 @@
 | [Architecture](architecture.md) | Protocol, HTTP/WebSocket surfaces, event model, remote file ops, security |
 | [Configuration](configuration.md) | Environment variables, dotenv, first-run behavior, login |
 | [Development](development.md) | Repo layout, local setup, tests, import gotchas |
+| [TUI frontend](tui-frontend.md) | Which files define the Textual UI (widgets, styles, screens) |
 
 ## Troubleshooting
 

@@ -1,22 +1,38 @@
+Screen {
+    background: #0b1119;
+}
+
 #chat-log {
     height: 1fr;
-    border: solid $primary;
-    padding: 1;
+    border: round #0f6db8;
+    padding: 1 1 0 1;
+    background: #0f141b;
     overflow-x: hidden;
 }
 
 #status-bar {
-    height: 1;
+    height: 2; /* border-top consumes one row at height:1 */
     padding: 0 1;
-    background: $panel;
+    background: #101a24;
     color: $text-muted;
+    border-top: solid #0f6db8;
     overflow: hidden hidden;
 }
 
 #message-input {
     margin-top: 0;
     margin-bottom: 0;
-    border: solid $primary;
+    border: round #0f6db8;
+    background: #0f141b;
+    padding: 0 1;
+}
+
+#message-input:focus {
+    border: round #00b4ff;
+}
+
+Footer {
+    background: #101a24;
 }
 
 HostInputScreen {
