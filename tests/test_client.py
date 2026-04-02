@@ -1,4 +1,4 @@
-import json
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from agent_zero_cli.client import A0Client
-from agent_zero_cli.config import load_config
+from agent_zero_cli.config import CLIConfig, load_config, save_env, _ENV_FILE
 
 
 class FakeResponse:
@@ -75,25 +75,147 @@ class FakeSocketIOClient:
 pytestmark = pytest.mark.anyio
 
 
-def test_load_config_reads_api_key_from_cli_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_path = tmp_path / ".cli-config.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "instance_url": "http://127.0.0.1:50001",
-                "api_key": "dev-a0-connector",
-                "theme": "dark",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.chdir(tmp_path)
+# ------------------------------------------------------------------
+# Config: env var loading
+# ------------------------------------------------------------------
+
+
+def test_load_config_reads_from_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_ZERO_HOST", "http://10.0.0.1:9000")
+    monkeypatch.setenv("AGENT_ZERO_API_KEY", "env-secret")
 
     config = load_config()
 
-    assert config.instance_url == "http://127.0.0.1:50001"
-    assert config.api_key == "dev-a0-connector"
-    assert config.theme == "dark"
+    assert config.instance_url == "http://10.0.0.1:9000"
+    assert config.api_key == "env-secret"
+
+
+def test_load_config_falls_back_to_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGENT_ZERO_HOST", raising=False)
+    monkeypatch.delenv("AGENT_ZERO_API_KEY", raising=False)
+
+    env_dir = tmp_path / ".agent-zero"
+    env_dir.mkdir()
+    env_file = env_dir / ".env"
+    env_file.write_text(
+        "AGENT_ZERO_HOST=http://192.168.1.5:5080\nAGENT_ZERO_API_KEY=dotenv-key\n",
+        encoding="utf-8",
+    )
+
+    import agent_zero_cli.config as config_mod
+    monkeypatch.setattr(config_mod, "_ENV_FILE", env_file)
+
+    config = load_config()
+
+    assert config.instance_url == "http://192.168.1.5:5080"
+    assert config.api_key == "dotenv-key"
+
+
+def test_load_config_env_overrides_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_ZERO_HOST", "http://env-host:1234")
+    monkeypatch.setenv("AGENT_ZERO_API_KEY", "env-key")
+
+    env_dir = tmp_path / ".agent-zero"
+    env_dir.mkdir()
+    env_file = env_dir / ".env"
+    env_file.write_text(
+        "AGENT_ZERO_HOST=http://dotenv-host:5080\nAGENT_ZERO_API_KEY=dotenv-key\n",
+        encoding="utf-8",
+    )
+
+    import agent_zero_cli.config as config_mod
+    monkeypatch.setattr(config_mod, "_ENV_FILE", env_file)
+
+    config = load_config()
+
+    assert config.instance_url == "http://env-host:1234"
+    assert config.api_key == "env-key"
+
+
+def test_load_config_returns_empty_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("AGENT_ZERO_HOST", raising=False)
+    monkeypatch.delenv("AGENT_ZERO_API_KEY", raising=False)
+
+    import agent_zero_cli.config as config_mod
+    monkeypatch.setattr(config_mod, "_ENV_FILE", tmp_path / "nonexistent" / ".env")
+
+    config = load_config()
+
+    assert config.instance_url == ""
+    assert config.api_key == ""
+
+
+def test_save_env_creates_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_dir = tmp_path / ".agent-zero"
+    env_file = env_dir / ".env"
+
+    import agent_zero_cli.config as config_mod
+    monkeypatch.setattr(config_mod, "_ENV_DIR", env_dir)
+    monkeypatch.setattr(config_mod, "_ENV_FILE", env_file)
+
+    save_env("AGENT_ZERO_HOST", "http://myhost:5080")
+
+    assert env_file.exists()
+    content = env_file.read_text(encoding="utf-8")
+    assert "AGENT_ZERO_HOST=http://myhost:5080" in content
+
+
+def test_save_env_updates_existing_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_dir = tmp_path / ".agent-zero"
+    env_dir.mkdir()
+    env_file = env_dir / ".env"
+    env_file.write_text("AGENT_ZERO_HOST=http://old:5080\n", encoding="utf-8")
+
+    import agent_zero_cli.config as config_mod
+    monkeypatch.setattr(config_mod, "_ENV_DIR", env_dir)
+    monkeypatch.setattr(config_mod, "_ENV_FILE", env_file)
+
+    save_env("AGENT_ZERO_HOST", "http://new:9090")
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "AGENT_ZERO_HOST=http://new:9090" in content
+    assert "http://old:5080" not in content
+
+
+# ------------------------------------------------------------------
+# Client: login
+# ------------------------------------------------------------------
+
+
+async def test_login_returns_api_key_on_success() -> None:
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=200, json_data={"api_key": "abc123"})
+    )
+
+    result = await client.login("admin", "password")
+
+    assert result == "abc123"
+    assert client.api_key == "abc123"
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/connector_login",
+        json={"username": "admin", "password": "password"},
+        headers={},
+    )
+
+
+async def test_login_returns_none_on_401() -> None:
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=401)
+    )
+
+    result = await client.login("admin", "wrong")
+
+    assert result is None
+    assert client.api_key == ""
+
+
+# ------------------------------------------------------------------
+# Client: existing tests (unchanged behavior)
+# ------------------------------------------------------------------
 
 
 async def test_check_health_posts_capabilities() -> None:

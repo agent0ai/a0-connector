@@ -22,13 +22,20 @@ def _install_test_plugin_namespace() -> None:
     sys.modules["usr.plugins"] = usr_plugins_pkg
 
 
-def _install_fake_helpers() -> None:
+def _install_fake_helpers(
+    *,
+    auth_login: str = "",
+    auth_password: str = "",
+    mcp_server_token: str = "test-token-abc",
+) -> None:
     _install_test_plugin_namespace()
 
     helpers_pkg = types.ModuleType("helpers")
     api_mod = types.ModuleType("helpers.api")
     print_style_mod = types.ModuleType("helpers.print_style")
     security_mod = types.ModuleType("helpers.security")
+    dotenv_mod = types.ModuleType("helpers.dotenv")
+    settings_mod = types.ModuleType("helpers.settings")
 
     class ApiHandler:
         def __init__(self, app=None, thread_lock=None) -> None:
@@ -72,10 +79,22 @@ def _install_fake_helpers() -> None:
     print_style_mod.PrintStyle = PrintStyle
     security_mod.safe_filename = lambda value: value
 
+    _dotenv_store = {
+        "AUTH_LOGIN": auth_login,
+        "AUTH_PASSWORD": auth_password,
+    }
+    dotenv_mod.KEY_AUTH_LOGIN = "AUTH_LOGIN"
+    dotenv_mod.KEY_AUTH_PASSWORD = "AUTH_PASSWORD"
+    dotenv_mod.get_dotenv_value = lambda key, default=None: _dotenv_store.get(key) or default
+
+    settings_mod.get_settings = lambda: {"mcp_server_token": mcp_server_token}
+
     sys.modules["helpers"] = helpers_pkg
     sys.modules["helpers.api"] = api_mod
     sys.modules["helpers.print_style"] = print_style_mod
     sys.modules["helpers.security"] = security_mod
+    sys.modules["helpers.dotenv"] = dotenv_mod
+    sys.modules["helpers.settings"] = settings_mod
 
 
 def _reload(module_name: str):
@@ -93,9 +112,10 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     payload = asyncio.run(handler.process({}, object()))
 
     assert payload["protocol"] == "a0-connector.v1"
-    assert payload["auth"] == ["api_key"]
+    assert payload["auth"] == ["api_key", "login"]
     assert payload["websocket_namespace"] == "/ws"
     assert payload["websocket_handlers"] == ["plugins/a0_connector/ws_connector"]
+    assert "connector_login" in payload["features"]
     assert capabilities_mod.Capabilities.requires_api_key() is False
 
 
@@ -130,6 +150,57 @@ def test_protected_handlers_require_api_key_only() -> None:
         assert handler_cls.requires_auth() is False
         assert handler_cls.requires_csrf() is False
         assert handler_cls.requires_api_key() is True
+
+
+def test_connector_login_returns_token_when_no_auth_configured() -> None:
+    _install_fake_helpers(auth_login="", mcp_server_token="open-token")
+
+    _reload("usr.plugins.a0_connector.api.v1.base")
+    login_mod = _reload("usr.plugins.a0_connector.api.v1.connector_login")
+    handler = login_mod.ConnectorLogin(None, None)
+
+    result = asyncio.run(handler.process({}, object()))
+
+    assert result == {"api_key": "open-token"}
+    assert login_mod.ConnectorLogin.requires_api_key() is False
+    assert login_mod.ConnectorLogin.requires_auth() is False
+
+
+def test_connector_login_returns_token_on_valid_credentials() -> None:
+    _install_fake_helpers(
+        auth_login="admin",
+        auth_password="secret",
+        mcp_server_token="protected-token",
+    )
+
+    _reload("usr.plugins.a0_connector.api.v1.base")
+    login_mod = _reload("usr.plugins.a0_connector.api.v1.connector_login")
+    handler = login_mod.ConnectorLogin(None, None)
+
+    result = asyncio.run(
+        handler.process({"username": "admin", "password": "secret"}, object())
+    )
+
+    assert result == {"api_key": "protected-token"}
+
+
+def test_connector_login_rejects_invalid_credentials() -> None:
+    _install_fake_helpers(
+        auth_login="admin",
+        auth_password="secret",
+        mcp_server_token="protected-token",
+    )
+
+    _reload("usr.plugins.a0_connector.api.v1.base")
+    login_mod = _reload("usr.plugins.a0_connector.api.v1.connector_login")
+    handler = login_mod.ConnectorLogin(None, None)
+
+    result = asyncio.run(
+        handler.process({"username": "admin", "password": "wrong"}, object())
+    )
+
+    assert hasattr(result, "status")
+    assert result.status == 401
 
 
 @dataclass(frozen=True)

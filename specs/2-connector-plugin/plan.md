@@ -33,7 +33,7 @@ Use the plugin API surface for all connector operations except `capabilities`.
 The capabilities response should advertise:
 
 - `protocol: "a0-connector.v1"`
-- `auth: ["api_key"]`
+- `auth: ["api_key", "login"]`
 - `websocket_namespace: "/ws"`
 - `websocket_handlers: ["plugins/a0_connector/ws_connector"]`
 
@@ -91,11 +91,11 @@ The CLI should:
 4. send `connector_hello`
 5. create or select a chat
 
-The config file remains `.cli-config.json` and should include:
-
-- `instance_url`
-- `api_key`
-- `theme`
+Configuration is loaded from environment variables `AGENT_ZERO_HOST` and
+`AGENT_ZERO_API_KEY`, falling back to `~/.agent-zero/.env`. If the host is not
+set, the CLI prompts interactively. If no API key is available and the server
+advertises `login` auth, the CLI shows a login screen that exchanges credentials
+for the API key via the `connector_login` endpoint.
 
 ## Ubuntu / Bash runbook
 
@@ -122,13 +122,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 pip install pytest
-cat > .cli-config.json <<'JSON'
-{
-  "instance_url": "http://127.0.0.1:50001",
-  "api_key": "dev-a0-connector",
-  "theme": "dark"
-}
-JSON
+export AGENT_ZERO_HOST=http://127.0.0.1:50001
 agentzero
 ```
 
@@ -139,4 +133,5 @@ agentzero
 - the CLI connects through `/ws` with `auth.handlers`
 - connector events stream over the shared namespace without collisions
 - `text_editor_remote` can round-trip a file op through `op_id`
-- no connector path depends on login UI, cookies, or CSRF
+- no connector path depends on session cookies or CSRF
+- the CLI can obtain an API key via the `connector_login` endpoint

@@ -41,15 +41,14 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 pip install pytest
-cat > .cli-config.json <<'JSON'
-{
-  "instance_url": "http://127.0.0.1:50001",
-  "api_key": "dev-a0-connector",
-  "theme": "dark"
-}
-JSON
+export AGENT_ZERO_HOST=http://127.0.0.1:50001
 agentzero
 ```
+
+The CLI reads `AGENT_ZERO_HOST` and `AGENT_ZERO_API_KEY` from environment variables,
+falling back to `~/.agent-zero/.env`. If neither is set, the CLI prompts interactively
+for the host URL and login credentials. Acquired values are persisted to
+`~/.agent-zero/.env` for subsequent runs.
 
 ## Connector contract
 
@@ -61,4 +60,4 @@ The connector is intentionally narrow:
 - the plugin emits connector-prefixed events so it can coexist with other `/ws` handlers
 - `text_editor_remote` round-trips file operations by `op_id` rather than assuming a transport-level ack primitive
 
-The goal is to keep the CLI and plugin aligned with the current Agent Zero architecture while avoiding session-cookie and login-screen coupling.
+The goal is to keep the CLI and plugin aligned with the current Agent Zero architecture. The CLI authenticates by exchanging credentials via the `connector_login` endpoint to obtain an API key, avoiding session-cookie coupling.

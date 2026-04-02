@@ -223,6 +223,21 @@ class A0Client:
             return False
         return response.status_code == 200
 
+    async def login(self, username: str, password: str) -> str | None:
+        """Exchange username + password for an API key via the connector_login endpoint."""
+        response = await self._post(
+            "connector_login",
+            {"username": username, "password": password},
+            require_api_key=False,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            api_key = data.get("api_key", "")
+            if api_key:
+                self.api_key = api_key
+                return api_key
+        return None
+
     async def verify_api_key(self) -> bool:
         response = await self._post("chats_list")
         if response.status_code == 200:

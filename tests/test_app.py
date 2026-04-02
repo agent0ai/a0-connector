@@ -59,7 +59,7 @@ def test_validate_capabilities_accepts_current_ws_contract(dummy_app: DummyAgent
     dummy_app._validate_capabilities(
         {
             "protocol": "a0-connector.v1",
-            "auth": ["api_key"],
+            "auth": ["api_key", "login"],
             "websocket_namespace": "/ws",
             "websocket_handlers": ["plugins/a0_connector/ws_connector"],
         }

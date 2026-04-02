@@ -12,7 +12,7 @@ class Capabilities(connector_base.PublicConnectorApiHandler):
         return {
             "protocol": "a0-connector.v1",
             "version": "0.1.0",
-            "auth": ["api_key"],
+            "auth": ["api_key", "login"],
             "transports": ["http", "websocket"],
             "streaming": True,
             "websocket_namespace": "/ws",
@@ -31,5 +31,6 @@ class Capabilities(connector_base.PublicConnectorApiHandler):
                 "log_tail",
                 "projects_list",
                 "text_editor_remote",
+                "connector_login",
             ],
         }

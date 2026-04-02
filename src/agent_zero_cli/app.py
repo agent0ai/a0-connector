@@ -11,12 +11,13 @@ from rich.markdown import Markdown
 from rich.syntax import Syntax
 
 from agent_zero_cli.client import A0Client
-from agent_zero_cli.config import CLIConfig, load_config
+from agent_zero_cli.config import CLIConfig, load_config, save_env
 from agent_zero_cli.screens.chat_list import ChatListScreen
+from agent_zero_cli.screens.host_input import HostInputScreen
+from agent_zero_cli.screens.login import LoginScreen
 from agent_zero_cli.widgets.chat_input import ChatInput
 
 
-# Connector event type → display category
 _EVENT_CATEGORY: dict[str, str] = {
     "user_message": "user",
     "assistant_message": "response",
@@ -54,7 +55,7 @@ class AgentZeroCLI(App):
         super().__init__()
         self.config = config or load_config()
         self.client = A0Client(
-            self.config.instance_url,
+            self.config.instance_url or "http://localhost:5080",
             api_key=self.config.api_key,
         )
         self.current_context: str | None = None
@@ -94,7 +95,18 @@ class AgentZeroCLI(App):
         log = self.query_one("#chat-log", RichLog)
         input_widget = self.query_one("#message-input", ChatInput)
 
+        # --- Step 1: Resolve host URL ---
+        if not self.config.instance_url:
+            host_url = await self.push_screen_wait(HostInputScreen())
+            if not host_url:
+                host_url = "http://localhost:5080"
+            self.config.instance_url = host_url
+            self.client.base_url = host_url.rstrip("/")
+            save_env("AGENT_ZERO_HOST", host_url)
+
         log.write("[dim]Connecting to Agent Zero...[/dim]")
+
+        # --- Step 2: Probe capabilities ---
         capabilities = await self._fetch_capabilities(log)
         if capabilities is None:
             log.write(f"[red]No Agent Zero instance found at {self.config.instance_url}[/red]")
@@ -109,23 +121,39 @@ class AgentZeroCLI(App):
             input_widget.disabled = True
             return
 
-        if not self.config.api_key:
-            log.write("[red]No API key configured. Set `api_key` in `.cli-config.json`.[/red]")
+        # --- Step 3: Resolve API key ---
+        auth_modes = capabilities.get("auth") or []
+
+        if not self.config.api_key and "login" in auth_modes:
+            api_key = await self.push_screen_wait(LoginScreen(self.client))
+            if api_key:
+                self.config.api_key = api_key
+                self.client.api_key = api_key
+                save_env("AGENT_ZERO_API_KEY", api_key)
+            else:
+                log.write("[red]Login cancelled.[/red]")
+                input_widget.disabled = True
+                return
+
+        if not self.config.api_key and "api_key" in auth_modes:
+            log.write("[red]No API key available. Set AGENT_ZERO_API_KEY or log in.[/red]")
             input_widget.disabled = True
             return
 
-        try:
-            api_key_ok = await self.client.verify_api_key()
-        except Exception as exc:
-            log.write(f"[red]API check failed: {exc}[/red]")
-            input_widget.disabled = True
-            return
-        if not api_key_ok:
-            log.write("[red]API key rejected by the connector endpoint.[/red]")
-            input_widget.disabled = True
-            return
+        # --- Step 4: Verify API key ---
+        if self.config.api_key:
+            try:
+                api_key_ok = await self.client.verify_api_key()
+            except Exception as exc:
+                log.write(f"[red]API check failed: {exc}[/red]")
+                input_widget.disabled = True
+                return
+            if not api_key_ok:
+                log.write("[red]API key rejected by the connector endpoint.[/red]")
+                input_widget.disabled = True
+                return
 
-        # Wire up callbacks
+        # --- Step 5: Wire callbacks and connect ---
         self.client.on_connect = lambda: self._run_on_ui(self._set_connected, True)
         self.client.on_disconnect = lambda: self._run_on_ui(self._set_connected, False)
         self.client.on_context_snapshot = lambda data: self._run_on_ui(
@@ -142,7 +170,6 @@ class AgentZeroCLI(App):
         )
         self.client.on_file_op = self._handle_file_op
 
-        # Connect WebSocket and initialize
         try:
             await self.client.connect_websocket()
             await self.client.send_hello()
@@ -151,7 +178,6 @@ class AgentZeroCLI(App):
             input_widget.disabled = True
             return
 
-        # Create initial chat context
         try:
             self.current_context = await self.client.create_chat()
             await self.client.subscribe_context(self.current_context)
@@ -226,7 +252,6 @@ class AgentZeroCLI(App):
         if context_id != self.current_context:
             return
 
-        # Agent is active while we receive events
         self.agent_active = True
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = True
@@ -235,7 +260,7 @@ class AgentZeroCLI(App):
         self._render_connector_event(log, data)
 
     def _handle_context_complete(self, data: dict[str, Any]) -> None:
-        """Handle agent completion — re-enable input."""
+        """Handle agent completion -- re-enable input."""
         context_id = data.get("context_id", "")
         if context_id != self.current_context:
             return
@@ -318,24 +343,20 @@ class AgentZeroCLI(App):
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
-        # Sort edits by 'from' descending to apply bottom-up
         sorted_edits = sorted(edits, key=lambda e: e.get("from", 0), reverse=True)
         for edit in sorted_edits:
             fr = edit.get("from", 1)
             to = edit.get("to")
             content = edit.get("content")
-            idx = fr - 1  # 0-based
+            idx = fr - 1
 
             if to is None and content is not None:
-                # Insert before line
                 new_lines = content.splitlines(True)
                 lines[idx:idx] = new_lines
             elif content is None:
-                # Delete lines
                 to_idx = to if to else fr
                 del lines[idx:to_idx]
             else:
-                # Replace lines
                 to_idx = to if to else fr
                 new_lines = content.splitlines(True)
                 lines[idx:to_idx] = new_lines
@@ -409,12 +430,10 @@ class AgentZeroCLI(App):
         if not text:
             return
 
-        # Handle commands
         if text.startswith("/"):
             await self._handle_command(text)
             return
 
-        # Send message
         log = self.query_one("#chat-log", RichLog)
         if not self.current_context:
             log.write("[red]No active chat context.[/red]")
@@ -471,7 +490,6 @@ class AgentZeroCLI(App):
         if not result:
             return
 
-        # Unsubscribe from current, switch, subscribe to new
         if self.current_context:
             await self.client.unsubscribe_context(self.current_context)
         self.current_context = result

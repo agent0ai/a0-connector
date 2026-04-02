@@ -11,6 +11,32 @@
     border: solid $primary;
 }
 
+HostInputScreen {
+    align: center middle;
+}
+
+#host-box {
+    width: 60%;
+    min-width: 40;
+    border: solid $primary;
+    padding: 2;
+    background: $panel;
+}
+
+#host-title {
+    content-align: center middle;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#host-description {
+    margin-bottom: 1;
+}
+
+LoginScreen {
+    align: center middle;
+}
+
 #login-box {
     width: 60%;
     min-width: 40;

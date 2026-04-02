@@ -8,15 +8,12 @@ from textual.widgets import Button, Input, Static
 from agent_zero_cli.client import A0Client
 
 
-class LoginScreen(Screen[bool]):
-    """Login screen for authenticated instances."""
-
-    MAX_ATTEMPTS = 3
+class LoginScreen(Screen[str | None]):
+    """Login screen that exchanges credentials for an API key."""
 
     def __init__(self, client: A0Client) -> None:
         super().__init__()
         self.client = client
-        self.attempts = 0
 
     def compose(self) -> ComposeResult:
         with Center():
@@ -45,16 +42,9 @@ class LoginScreen(Screen[bool]):
             error.update("Username and password are required.")
             return
 
-        ok = await self.client.login(username, password)
-        if ok:
-            self.dismiss(True)
+        api_key = await self.client.login(username, password)
+        if api_key:
+            self.dismiss(api_key)
             return
 
-        self.attempts += 1
-        remaining = self.MAX_ATTEMPTS - self.attempts
-        if remaining <= 0:
-            error.update("Login failed. Too many attempts.")
-            self.app.exit(return_code=1)
-            return
-
-        error.update(f"Invalid credentials. {remaining} attempts left.")
+        error.update("Invalid credentials. Please try again.")
