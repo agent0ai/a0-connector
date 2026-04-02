@@ -1,63 +1,56 @@
 # a0-connector
 
-CLI connector for the current Agent Zero runtime.
+Terminal chat client and connector plugin for **Agent Zero**—chat with a running instance from the shell, with streaming output and remote file tooling.
 
-This repository holds the terminal client and the documentation for the connector plugin contract. The supported runtime is the sibling `agent-zero` checkout, with the connector plugin installed into:
+This repo contains **two separate pieces**:
 
-```text
-agent-zero/usr/plugins/a0_connector
-```
+| Part | Package / path | Role |
+|------|----------------|------|
+| **CLI** | `agent-zero-cli` → `agentzero` | Textual TUI; HTTP + Socket.IO to your Agent Zero URL |
+| **Plugin** | `plugin/a0_connector` | Must live **inside** the Agent Zero checkout as `usr/plugins/a0_connector` |
 
-The connector model is:
+Installing or upgrading the CLI alone does **not** install the plugin on your Agent Zero server. If the CLI reports **HTTP 404** on `.../api/plugins/a0_connector/v1/capabilities`, the web UI may still work—the connector API is missing until you symlink the plugin and restart Agent Zero.
 
-1. HTTP requests go to the plugin API under `/api/plugins/a0_connector/v1/...`
-2. Protected HTTP endpoints use `X-API-KEY`
-3. Socket.IO connects on `/ws`
-4. Connector websocket activation is sent through `auth.handlers = ["plugins/a0_connector/ws_connector"]`
-5. The connector secret is the Agent Zero `mcp_server_token`
+**Documentation:** [docs/](docs/README.md) — architecture, configuration, and local development.
 
-## Ubuntu / Bash Setup
+---
 
-These commands match the supported local development flow.
+## Quick start
+
+**1. Agent Zero** — symlink the plugin and start the UI (from your Agent Zero checkout):
 
 ```bash
-cd ~/src/agent-zero
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install -r requirements2.txt
 mkdir -p usr/plugins
-ln -sfn ~/src/a0-connector/plugin/a0_connector usr/plugins/a0_connector
-A0_SET_mcp_server_token=dev-a0-connector python run_ui.py --host=127.0.0.1 --port=50001
+ln -sfn /path/to/a0-connector/plugin/a0_connector usr/plugins/a0_connector
+A0_SET_mcp_server_token=your-token python run_ui.py --host=127.0.0.1 --port=50001
 ```
 
-In a second shell:
+**2. CLI** — install from this repo:
 
 ```bash
-cd ~/src/a0-connector
-git fetch origin
-git checkout origin/development
-python -m venv .venv
-source .venv/bin/activate
 pip install -e .
-pip install pytest
 export AGENT_ZERO_HOST=http://127.0.0.1:50001
 agentzero
 ```
 
-The CLI reads `AGENT_ZERO_HOST` and `AGENT_ZERO_API_KEY` from environment variables,
-falling back to `~/.agent-zero/.env`. If neither is set, the CLI prompts interactively
-for the host URL and login credentials. Acquired values are persisted to
-`~/.agent-zero/.env` for subsequent runs.
+If `AGENT_ZERO_HOST` or `AGENT_ZERO_API_KEY` are unset, the app prompts once and can save them to `~/.agent-zero/.env`. Details: [docs/configuration.md](docs/configuration.md).
 
-## Connector contract
+---
 
-The connector is intentionally narrow:
+## Connector at a glance
 
-- `capabilities` is public
-- all other HTTP handlers require an API key
-- the websocket handler uses the shared `/ws` namespace, not a custom namespace
-- the plugin emits connector-prefixed events so it can coexist with other `/ws` handlers
-- `text_editor_remote` round-trips file operations by `op_id` rather than assuming a transport-level ack primitive
+- **HTTP:** `POST /api/plugins/a0_connector/v1/...` — `capabilities` is public; other routes use `X-API-KEY` (Agent Zero `mcp_server_token`).
+- **WebSocket:** Socket.IO on `/ws` with `auth.handlers` including `plugins/a0_connector/ws_connector`.
+- **Login:** Optional `connector_login` to exchange username/password for the API key when no key is configured—see [docs/architecture.md](docs/architecture.md).
 
-The goal is to keep the CLI and plugin aligned with the current Agent Zero architecture. The CLI authenticates by exchanging credentials via the `connector_login` endpoint to obtain an API key, avoiding session-cookie coupling.
+---
+
+## Development
+
+```bash
+pip install -e .
+pip install pytest
+pytest tests/ -v
+```
+
+Full setup, test notes, and repo layout: [docs/development.md](docs/development.md).
