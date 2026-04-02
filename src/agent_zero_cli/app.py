@@ -10,7 +10,7 @@ from textual.widgets import Footer, Header, RichLog
 from rich.markdown import Markdown
 from rich.syntax import Syntax
 
-from agent_zero_cli.client import A0Client
+from agent_zero_cli.client import A0Client, A0ConnectorPluginMissingError
 from agent_zero_cli.config import CLIConfig, load_config, save_env
 from agent_zero_cli.screens.chat_list import ChatListScreen
 from agent_zero_cli.screens.host_input import HostInputScreen
@@ -107,10 +107,14 @@ class AgentZeroCLI(App):
         log.write("[dim]Connecting to Agent Zero...[/dim]")
 
         # --- Step 2: Probe capabilities ---
-        capabilities = await self._fetch_capabilities(log)
+        capabilities, plugin_missing = await self._fetch_capabilities(log)
         if capabilities is None:
-            log.write(f"[red]No Agent Zero instance found at {self.config.instance_url}[/red]")
-            log.write("[dim]Start Agent Zero and verify the connector plugin is installed.[/dim]")
+            if not plugin_missing:
+                log.write(f"[red]No Agent Zero instance found at {self.config.instance_url}[/red]")
+                log.write(
+                    "[dim]Check the URL, firewall, and TLS. If the server is up, install the "
+                    "a0_connector plugin (see README).[/dim]"
+                )
             input_widget.disabled = True
             return
 
@@ -189,12 +193,20 @@ class AgentZeroCLI(App):
         log.write("[green]Connected to Agent Zero.[/green]")
         input_widget.disabled = False
 
-    async def _fetch_capabilities(self, log: RichLog) -> dict[str, Any] | None:
+    async def _fetch_capabilities(
+        self, log: RichLog
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """Return (capabilities, plugin_missing). plugin_missing is True on HTTP 404 for /capabilities."""
         try:
-            return await self.client.fetch_capabilities()
+            return await self.client.fetch_capabilities(), False
+        except A0ConnectorPluginMissingError as exc:
+            for line in str(exc).splitlines():
+                if line.strip():
+                    log.write(f"[yellow]{line}[/yellow]")
+            return None, True
         except Exception as exc:
             log.write(f"[dim]Capabilities probe failed: {exc}[/dim]")
-            return None
+            return None, False
 
     def _validate_capabilities(self, capabilities: dict[str, Any]) -> None:
         protocol = capabilities.get("protocol")

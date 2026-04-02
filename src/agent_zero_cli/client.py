@@ -6,12 +6,14 @@ import asyncio
 import uuid
 from typing import Any, Callable
 
+import aiohttp
 import httpx
 import socketio
 
 
 _PLUGIN_API = "/api/plugins/a0_connector/v1"
 _PROTOCOL_VERSION = "a0-connector.v1"
+_SOCKET_IO_PATH = "/socket.io"
 _WS_NAMESPACE = "/ws"
 _WS_HANDLER = "plugins/a0_connector/ws_connector"
 
@@ -26,21 +28,45 @@ _EVENT_FILE_OP = "connector_file_op"
 _EVENT_FILE_OP_RESULT = "connector_file_op_result"
 _EVENT_ERROR = "connector_error"
 
+_SOCKET_IO_PROBE_QUERY = {"transport": "polling", "EIO": "4"}
+_BLANK_SOCKET_IO_REJECTION = "server rejected the Socket.IO connection without an error message"
+
 
 class A0ProtocolError(RuntimeError):
     """Raised when the connector returns an application-level error."""
+
+
+class A0ConnectorPluginMissingError(RuntimeError):
+    """HTTP 404 on the connector API — the a0_connector plugin is not loaded on Agent Zero."""
+
+
+class A0WebSocketConnectionError(RuntimeError):
+    """WebSocket/Socket.IO connection failed with a user-facing message."""
+
+
+def _ensure_aiohttp_ws_timeout_compat() -> None:
+    """Patch older aiohttp versions so python-engineio websocket connects still work."""
+    if hasattr(aiohttp, "ClientWSTimeout"):
+        return
+
+    def _client_ws_timeout_compat(*, ws_close: float | None = None, **_: Any) -> float | None:
+        return ws_close
+
+    aiohttp.ClientWSTimeout = _client_ws_timeout_compat  # type: ignore[attr-defined]
 
 
 class A0Client:
     """Client for communicating with a running Agent Zero instance."""
 
     def __init__(self, base_url: str, *, api_key: str = "") -> None:
+        _ensure_aiohttp_ws_timeout_compat()
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
         self.sio = socketio.AsyncClient()
         self.connected = False
         self._events_registered = False
+        self._last_connect_error: Any = None
 
         self.on_connect: Callable[[], None] | None = None
         self.on_disconnect: Callable[[], None] | None = None
@@ -55,6 +81,9 @@ class A0Client:
 
     def _api_url(self, endpoint: str) -> str:
         return f"{self.base_url}{_PLUGIN_API}/{endpoint}"
+
+    def _socket_io_url(self) -> str:
+        return f"{self.base_url}{_SOCKET_IO_PATH}"
 
     def _api_headers(self, *, require_api_key: bool = False) -> dict[str, str]:
         headers: dict[str, str] = {}
@@ -104,6 +133,97 @@ class A0Client:
 
         return {}
 
+    def _format_connect_error(
+        self,
+        exc: BaseException | None = None,
+        payload: Any = None,
+    ) -> str:
+        payload = self._unwrap_envelope(payload) if isinstance(payload, dict) else payload
+
+        if isinstance(payload, dict):
+            code = payload.get("code")
+            message = payload.get("error") or payload.get("message") or payload.get("reason")
+            details = payload.get("details")
+
+            parts: list[str] = []
+            if code:
+                parts.append(str(code))
+            if message:
+                parts.append(str(message))
+
+            formatted = ": ".join(parts) if parts else ""
+            if details:
+                suffix = details if isinstance(details, str) else repr(details)
+                formatted = f"{formatted} ({suffix})" if formatted else str(suffix)
+            if formatted:
+                return formatted
+
+        if isinstance(payload, str) and payload.strip():
+            return payload.strip()
+
+        if exc is not None:
+            message = str(exc).strip()
+            if message:
+                return message
+
+        return _BLANK_SOCKET_IO_REJECTION
+
+    async def _probe_socketio_transport(self) -> None:
+        probe_url = self._socket_io_url()
+
+        try:
+            response = await self.http.get(
+                probe_url,
+                params=_SOCKET_IO_PROBE_QUERY,
+                headers=self._ws_headers(),
+            )
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            raise A0WebSocketConnectionError(
+                "Socket.IO transport probe failed: could not reach "
+                f"{probe_url}?transport=polling&EIO=4. Ensure Agent Zero is running and any "
+                "reverse proxy forwards /socket.io unchanged (not just /api/plugins/)."
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise A0WebSocketConnectionError(
+                "Socket.IO transport probe failed before the websocket handshake. Ensure any "
+                "reverse proxy forwards /socket.io unchanged (not just /api/plugins/)."
+            ) from exc
+
+        if response.status_code != 200:
+            raise A0WebSocketConnectionError(
+                "Socket.IO transport probe failed: "
+                f"GET {probe_url}?transport=polling&EIO=4 returned HTTP {response.status_code}. "
+                "Ensure Agent Zero is running and any reverse proxy forwards /socket.io unchanged "
+                "(not just /api/plugins/)."
+            )
+
+        if not response.text.lstrip().startswith("0{"):
+            raise A0WebSocketConnectionError(
+                "Socket.IO transport probe reached /socket.io, but the response was not a valid "
+                "Engine.IO handshake. Ensure any reverse proxy forwards /socket.io unchanged "
+                "without rewriting or caching it."
+            )
+
+    def _format_namespace_rejection_error(self, exc: BaseException | None = None) -> str:
+        reason = self._format_connect_error(exc, self._last_connect_error)
+        guidance = (
+            "This usually means an Origin/Referer or proxy host mismatch. Check that "
+            "AGENT_ZERO_HOST exactly matches the Agent Zero URL (for example localhost vs "
+            "127.0.0.1) and that any reverse proxy forwards Host, X-Forwarded-Host, and "
+            "X-Forwarded-Proto correctly."
+        )
+
+        if reason == _BLANK_SOCKET_IO_REJECTION:
+            return (
+                f"Socket.IO transport probe succeeded, but the {_WS_NAMESPACE} namespace "
+                f"connection was rejected. {guidance}"
+            )
+
+        return (
+            f"Socket.IO transport probe succeeded, but the {_WS_NAMESPACE} namespace connection "
+            f"was rejected: {reason}. {guidance}"
+        )
+
     async def _post(
         self,
         endpoint: str,
@@ -142,6 +262,14 @@ class A0Client:
             callback = self.on_disconnect
             if callback is not None:
                 callback()
+
+        @self.sio.on("connect_error")
+        async def _on_connect_error_root(payload: Any) -> None:
+            self._last_connect_error = payload
+
+        @self.sio.on("connect_error", namespace=_WS_NAMESPACE)
+        async def _on_connect_error(payload: Any) -> None:
+            self._last_connect_error = payload
 
         @self.sio.on(_EVENT_CONTEXT_SNAPSHOT, namespace=_WS_NAMESPACE)
         async def _on_context_snapshot(payload: dict[str, Any]) -> None:
@@ -211,6 +339,16 @@ class A0Client:
 
     async def fetch_capabilities(self) -> dict[str, Any]:
         response = await self._post("capabilities", require_api_key=False)
+        if response.status_code == 404:
+            raise A0ConnectorPluginMissingError(
+                "HTTP 404 — the a0_connector plugin is not installed on this Agent Zero server.\n"
+                "\n"
+                "The web UI can work while this endpoint is missing: the CLI needs the plugin.\n"
+                "In your Agent Zero checkout:\n"
+                "  mkdir -p usr/plugins\n"
+                "  ln -sfn /absolute/path/to/a0-connector/plugin/a0_connector usr/plugins/a0_connector\n"
+                "Then restart Agent Zero. On a remote host, repeat the same symlink on that server."
+            )
         response.raise_for_status()
         return response.json()
 
@@ -249,13 +387,17 @@ class A0Client:
 
     async def connect_websocket(self) -> None:
         self._register_event_handlers()
-        await self.sio.connect(
-            self.base_url,
-            namespaces=[_WS_NAMESPACE],
-            headers=self._ws_headers(),
-            auth=self._ws_auth(),
-            transports=["websocket"],
-        )
+        self._last_connect_error = None
+        await self._probe_socketio_transport()
+        try:
+            await self.sio.connect(
+                self.base_url,
+                namespaces=[_WS_NAMESPACE],
+                headers=self._ws_headers(),
+                auth=self._ws_auth(),
+            )
+        except Exception as exc:
+            raise A0WebSocketConnectionError(self._format_namespace_rejection_error(exc)) from exc
 
     async def send_hello(self) -> dict[str, Any]:
         return await self._call(

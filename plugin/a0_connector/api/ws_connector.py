@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from agent import AgentContext, AgentContextType, UserMessage
 from helpers.print_style import PrintStyle
 from helpers.ws import WsHandler
 from helpers.ws_manager import WsResult
-from initialize import initialize_agent
 
 from usr.plugins.a0_connector.helpers.event_bridge import get_context_log_entries
 from usr.plugins.a0_connector.helpers.ws_runtime import (
@@ -21,6 +19,9 @@ from usr.plugins.a0_connector.helpers.ws_runtime import (
     unsubscribe_sid_from_context,
     unregister_sid,
 )
+
+if TYPE_CHECKING:
+    from agent import AgentContext, AgentContextType, UserMessage
 
 
 PROTOCOL_VERSION = "a0-connector.v1"
@@ -98,6 +99,8 @@ class WsConnector(WsHandler):
         data: dict[str, Any],
         sid: str,
     ) -> dict[str, Any] | WsResult:
+        from agent import AgentContext
+
         context_id = str(data.get("context_id", "")).strip()
         from_sequence = int(data.get("from", 0) or 0)
 
@@ -252,7 +255,9 @@ class WsConnector(WsHandler):
         agent_profile: str | None,
         project_name: str | None,
     ) -> tuple[AgentContext | None, str | None]:
+        from agent import AgentContext, AgentContextType
         from helpers import projects
+        from initialize import initialize_agent
 
         if context_id:
             context = AgentContext.get(context_id)
@@ -284,6 +289,8 @@ class WsConnector(WsHandler):
         message: str,
         attachments: list[Any],
     ) -> None:
+        from agent import AgentContext, UserMessage
+
         try:
             AgentContext.use(context_id)
             task = context.communicate(

@@ -40,7 +40,7 @@ If `AGENT_ZERO_HOST` or `AGENT_ZERO_API_KEY` are unset, the app prompts once and
 ## Connector at a glance
 
 - **HTTP:** `POST /api/plugins/a0_connector/v1/...` — `capabilities` is public; other routes use `X-API-KEY` (Agent Zero `mcp_server_token`).
-- **WebSocket:** Socket.IO on `/ws` with `auth.handlers` including `plugins/a0_connector/ws_connector`.
+- **WebSocket:** Socket.IO namespace `/ws` over the Engine.IO transport path `/socket.io`, with `auth.handlers` including `plugins/a0_connector/ws_connector`.
 - **Login:** Optional `connector_login` to exchange username/password for the API key when no key is configured—see [docs/architecture.md](docs/architecture.md).
 
 ---

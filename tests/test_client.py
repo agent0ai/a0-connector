@@ -2,10 +2,17 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
+import aiohttp
 import httpx
 import pytest
+import socketio
 
-from agent_zero_cli.client import A0Client
+from agent_zero_cli.client import (
+    A0Client,
+    A0ConnectorPluginMissingError,
+    A0WebSocketConnectionError,
+    _ensure_aiohttp_ws_timeout_compat,
+)
 from agent_zero_cli.config import CLIConfig, load_config, save_env, _ENV_FILE
 
 
@@ -16,10 +23,12 @@ class FakeResponse:
         status_code: int = 200,
         json_data: dict | None = None,
         headers: dict | None = None,
+        text: str = "",
     ) -> None:
         self.status_code = status_code
         self._json_data = json_data or {}
         self.headers = headers or {}
+        self.text = text
 
     def json(self) -> dict:
         return self._json_data
@@ -32,12 +41,20 @@ class FakeResponse:
 
 
 class FakeSocketIOClient:
-    def __init__(self, *, call_response: dict | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        call_response: dict | None = None,
+        connect_error_payload: object | None = None,
+        connect_exception: Exception | None = None,
+    ) -> None:
         self.handlers: dict[tuple[str | None, str], object] = {}
         self.connect_calls: list[tuple[str, dict]] = []
         self.call_calls: list[tuple[str, dict, str | None]] = []
         self.emit_calls: list[tuple[str, dict, str | None]] = []
         self.call_response = call_response or {"results": [{"ok": True, "data": {}}]}
+        self.connect_error_payload = connect_error_payload
+        self.connect_exception = connect_exception
         self.connected = False
 
     def on(self, event: str, namespace: str | None = None):
@@ -49,6 +66,13 @@ class FakeSocketIOClient:
 
     async def connect(self, url: str, **kwargs) -> None:
         self.connect_calls.append((url, kwargs))
+        if self.connect_error_payload is not None:
+            for namespace in (None, "/ws"):
+                handler = self.handlers.get((namespace, "connect_error"))
+                if handler is not None:
+                    await handler(self.connect_error_payload)
+        if self.connect_exception is not None:
+            raise self.connect_exception
         self.connected = True
 
     async def call(
@@ -200,6 +224,15 @@ async def test_login_returns_api_key_on_success() -> None:
     )
 
 
+async def test_fetch_capabilities_raises_plugin_missing_on_404() -> None:
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.post = AsyncMock(return_value=FakeResponse(status_code=404))
+
+    with pytest.raises(A0ConnectorPluginMissingError):
+        await client.fetch_capabilities()
+
+
 async def test_login_returns_none_on_401() -> None:
     client = A0Client("http://localhost:5080")
     client.http = Mock()
@@ -273,10 +306,26 @@ async def test_verify_api_key_returns_false_on_401() -> None:
 
 async def test_connect_websocket_uses_ws_auth_payload() -> None:
     client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
     fake_sio = FakeSocketIOClient()
     client.sio = fake_sio
 
     await client.connect_websocket()
+
+    client.http.get.assert_awaited_once_with(
+        "http://127.0.0.1:50001/socket.io",
+        params={"transport": "polling", "EIO": "4"},
+        headers={
+            "Origin": "http://127.0.0.1:50001",
+            "Referer": "http://127.0.0.1:50001/",
+        },
+    )
 
     assert fake_sio.connect_calls == [
         (
@@ -291,10 +340,114 @@ async def test_connect_websocket_uses_ws_auth_payload() -> None:
                     "api_key": "dev-a0-connector",
                     "handlers": ["plugins/a0_connector/ws_connector"],
                 },
-                "transports": ["websocket"],
             },
         )
     ]
+
+
+async def test_connect_websocket_surfaces_connect_error_payload() -> None:
+    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    fake_sio = FakeSocketIOClient(
+        connect_error_payload={
+            "code": "origin_rejected",
+            "message": "Origin not allowed",
+            "details": "expected https://agent-zero.example",
+        },
+        connect_exception=socketio.exceptions.ConnectionError(""),
+    )
+    client.sio = fake_sio
+
+    with pytest.raises(
+        A0WebSocketConnectionError,
+        match=r"Socket\.IO transport probe succeeded, but the /ws namespace connection was rejected: "
+        r"origin_rejected: Origin not allowed \(expected https://agent-zero\.example\)\. "
+        r"This usually means an Origin/Referer or proxy host mismatch\.",
+    ):
+        await client.connect_websocket()
+
+
+async def test_connect_websocket_reports_missing_socketio_forwarding() -> None:
+    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client.http = Mock()
+    client.http.get = AsyncMock(return_value=FakeResponse(status_code=404, text="Not Found"))
+    fake_sio = FakeSocketIOClient()
+    client.sio = fake_sio
+
+    with pytest.raises(
+        A0WebSocketConnectionError,
+        match=r"Socket\.IO transport probe failed: GET http://127\.0\.0\.1:50001/socket\.io\?transport=polling&EIO=4 returned HTTP 404\. "
+        r"Ensure Agent Zero is running and any reverse proxy forwards /socket\.io unchanged \(not just /api/plugins/\)\.",
+    ):
+        await client.connect_websocket()
+
+    assert fake_sio.connect_calls == []
+
+
+async def test_connect_websocket_reports_blank_namespace_rejection_after_probe() -> None:
+    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    fake_sio = FakeSocketIOClient(
+        connect_exception=socketio.exceptions.ConnectionError(""),
+    )
+    client.sio = fake_sio
+
+    with pytest.raises(
+        A0WebSocketConnectionError,
+        match=r"Socket\.IO transport probe succeeded, but the /ws namespace connection was rejected\. "
+        r"This usually means an Origin/Referer or proxy host mismatch\. Check that AGENT_ZERO_HOST exactly matches the Agent Zero URL",
+    ):
+        await client.connect_websocket()
+
+
+def test_ensure_aiohttp_ws_timeout_compat_returns_ws_close_on_old_aiohttp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = object()
+    monkeypatch.delattr(aiohttp, "ClientWSTimeout", raising=False)
+
+    _ensure_aiohttp_ws_timeout_compat()
+
+    assert aiohttp.ClientWSTimeout(ws_close=12.5) == 12.5
+    assert aiohttp.ClientWSTimeout(ws_close=None) is None
+    assert aiohttp.ClientWSTimeout(ws_close=sentinel) is sentinel
+
+
+async def test_connect_websocket_patches_old_aiohttp_before_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(aiohttp, "ClientWSTimeout", raising=False)
+
+    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    fake_sio = FakeSocketIOClient()
+    client.sio = fake_sio
+
+    await client.connect_websocket()
+
+    assert aiohttp.ClientWSTimeout(ws_close=7.0) == 7.0
+    assert fake_sio.connect_calls[0][1]["auth"] == {
+        "api_key": "dev-a0-connector",
+        "handlers": ["plugins/a0_connector/ws_connector"],
+    }
 
 
 async def test_send_message_uses_prefixed_ws_event() -> None:
@@ -324,6 +477,13 @@ async def test_send_message_uses_prefixed_ws_event() -> None:
 
 async def test_file_op_requests_are_returned_via_result_event() -> None:
     client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
     fake_sio = FakeSocketIOClient()
     client.sio = fake_sio
     client.on_file_op = AsyncMock(

@@ -14,4 +14,4 @@ Start with [Architecture](architecture.md) if you are new to the project.
 
 - **404 on `/api/plugins/a0_connector/v1/capabilities`** — Agent Zero is reachable but the **plugin is not loaded**. From your Agent Zero tree: `mkdir -p usr/plugins` and `ln -sfn <path-to-this-repo>/plugin/a0_connector usr/plugins/a0_connector`, then restart. Repeat on a **remote** VPS in *its* checkout.
 - **Works in browser, fails in CLI** — Same cause: the browser does not use the connector HTTP API; the CLI does.
-- **Reverse proxies** — Ensure paths under `/api/plugins/` are forwarded to Agent Zero unchanged.
+- **Reverse proxies** — Ensure both `/api/plugins/` and `/socket.io` are forwarded to Agent Zero unchanged.
