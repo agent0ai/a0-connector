@@ -6,9 +6,8 @@ from typing import Any
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, RichLog
+from textual.widgets import Footer, RichLog, Static
 from rich.markdown import Markdown
-from rich.syntax import Syntax
 
 from agent_zero_cli.client import A0Client, A0ConnectorPluginMissingError
 from agent_zero_cli.config import CLIConfig, load_config, save_env
@@ -32,6 +31,21 @@ _EVENT_CATEGORY: dict[str, str] = {
     "status": "info",
     "message_complete": "info",
     "context_updated": "info",
+}
+
+# Human-readable status labels shown in the status bar while agent is active.
+# Events not listed here produce no status update (bar keeps its last value).
+_STATUS_LABEL: dict[str, str] = {
+    "user_message": "Sending...",
+    "assistant_message": "Responding...",
+    "assistant_delta": "Responding...",
+    "tool_start": "Using tool...",
+    "tool_output": "Using tool...",
+    "tool_end": "Using tool...",
+    "code_start": "Running code...",
+    "code_output": "Running code...",
+    "status": "Thinking...",
+    "context_updated": "Updating memory...",
 }
 
 _PROTOCOL_VERSION = "a0-connector.v1"
@@ -65,8 +79,8 @@ class AgentZeroCLI(App):
         self.current_context: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield Header()
         yield RichLog(id="chat-log", wrap=True, highlight=True, markup=True)
+        yield Static("Waiting for input", id="status-bar")
         yield ChatInput(id="message-input")
         yield Footer()
 
@@ -74,22 +88,16 @@ class AgentZeroCLI(App):
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = True
         input_widget.focus()
-        self._refresh_subtitle()
         self.run_worker(self._startup(), exclusive=True, name="startup")
 
-    def watch_connected(self, connected: bool) -> None:
-        self._refresh_subtitle()
-
-    def watch_agent_active(self, agent_active: bool) -> None:
-        self._refresh_subtitle()
-
-    def _refresh_subtitle(self) -> None:
-        if self.agent_active:
-            self.sub_title = "Agent thinking..."
-        elif self.connected:
-            self.sub_title = "Connected"
-        else:
-            self.sub_title = "Disconnected"
+    def _set_status(self, text: str) -> None:
+        """Update the status bar with a (possibly truncated) message."""
+        bar = self.query_one("#status-bar", Static)
+        # Truncate to terminal width minus a small margin so it never wraps
+        width = self.size.width or 80
+        max_len = max(10, width - 4)
+        display = text if len(text) <= max_len else text[: max_len - 1] + "…"
+        bar.update(display)
 
     # ------------------------------------------------------------------
     # Startup
@@ -275,6 +283,12 @@ class AgentZeroCLI(App):
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = True
 
+        # Update status bar with a clean label for this event type
+        event_type = data.get("event", "")
+        label = _STATUS_LABEL.get(event_type)
+        if label:
+            self._set_status(label)
+
         log = self.query_one("#chat-log", RichLog)
         self._render_connector_event(log, data)
 
@@ -288,6 +302,7 @@ class AgentZeroCLI(App):
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = False
         input_widget.focus()
+        self._set_status("Waiting for input")
 
     def _handle_connector_error(self, data: dict[str, Any]) -> None:
         """Handle error events from the connector."""
@@ -409,20 +424,6 @@ class AgentZeroCLI(App):
                 log.write(Markdown(text))
             return
 
-        if category == "tool":
-            title = heading or "Tool"
-            log.write(f"[dim]Tool: {title}[/dim]")
-            if text:
-                log.write(f"[dim]{text}[/dim]")
-            return
-
-        if category == "code":
-            title = heading or "Code"
-            log.write(f"[dim]Code: {title}[/dim]")
-            if text:
-                log.write(Syntax(text, "text", word_wrap=True))
-            return
-
         if category == "warning":
             msg = f"{heading}: {text}" if heading else text
             log.write(f"[yellow]{msg}[/yellow]")
@@ -431,12 +432,6 @@ class AgentZeroCLI(App):
         if category == "error":
             msg = f"{heading}: {text}" if heading else text
             log.write(f"[red]{msg}[/red]")
-            return
-
-        if category == "info":
-            if heading or text:
-                msg = f"{heading}: {text}" if heading else text
-                log.write(f"[dim]{msg}[/dim]")
             return
 
     # ------------------------------------------------------------------
@@ -460,7 +455,6 @@ class AgentZeroCLI(App):
 
         event.input.disabled = True
         self.agent_active = True
-        self._refresh_subtitle()
         try:
             await self.client.send_message(text, self.current_context)
         except Exception as exc:
@@ -512,6 +506,7 @@ class AgentZeroCLI(App):
             await self.client.unsubscribe_context(self.current_context)
         self.current_context = result
         log.clear()
+        self._set_status("Waiting for input")
         await self.client.subscribe_context(result, from_seq=0)
 
     async def _cmd_new(self) -> None:
@@ -520,6 +515,7 @@ class AgentZeroCLI(App):
             await self.client.unsubscribe_context(self.current_context)
         self.current_context = await self.client.create_chat()
         log.clear()
+        self._set_status("Waiting for input")
         await self.client.subscribe_context(self.current_context)
 
     async def _cmd_exit(self) -> None:
@@ -555,7 +551,6 @@ class AgentZeroCLI(App):
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = True
         self.agent_active = True
-        self._refresh_subtitle()
         try:
             await self.client.send_message(".", self.current_context)
         except Exception as exc:

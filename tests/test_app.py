@@ -32,6 +32,14 @@ class FakeInput:
         self.focused = True
 
 
+class FakeStatusBar:
+    def __init__(self) -> None:
+        self.text = "Waiting for input"
+
+    def update(self, text: str) -> None:
+        self.text = text
+
+
 class DummyAgentZeroCLI(AgentZeroCLI):
     def __init__(self) -> None:
         super().__init__(
@@ -51,9 +59,19 @@ def dummy_app() -> DummyAgentZeroCLI:
     app = DummyAgentZeroCLI()
     log = FakeRichLog()
     input_widget = FakeInput()
-    app.query_one = lambda selector, cls=None: log if selector == "#chat-log" else input_widget
+    status_bar = FakeStatusBar()
+
+    def _query_one(selector: str, cls: object = None) -> object:
+        if selector == "#chat-log":
+            return log
+        if selector == "#status-bar":
+            return status_bar
+        return input_widget
+
+    app.query_one = _query_one
     app._test_log = log
     app._test_input = input_widget
+    app._test_status = status_bar
     return app
 
 

@@ -5,6 +5,14 @@
     overflow-x: hidden;
 }
 
+#status-bar {
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+    color: $text-muted;
+    overflow: hidden hidden;
+}
+
 #message-input {
     margin-top: 0;
     margin-bottom: 0;
