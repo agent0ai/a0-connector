@@ -46,6 +46,10 @@ class AgentZeroCLI(App):
     TITLE = "Agent Zero CLI"
     BINDINGS = [
         Binding("ctrl+c", "quit", "Exit", show=True),
+        Binding("f5", "clear_chat", "Clear", show=True, priority=True),
+        Binding("f6", "list_chats", "Chats", show=True, priority=True),
+        Binding("f7", "nudge_agent", "Nudge", show=True, priority=True),
+        Binding("f8", "pause_agent", "Pause", show=True, priority=True),
     ]
 
     connected = reactive(False)
@@ -454,7 +458,6 @@ class AgentZeroCLI(App):
             log.write("[red]No active chat context.[/red]")
             return
 
-        log.write(f"[bold cyan]You:[/bold cyan] {text}")
         event.input.disabled = True
         self.agent_active = True
         self._refresh_subtitle()
@@ -530,3 +533,46 @@ class AgentZeroCLI(App):
         log.write("/new - Start a new chat")
         log.write("/exit - Exit the CLI")
         log.write("/help - Show this help")
+
+    # ------------------------------------------------------------------
+    # Key-binding actions
+    # ------------------------------------------------------------------
+
+    async def action_clear_chat(self) -> None:
+        """F5 - Clear the chat log display."""
+        log = self.query_one("#chat-log", RichLog)
+        log.clear()
+
+    async def action_list_chats(self) -> None:
+        """F6 - Open the chat list screen."""
+        self.run_worker(self._cmd_chats(), exclusive=True, name="cmd-chats")
+
+    async def action_nudge_agent(self) -> None:
+        """F7 - Send a nudge to the agent to continue."""
+        if not self.current_context or not self.connected or self.agent_active:
+            return
+        log = self.query_one("#chat-log", RichLog)
+        input_widget = self.query_one("#message-input", ChatInput)
+        input_widget.disabled = True
+        self.agent_active = True
+        self._refresh_subtitle()
+        try:
+            await self.client.send_message(".", self.current_context)
+        except Exception as exc:
+            log.write(f"[red]Nudge failed: {exc}[/red]")
+            input_widget.disabled = False
+            self.agent_active = False
+
+    async def action_pause_agent(self) -> None:
+        """F8 - Toggle pause on the agent (interrupt current run)."""
+        if not self.connected:
+            return
+        log = self.query_one("#chat-log", RichLog)
+        if not hasattr(self.client, "pause_agent"):
+            log.write("[yellow]Pause not supported by this connector version.[/yellow]")
+            return
+        try:
+            await self.client.pause_agent(self.current_context)
+            log.write("[dim]Agent paused.[/dim]")
+        except Exception as exc:
+            log.write(f"[red]Pause failed: {exc}[/red]")
