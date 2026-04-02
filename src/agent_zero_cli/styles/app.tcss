@@ -33,6 +33,16 @@ HostInputScreen {
     margin-bottom: 1;
 }
 
+#host-url {
+    margin-bottom: 1;
+}
+
+#host-btn,
+#login-btn {
+    width: 100%;
+    height: 3;
+}
+
 LoginScreen {
     align: center middle;
 }
@@ -43,6 +53,17 @@ LoginScreen {
     border: solid $primary;
     padding: 2;
     background: $panel;
+}
+
+#username,
+#password,
+#save-credentials {
+    width: 100%;
+    margin-bottom: 1;
+}
+
+#login-btn {
+    margin-top: 1;
 }
 
 #login-title {

@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from textual.app import ComposeResult
 from textual.containers import Center, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Input, Static
+from textual.widgets import Button, Checkbox, Input, Static
 
 from agent_zero_cli.client import A0Client
 
 
-class LoginScreen(Screen[str | None]):
+@dataclass(frozen=True)
+class LoginResult:
+    api_key: str
+    save_credentials: bool
+
+
+class LoginScreen(Screen[LoginResult | None]):
     """Login screen that exchanges credentials for an API key."""
 
     def __init__(self, client: A0Client) -> None:
@@ -21,6 +29,7 @@ class LoginScreen(Screen[str | None]):
                 yield Static("Agent Zero - Login", id="login-title")
                 yield Input(placeholder="Username", id="username")
                 yield Input(placeholder="Password", password=True, id="password")
+                yield Checkbox("Save credentials", id="save-credentials")
                 yield Button("Login", id="login-btn", variant="primary")
                 yield Static("", id="login-error")
 
@@ -44,7 +53,8 @@ class LoginScreen(Screen[str | None]):
 
         api_key = await self.client.login(username, password)
         if api_key:
-            self.dismiss(api_key)
+            save_credentials = self.query_one("#save-credentials", Checkbox).value
+            self.dismiss(LoginResult(api_key=api_key, save_credentials=save_credentials))
             return
 
         error.update("Invalid credentials. Please try again.")

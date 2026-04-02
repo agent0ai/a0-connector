@@ -33,7 +33,7 @@ export AGENT_ZERO_HOST=http://127.0.0.1:50001
 agentzero
 ```
 
-If `AGENT_ZERO_HOST` or `AGENT_ZERO_API_KEY` are unset, the app prompts once and can save them to `~/.agent-zero/.env`. Details: [docs/configuration.md](docs/configuration.md).
+If `AGENT_ZERO_HOST` or `AGENT_ZERO_API_KEY` are unset, the app prompts in the TUI. Entered values stay in memory for the current run unless you explicitly choose to save them to `~/.agent-zero/.env`. Details: [docs/configuration.md](docs/configuration.md).
 
 ---
 

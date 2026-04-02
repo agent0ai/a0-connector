@@ -14,7 +14,7 @@ from agent_zero_cli.client import A0Client, A0ConnectorPluginMissingError
 from agent_zero_cli.config import CLIConfig, load_config, save_env
 from agent_zero_cli.screens.chat_list import ChatListScreen
 from agent_zero_cli.screens.host_input import HostInputScreen
-from agent_zero_cli.screens.login import LoginScreen
+from agent_zero_cli.screens.login import LoginResult, LoginScreen
 from agent_zero_cli.widgets.chat_input import ChatInput
 
 
@@ -102,7 +102,6 @@ class AgentZeroCLI(App):
                 host_url = HostInputScreen.DEFAULT_HOST
             self.config.instance_url = host_url
             self.client.base_url = host_url.rstrip("/")
-            save_env("AGENT_ZERO_HOST", host_url)
 
         log.write("[dim]Connecting to Agent Zero...[/dim]")
 
@@ -129,11 +128,15 @@ class AgentZeroCLI(App):
         auth_modes = capabilities.get("auth") or []
 
         if not self.config.api_key and "login" in auth_modes:
-            api_key = await self.push_screen_wait(LoginScreen(self.client))
-            if api_key:
-                self.config.api_key = api_key
-                self.client.api_key = api_key
-                save_env("AGENT_ZERO_API_KEY", api_key)
+            login_result = await self.push_screen_wait(LoginScreen(self.client))
+            if login_result:
+                if not isinstance(login_result, LoginResult):
+                    raise TypeError(f"Unexpected login result: {login_result!r}")
+                self.config.api_key = login_result.api_key
+                self.client.api_key = login_result.api_key
+                if login_result.save_credentials:
+                    save_env("AGENT_ZERO_HOST", self.config.instance_url)
+                    save_env("AGENT_ZERO_API_KEY", login_result.api_key)
             else:
                 log.write("[red]Login cancelled.[/red]")
                 input_widget.disabled = True
