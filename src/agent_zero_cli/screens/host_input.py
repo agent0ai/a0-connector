@@ -9,7 +9,7 @@ from textual.widgets import Button, Input, Static
 class HostInputScreen(Screen[str]):
     """Prompt for the Agent Zero host URL."""
 
-    DEFAULT_HOST = "http://localhost:5080"
+    DEFAULT_HOST = "http://127.0.0.1:5080"
 
     def compose(self) -> ComposeResult:
         with Center():

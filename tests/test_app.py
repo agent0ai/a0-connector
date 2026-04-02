@@ -7,6 +7,7 @@ from textual.widgets import ListView
 from agent_zero_cli.app import AgentZeroCLI
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.screens.chat_list import ChatListScreen
+from agent_zero_cli.screens.host_input import HostInputScreen
 
 
 class FakeRichLog:
@@ -64,6 +65,44 @@ def test_validate_capabilities_accepts_current_ws_contract(dummy_app: DummyAgent
             "websocket_handlers": ["plugins/a0_connector/ws_connector"],
         }
     )
+
+
+def test_default_client_host_matches_host_input_default() -> None:
+    app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
+
+    assert HostInputScreen.DEFAULT_HOST == "http://127.0.0.1:5080"
+    assert app.client.base_url == HostInputScreen.DEFAULT_HOST
+
+
+@pytest.mark.asyncio
+async def test_startup_falls_back_to_default_host_when_prompt_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
+    log = FakeRichLog()
+    input_widget = FakeInput()
+    saved: dict[str, str] = {}
+
+    app.query_one = lambda selector, cls=None: log if selector == "#chat-log" else input_widget
+
+    async def fake_push_screen_wait(screen: object) -> str:
+        return ""
+
+    async def fake_fetch_capabilities(log_widget: FakeRichLog) -> tuple[None, bool]:
+        return None, False
+
+    monkeypatch.setattr(app, "push_screen_wait", fake_push_screen_wait)
+    monkeypatch.setattr(app, "_fetch_capabilities", fake_fetch_capabilities)
+    monkeypatch.setattr(
+        "agent_zero_cli.app.save_env",
+        lambda key, value: saved.setdefault(key, value),
+    )
+
+    await app._startup()
+
+    assert app.config.instance_url == HostInputScreen.DEFAULT_HOST
+    assert app.client.base_url == HostInputScreen.DEFAULT_HOST
+    assert saved == {"AGENT_ZERO_HOST": HostInputScreen.DEFAULT_HOST}
 
 
 def test_validate_capabilities_rejects_old_namespace(dummy_app: DummyAgentZeroCLI) -> None:

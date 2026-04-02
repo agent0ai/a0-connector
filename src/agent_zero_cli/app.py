@@ -55,7 +55,7 @@ class AgentZeroCLI(App):
         super().__init__()
         self.config = config or load_config()
         self.client = A0Client(
-            self.config.instance_url or "http://localhost:5080",
+            self.config.instance_url or HostInputScreen.DEFAULT_HOST,
             api_key=self.config.api_key,
         )
         self.current_context: str | None = None
@@ -99,7 +99,7 @@ class AgentZeroCLI(App):
         if not self.config.instance_url:
             host_url = await self.push_screen_wait(HostInputScreen())
             if not host_url:
-                host_url = "http://localhost:5080"
+                host_url = HostInputScreen.DEFAULT_HOST
             self.config.instance_url = host_url
             self.client.base_url = host_url.rstrip("/")
             save_env("AGENT_ZERO_HOST", host_url)
