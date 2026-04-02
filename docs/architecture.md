@@ -5,10 +5,10 @@
 ```
 ┌─────────────────┐     HTTP POST + X-API-KEY     ┌────────────────────────────┐
 │  agentzero CLI  │ ────────────────────────────► │  Agent Zero                │
-│                 │                                │  + a0_connector plugin     │
-│                 │     Socket.IO /ws namespace     │                            │
+│                 │                               │  + a0_connector plugin     │
+│                 │     Socket.IO /ws namespace   │                            │
 │                 │ ◄──────────────────────────── │                            │
-└─────────────────┘     connector_* events         └────────────────────────────┘
+└─────────────────┘     connector_* events        └────────────────────────────┘
 ```
 
 - **CLI** (`agent-zero-cli`): Textual TUI, installed via `pip install -e .`
