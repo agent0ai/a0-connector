@@ -1,23 +1,17 @@
 # a0-connector
 
-Terminal chat client and connector plugin for **Agent Zero**—chat with a running instance from the shell, with streaming output and remote file tooling.
+Terminal chat client + server plugin for [Agent Zero](https://github.com/frdel/agent-zero). Chat with a running Agent Zero instance from the command line, with streaming output and remote file editing.
 
-This repo contains **two separate pieces**:
+| Component | Location | What it does |
+|-----------|----------|--------------|
+| **CLI** (`agent-zero-cli`) | `src/agent_zero_cli/` | Textual TUI — connects over HTTP + Socket.IO |
+| **Plugin** (`a0_connector`) | `plugin/a0_connector/` | Runs inside Agent Zero — exposes HTTP routes + WebSocket handler |
 
-| Part | Package / path | Role |
-|------|----------------|------|
-| **CLI** | `agent-zero-cli` → `agentzero` | Textual TUI; HTTP + Socket.IO to your Agent Zero URL |
-| **Plugin** | `plugin/a0_connector` | Must live **inside** the Agent Zero checkout as `usr/plugins/a0_connector` |
-
-Installing or upgrading the CLI alone does **not** install the plugin on your Agent Zero server. If the CLI reports **HTTP 404** on `.../api/plugins/a0_connector/v1/capabilities`, the web UI may still work—the connector API is missing until you symlink the plugin and restart Agent Zero.
-
-**Documentation:** [docs/](docs/README.md) — architecture, configuration, and local development.
-
----
+> The CLI and plugin are **installed separately**. If `agentzero` returns 404 on `/api/plugins/a0_connector/v1/capabilities`, the plugin isn't loaded — see [Troubleshooting](docs/README.md#troubleshooting).
 
 ## Quick start
 
-**1. Agent Zero** — symlink the plugin and start the UI (from your Agent Zero checkout):
+**1. Install the plugin** (in your Agent Zero checkout):
 
 ```bash
 mkdir -p usr/plugins
@@ -25,32 +19,41 @@ ln -sfn /path/to/a0-connector/plugin/a0_connector usr/plugins/a0_connector
 A0_SET_mcp_server_token=your-token python run_ui.py --host=127.0.0.1 --port=50001
 ```
 
-**2. CLI** — install from this repo:
+**2. Install and run the CLI** (in this repo):
 
 ```bash
 pip install -e .
+pip install aiohttp>=3.11.0   # transitive runtime dep — must be installed explicitly
 export AGENT_ZERO_HOST=http://127.0.0.1:50001
 agentzero
 ```
 
-If `AGENT_ZERO_HOST` or `AGENT_ZERO_API_KEY` are unset, the app prompts in the TUI. Entered values stay in memory for the current run unless you explicitly choose to save them to `~/.agent-zero/.env`. Details: [docs/configuration.md](docs/configuration.md).
+If `AGENT_ZERO_HOST` or `AGENT_ZERO_API_KEY` are unset, the TUI prompts interactively. Values stay in memory unless you opt in to saving them to `~/.agent-zero/.env`. See [Configuration](docs/configuration.md).
 
----
+## How it works
 
-## Connector at a glance
+1. CLI calls `POST /api/plugins/a0_connector/v1/capabilities` (public)
+2. If needed, exchanges credentials via `connector_login` for an API key
+3. Opens Socket.IO on namespace `/ws` with `auth: {api_key, handlers: ["plugins/a0_connector/ws_connector"]}`
+4. Creates a chat, subscribes to its event stream, and starts streaming
 
-- **HTTP:** `POST /api/plugins/a0_connector/v1/...` — `capabilities` is public; other routes use `X-API-KEY` (Agent Zero `mcp_server_token`).
-- **WebSocket:** Socket.IO namespace `/ws` over the Engine.IO transport path `/socket.io`, with `auth.handlers` including `plugins/a0_connector/ws_connector`.
-- **Login:** Optional `connector_login` to exchange username/password for the API key when no key is configured—see [docs/architecture.md](docs/architecture.md).
+Protected HTTP routes use the `X-API-KEY` header (value = Agent Zero's `mcp_server_token`). All WebSocket events are `connector_`-prefixed. Full protocol details: [Architecture](docs/architecture.md).
 
----
+## Key bindings & commands
+
+| Key | Action | | Command | Action |
+|-----|--------|-|---------|--------|
+| Ctrl+C | Quit | | `/help` | Show help |
+| F5 | Clear chat | | `/chats` | List chats |
+| F6 | List chats | | `/new` | New chat |
+| F7 | Nudge agent | | `/exit` | Quit |
+| F8 | Pause agent | | | |
 
 ## Development
 
 ```bash
-pip install -e .
-pip install pytest
+pip install -e . && pip install aiohttp>=3.11.0 pytest
 pytest tests/ -v
 ```
 
-Full setup, test notes, and repo layout: [docs/development.md](docs/development.md).
+Full details: [Development](docs/development.md)

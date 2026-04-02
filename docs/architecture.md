@@ -1,61 +1,99 @@
 # Architecture
 
-The a0-connector project has two parts that ship in one repository:
+## Components
 
-1. **CLI** (`agent-zero-cli`) — a Textual terminal app that talks to Agent Zero over HTTP and Socket.IO.
-2. **Plugin** (`plugin/a0_connector`) — Python code that runs *inside* the Agent Zero process. It exposes HTTP routes and a WebSocket handler on the shared `/ws` namespace.
-
-Agent Zero loads the plugin from `usr/plugins/a0_connector` in its checkout. The CLI is installed separately (`pip install -e .` from this repo).
-
-## High-level flow
-
-```text
-┌─────────────────┐     HTTP (REST)      ┌──────────────────────────────┐
-│  agentzero CLI  │ ──────────────────► │ Agent Zero + a0_connector   │
-│  (this repo)    │     X-API-KEY       │ plugin                       │
-└────────┬────────┘                     └──────────────┬───────────────┘
-         │                                             │
-         │     Socket.IO /ws + auth.handlers           │
-         └────────────────────────────────────────────►│
-                                                       │
-         ◄──────── connector_* events ───────────────┘
+```
+┌─────────────────┐     HTTP POST + X-API-KEY     ┌────────────────────────────┐
+│  agentzero CLI  │ ────────────────────────────► │  Agent Zero                │
+│                 │                                │  + a0_connector plugin     │
+│                 │     Socket.IO /ws namespace     │                            │
+│                 │ ◄──────────────────────────── │                            │
+└─────────────────┘     connector_* events         └────────────────────────────┘
 ```
 
-1. The CLI discovers the server via **POST** `/api/plugins/a0_connector/v1/capabilities` (public, no key).
-2. Protected calls use **POST** to the same base path with header **`X-API-KEY`** set to Agent Zero’s **`mcp_server_token`** (or a value obtained via **`connector_login`**).
-3. Streaming and interactive behavior use **Socket.IO** on namespace **`/ws`**. The handshake sends **`auth`** including **`api_key`** and **`handlers`: `["plugins/a0_connector/ws_connector"]`** so Agent Zero activates the connector handler on that connection.
+- **CLI** (`agent-zero-cli`): Textual TUI, installed via `pip install -e .`
+- **Plugin** (`plugin/a0_connector`): loaded from `usr/plugins/a0_connector` in the Agent Zero checkout
 
-## Protocol version
+## Startup flow
 
-Capabilities advertise **`protocol`: `a0-connector.v1`**. The CLI validates protocol, namespace (`/ws`), handler id, and advertised auth modes before continuing.
+1. **Discover** — `POST /api/plugins/a0_connector/v1/capabilities` (public, no key)
+2. **Authenticate** — resolve API key from env, dotenv, or `connector_login`
+3. **Verify** — test key against `chats_list`
+4. **Connect** — Socket.IO to `/ws` with `auth: {api_key, handlers: ["plugins/a0_connector/ws_connector"]}`
+5. **Chat** — create context, subscribe, stream events
 
-## HTTP surface
+## Protocol
 
-| Area | Role |
-|------|------|
-| **Public** | `capabilities` — discovery; may also include **`connector_login`** for credential exchange |
-| **Protected** | Chat CRUD, message send, log tail, projects list, etc. — all require API key only (no session cookies, no CSRF for these handlers) |
+**Version:** `a0-connector.v1` — advertised by `capabilities`, validated by the CLI.
 
-Plugin handlers live under `plugin/a0_connector/api/v1/`. Routes are registered by Agent Zero’s plugin API mechanism at **`/api/plugins/a0_connector/v1/<endpoint>`**.
+**Transport:** Engine.IO at `/socket.io`, Socket.IO namespace `/ws`.
 
-## WebSocket surface
+**Auth:** `auth.api_key` (= `mcp_server_token`) + `auth.handlers` to activate the connector on the shared namespace.
 
-Events are **connector-prefixed** so multiple handlers can share `/ws`:
+## HTTP routes
 
-- `connector_hello`, `connector_subscribe_context`, `connector_unsubscribe_context`, `connector_send_message`
-- `connector_context_snapshot`, `connector_context_event`, `connector_context_complete`
-- `connector_file_op` / `connector_file_op_result` (paired by `op_id`)
-- `connector_error`
+All routes: `POST /api/plugins/a0_connector/v1/<endpoint>`
 
-The plugin maps Agent Zero runtime state (e.g. context logs) into these events; see `helpers/event_bridge.py` and `api/ws_connector.py` in the plugin tree.
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `capabilities` | Public | Discovery — protocol, features, auth modes |
+| `connector_login` | Public | Exchange username/password for API key |
+| `chat_create` | API key | Create a new chat context |
+| `chats_list` | API key | List existing contexts |
+| `chat_get` | API key | Get a single context |
+| `chat_reset` | API key | Reset a context |
+| `chat_delete` | API key | Delete a context |
+| `message_send` | API key | Send a message (with optional base64 attachments) |
+| `log_tail` | API key | Paginated context log entries |
+| `projects_list` | API key | List available projects |
+
+## WebSocket events
+
+All events are `connector_`-prefixed to avoid collisions on the shared `/ws` namespace.
+
+### Client → Server
+
+| Event | Purpose |
+|-------|---------|
+| `connector_hello` | Handshake — returns protocol version + features |
+| `connector_subscribe_context` | Subscribe to a context's event stream |
+| `connector_unsubscribe_context` | Unsubscribe from a context |
+| `connector_send_message` | Send user message (async; returns `accepted`) |
+| `connector_file_op_result` | Return result of a local file operation |
+
+### Server → Client
+
+| Event | Purpose |
+|-------|---------|
+| `connector_context_snapshot` | Batch of historical events on subscribe |
+| `connector_context_event` | Single streamed event from a running agent |
+| `connector_context_complete` | Agent finished responding |
+| `connector_error` | Application-level error for a context |
+| `connector_file_op` | Request a local file operation (read/write/patch) |
+
+### Event bridge
+
+`helpers/event_bridge.py` translates Agent Zero log entry types into normalized connector events:
+
+| Agent Zero log type | Connector event |
+|---------------------|-----------------|
+| `user`, `input` | `user_message` |
+| `response`, `ai_response` | `assistant_message` |
+| `tool`, `mcp` | `tool_start` |
+| `tool_output`, `browser` | `tool_output` |
+| `code` | `code_start` |
+| `code_exe`, `code_output` | `code_output` |
+| `error` | `error` |
+| `warning` | `warning` |
+| `agent`, `hint`, `info`, `progress`, `subagent`, `util` | `status` |
 
 ## Remote file operations
 
-The **`text_editor_remote`** tool runs on the agent side. When it needs a local file, it emits **`connector_file_op`** to the subscribed CLI client. The CLI performs read/write/patch on the **local machine** and returns **`connector_file_op_result`**. There is no separate server→client request channel beyond this event pair and `op_id` correlation.
+The `text_editor_remote` tool (agent-side) emits `connector_file_op` to the subscribed CLI client. The CLI performs the file read/write/patch on the **local machine** and returns `connector_file_op_result`. Operations are correlated by `op_id`.
 
-## Security model (summary)
+`ws_runtime.py` manages the in-memory state: SID-to-context subscriptions and pending file operation futures, all thread-safe via `threading.RLock`.
 
-- **API key** (`mcp_server_token`) gates protected HTTP and validates the WebSocket `auth.api_key` path.
-- **Login** is optional at the HTTP layer: the **`connector_login`** endpoint can return the same token after validating **`AUTH_LOGIN` / `AUTH_PASSWORD`** (same as the web UI), or the token when no UI auth is configured—see [Configuration](configuration.md).
+## Security
 
-For Agent Zero core behavior (handler activation, bad key edge cases), refer to the Agent Zero `helpers/ws.py` documentation in that repository.
+- **API key** = Agent Zero's `mcp_server_token`. Gates all protected HTTP routes and validates `auth.api_key` on WebSocket connect.
+- **Login** is optional: `connector_login` compares against `AUTH_LOGIN`/`AUTH_PASSWORD` from Agent Zero's `.env`. If no UI auth is configured, returns `mcp_server_token` directly.
