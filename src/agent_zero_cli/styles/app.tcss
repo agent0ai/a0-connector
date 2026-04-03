@@ -5,10 +5,14 @@ Screen {
 
 #chat-log {
     height: 1fr;
-    padding: 1 2 0 1;
+    padding: 0;
     background: #17181a;
     overflow-x: hidden;
     scrollbar-size: 1 1;
+}
+
+#chat-log > Static {
+    margin-top: 1;
 }
 
 #message-input {
@@ -36,7 +40,6 @@ Screen {
     padding-right: 2;
     background: transparent;
     color: #444444;
-    text-opacity: 60%;
 }
 
 Footer {

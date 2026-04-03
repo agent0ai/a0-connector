@@ -14,7 +14,6 @@ _PLACEHOLDER = "Type a message... (/help for commands)"
 _PROGRESS_CLASS = "progress-active"
 # Same prefix as Agent Zero WebUI composer (see webui/components/chat/input/input-store.js).
 _PROGRESS_PREFIX = "|>  "
-_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 # Minimal theme so the input blends with the app style.
 _INPUT_THEME = TextAreaTheme(
@@ -70,13 +69,11 @@ class ChatInput(TextArea):
         self._activity_active = False
         self._activity_label = ""
         self._activity_detail = ""
-        self._spinner_frame = 0
 
     def on_mount(self) -> None:
         self.register_theme(_INPUT_THEME)
         self.theme = "chat_input"
         self._update_height()
-        self.set_interval(0.1, self._activity_tick)
 
     @property
     def value(self) -> str:
@@ -116,16 +113,9 @@ class ChatInput(TextArea):
 
     # ---- in-input progress (WebUI-style) ----------------------------
 
-    def _activity_tick(self) -> None:
-        if not self._activity_active or self.text:
-            return
-        self._spinner_frame = (self._spinner_frame + 1) % len(_SPINNER)
-        self.placeholder = self._compose_activity_placeholder()
-
     def _compose_activity_placeholder(self) -> str:
-        sp = _SPINNER[self._spinner_frame]
         detail = f" [{self._activity_detail}]" if self._activity_detail else ""
-        return f"[dim]{_PROGRESS_PREFIX}{sp} {self._activity_label}{detail}[/dim]"
+        return f"[dim]{_PROGRESS_PREFIX}{self._activity_label}{detail}[/dim]"
 
     def _sync_progress_placeholder(self) -> None:
         if not self._activity_active:
@@ -136,11 +126,10 @@ class ChatInput(TextArea):
         self.placeholder = self._compose_activity_placeholder()
 
     def set_activity(self, label: str, detail: str = "") -> None:
-        """Show animated progress as the placeholder when the field is empty."""
+        """Show progress as the placeholder when the field is empty."""
         self._activity_label = label
         self._activity_detail = detail
         self._activity_active = True
-        self._spinner_frame = 0
         self.add_class(_PROGRESS_CLASS)
         self._sync_progress_placeholder()
 
@@ -149,7 +138,6 @@ class ChatInput(TextArea):
         self._activity_active = False
         self._activity_label = ""
         self._activity_detail = ""
-        self._spinner_frame = 0
         self.remove_class(_PROGRESS_CLASS)
         self.placeholder = self._base_placeholder
 

@@ -29,6 +29,12 @@ class ChatLog(VerticalScroll):
         self.append_or_update(self._sys_seq, renderable, scroll=True)
         self._sys_seq -= 1
 
+    def is_at_bottom(self) -> bool:
+        """Check if the view is currently at the bottom (or content too small to scroll)."""
+        if self.virtual_size.height <= self.size.height:
+            return True
+        return self.scroll_y >= self.max_scroll_y - 1
+
     def append_or_update(
         self, sequence: int, renderable: RenderableType, scroll: bool = True
     ) -> None:
@@ -39,17 +45,18 @@ class ChatLog(VerticalScroll):
             renderable: The rich renderable to display.
             scroll: Whether to automatically scroll to the element.
         """
+        at_bottom = self.is_at_bottom()
+
         if sequence in self._seq_to_widget:
             widget = self._seq_to_widget[sequence]
             widget.update(renderable)
-            if scroll:
+            # Only scroll updates if we were already at the bottom (Sticky Scrolling)
+            if scroll and at_bottom:
                 widget.scroll_visible(animate=False)
         else:
             widget = Static(renderable)
             self._seq_to_widget[sequence] = widget
             self.mount(widget)
-            if scroll:
-                widget.scroll_visible(animate=False)
 
     def set_active_status(self, seq: int, label: str, detail: str) -> None:
         """Set a new active status line, dimming the previous one if necessary."""
@@ -67,6 +74,10 @@ class ChatLog(VerticalScroll):
             content = build_dim_status(self._active_label, self._active_detail)
             self.append_or_update(self._active_seq, content)
 
+        self.stop_active_status()
+
+    def stop_active_status(self) -> None:
+        """Clear the active status tracking without overwriting the current content."""
         self._active_seq = None
         self._active_label = ""
         self._active_detail = ""
@@ -89,7 +100,7 @@ class ChatLog(VerticalScroll):
             self._shimmer_phase,
             self._shimmer_frame,
         )
-        self.append_or_update(self._active_seq, content)
+        self.append_or_update(self._active_seq, content, scroll=False)
 
     def clear(self) -> None:
         """Clear the timeline and reset the tracking map."""

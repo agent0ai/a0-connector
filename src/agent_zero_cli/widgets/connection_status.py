@@ -13,8 +13,6 @@ class ConnectionStatus(Static):
     url = reactive("")
     _tick_count = reactive(0)
 
-    _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
     def on_mount(self) -> None:
         self.set_interval(0.1, self._tick)
 
@@ -30,10 +28,9 @@ class ConnectionStatus(Static):
                 ("•", "green")
             )
         elif self.status == "connecting":
-            frame = self._SPINNER[self._tick_count % len(self._SPINNER)]
             return Text.assemble(
                 (label, "dim"),
-                (frame, "yellow")
+                ("•", "yellow")
             )
         else:
             label = f"Disconnected ({display_url}) " if display_url else "Disconnected "

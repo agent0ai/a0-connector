@@ -14,8 +14,6 @@ from rich.text import Text
 _BASE = (30, 100, 170)  # muted blue — resting state
 _PEAK = (215, 230, 245)  # near-white — shimmer highlight
 
-_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
 
 def _lerp(a: int, b: int, t: float) -> int:
     return int(a + (b - a) * t)
@@ -37,9 +35,8 @@ def build_shimmer_text(label: str, detail: str, phase: float, spinner_frame: int
     Returns:
         A ``rich.text.Text`` with per-character shimmer styling.
     """
-    sp = _SPINNER[spinner_frame % len(_SPINNER)]
     detail_part = f" [{detail}]" if detail else ""
-    content = f"{sp} {label}{detail_part}"
+    content = f"{label}{detail_part}"
 
     text = Text()
     width = len(content)
@@ -73,4 +70,4 @@ def build_dim_status(label: str, detail: str) -> Text:
         A ``rich.text.Text`` styled as dim.
     """
     detail_part = f" [{detail}]" if detail else ""
-    return Text(f"  {label}{detail_part}", style="dim")
+    return Text(f"{label}{detail_part}", style="dim")

@@ -287,7 +287,7 @@ class AgentZeroCLI(App):
             event_type = event.get("event", "")
             category = _EVENT_CATEGORY.get(event_type, "info")
 
-            if category in ("user", "response", "warning", "error"):
+            if category in ("user", "response", "warning", "error", "code"):
                 render_connector_event(log, event)
             else:
                 label = _STATUS_LABEL.get(event_type)
@@ -338,8 +338,10 @@ class AgentZeroCLI(App):
             self._set_activity(label, detail)
             log.set_active_status(data.get("sequence", -1), label, detail)
 
-        if category in ("warning", "error", "user"):
-            render_connector_event(log, data)
+        if category in ("warning", "error", "user", "code"):
+            if render_connector_event(log, data):
+                if log._active_seq == data.get("sequence"):
+                    log.stop_active_status()
 
     def _handle_context_complete(self, data: dict[str, Any]) -> None:
         """Handle agent completion -- re-enable input."""

@@ -1,8 +1,10 @@
 from typing import Any
 
 from rich.align import Align
+from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.padding import Padding
 
 from agent_zero_cli.widgets.chat_log import ChatLog
 
@@ -66,12 +68,17 @@ def extract_detail(event_type: str, data: dict[str, Any]) -> str:
     return ""
 
 
-def render_connector_event(log: ChatLog, event: dict[str, Any]) -> None:
-    """Render a connector event to the chat log."""
+def render_connector_event(log: ChatLog, event: dict[str, Any]) -> bool:
+    """Render a connector event to the chat log.
+    
+    Returns:
+        bool: True if a static block was rendered, False otherwise.
+    """
     event_type = event.get("event", "")
     data = event.get("data", {})
     text = data.get("text", "")
     heading = data.get("heading", "")
+    meta = data.get("meta", {})
     seq = event.get("sequence", -1)
 
     category = _EVENT_CATEGORY.get(event_type, "info")
@@ -80,21 +87,46 @@ def render_connector_event(log: ChatLog, event: dict[str, Any]) -> None:
         if text:
             panel = Panel(text, border_style="#555555", padding=(0, 1))
             log.append_or_update(seq, Align.right(panel))
-        return
+            return True
+        return False
 
     if category == "response":
         if text:
             # Add markdown render inside Left aligned or normal layout
             panel = Panel(Markdown(text), border_style="#233e54", padding=(0, 1))
             log.append_or_update(seq, panel)
-        return
+            return True
+        return False
 
     if category == "warning":
         msg = f"{heading}: {text}" if heading else text
         log.append_or_update(seq, f"[yellow]{msg}[/yellow]")
-        return
+        return True
 
     if category == "error":
         msg = f"{heading}: {text}" if heading else text
         log.append_or_update(seq, f"[red]{msg}[/red]")
-        return
+        return True
+
+    if category == "code":
+        code = meta.get("code") or ""
+        if code or text:
+            # Code block with a slightly lighter background and subtle border.
+            # If both source code and output (text) are present, show both.
+            md_content = f"```python\n{code}\n```" if code else ""
+            if text:
+                if md_content:
+                    md_content += "\n\n---\n\n"
+                md_content += text
+
+            panel = Panel(
+                Markdown(md_content),
+                box=box.SIMPLE,
+                padding=(1, 1),
+                style="on #202124"
+            )
+            log.append_or_update(seq, Padding(panel, (1, 0, 1, 0)))
+            return True
+        return False
+
+    return False
