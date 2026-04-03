@@ -327,10 +327,11 @@ class AgentZeroCLI(App):
 
         # Once the final response has been delivered, silently drop all
         # post-response events (memory writes, status pings, etc.) except
-        # errors and warnings which always surface.
-        if self._response_delivered:
+        # errors and warnings which always surface. Also allow 'response'
+        # itself to pass through so streaming updates aren't truncated.
+        if self._response_delivered and category != "response":
             if category in ("error", "warning"):
-                self._render_connector_event(log, data)
+                render_connector_event(log, data)
             return
 
         self.agent_active = True
@@ -341,12 +342,10 @@ class AgentZeroCLI(App):
         # mark delivery so subsequent post-response events are dropped.
         if category == "response":
             self._response_delivered = True
-            self.agent_active = False
             input_widget.disabled = False
             input_widget.focus()
             self._set_idle()
-            self._last_logged_label = ""
-            self._render_connector_event(log, data)
+            render_connector_event(log, data)
             return
 
         # Update activity bar and log each distinct label once

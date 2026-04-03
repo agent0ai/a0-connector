@@ -378,16 +378,27 @@ class WsConnector(WsHandler):
         from_sequence: int,
     ) -> None:
         last_sequence = from_sequence
+        last_event_data = None
         try:
             while context_id in subscribed_contexts_for_sid(sid):
-                events, new_sequence = get_context_log_entries(
+                # Poll starting from the last known sequence (overlapping by 1)
+                # to catch updates to the same log entry (streaming responses).
+                events, _ = get_context_log_entries(
                     context_id,
-                    after=last_sequence,
+                    after=max(0, last_sequence - 1) if last_sequence > 0 else 0,
                 )
                 for event in events:
+                    seq = event.get("sequence")
+                    data = event.get("data")
+                    
+                    # Avoid sending the exact same event repeatedly if nothing changed
+                    if seq == last_sequence and data == last_event_data:
+                        continue
+                    
                     await self.emit_to(sid, "connector_context_event", event)
-                if new_sequence > last_sequence:
-                    last_sequence = new_sequence
+                    last_sequence = seq
+                    last_event_data = data
+                
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             raise
