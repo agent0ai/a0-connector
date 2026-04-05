@@ -33,7 +33,7 @@ class ConnectionStatus(Static):
                 ("•", "yellow")
             )
         else:
-            label = f"Disconnected ({display_url}) " if display_url else "Disconnected "
+            label = f"Disconnected ({self.url}) " if self.url else "Disconnected "
             return Text.assemble(
                 (label, "dim"),
                 ("•", "red")

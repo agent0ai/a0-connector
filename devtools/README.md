@@ -5,8 +5,11 @@ Tools for web-like development of the Textual TUI.
 ## Prerequisites
 
 ```bash
-# Inside the project venv
-./.venv/bin/pip install textual-serve
+# Windows
+.\.venv\Scripts\python -m pip install textual-serve
+
+# Linux / macOS
+./.venv/bin/python -m pip install textual-serve
 ```
 
 ---
@@ -18,9 +21,15 @@ for a terminal app. Works with any browser; the AI assistant can take
 screenshots of it just like a web page.
 
 ```bash
-./.venv/bin/python devtools/serve.py                 # http://localhost:8566
-./.venv/bin/python devtools/serve.py --port 9000      # custom port
-./.venv/bin/python devtools/serve.py --debug           # enable Textual devtools
+# Windows
+.\.venv\Scripts\python devtools/serve.py                 # http://localhost:8566
+.\.venv\Scripts\python devtools/serve.py --port 9000     # custom port
+.\.venv\Scripts\python devtools/serve.py --debug         # enable Textual devtools
+
+# Linux / macOS
+./.venv/bin/python devtools/serve.py                     # http://localhost:8566
+./.venv/bin/python devtools/serve.py --port 9000         # custom port
+./.venv/bin/python devtools/serve.py --debug             # enable Textual devtools
 ```
 
 > **Tip:** Append `?fontsize=14` to the URL to tweak the rendered font size.
@@ -31,6 +40,11 @@ Captures a pixel-perfect SVG of the TUI's initial screen (no live backend
 needed). Great for quick layout checks, CI diffing, or sharing.
 
 ```bash
+# Windows
+.\.venv\Scripts\python devtools/snapshot.py
+.\.venv\Scripts\python devtools/snapshot.py -o devtools\snapshots\footer_check.svg --width 100 --height 30
+
+# Linux / macOS
 ./.venv/bin/python devtools/snapshot.py
 ./.venv/bin/python devtools/snapshot.py -o /tmp/footer_check.svg --width 100 --height 30
 ```
@@ -44,6 +58,10 @@ SVG snapshots to verify the in-input progress indicator visually matches the
 core WebUI.
 
 ```bash
+# Windows
+.\.venv\Scripts\python devtools/activity_demo.py
+
+# Linux / macOS
 ./.venv/bin/python devtools/activity_demo.py
 ```
 

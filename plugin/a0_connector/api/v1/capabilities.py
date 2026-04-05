@@ -1,8 +1,61 @@
 """POST /api/plugins/a0_connector/v1/capabilities."""
 from __future__ import annotations
 
+import importlib.util
+import sys
+
 from helpers.api import Request, Response
 import usr.plugins.a0_connector.api.v1.base as connector_base
+
+
+_BASE_FEATURES = [
+    "chat_create",
+    "chats_list",
+    "chat_get",
+    "chat_reset",
+    "chat_delete",
+    "message_send",
+    "log_tail",
+    "projects_list",
+    "text_editor_remote",
+    "connector_login",
+]
+
+_OPTIONAL_FEATURES: dict[str, tuple[str, ...]] = {
+    "settings_get": ("helpers.settings", "helpers.subagents"),
+    "settings_set": ("helpers.settings", "helpers.subagents"),
+    "agents_list": ("helpers.subagents",),
+    "skills_list": ("helpers.skills", "helpers.files", "helpers.projects", "helpers.runtime"),
+    "skills_delete": ("helpers.skills", "helpers.files", "helpers.projects", "helpers.runtime"),
+    "model_presets": ("plugins._model_config.helpers.model_config",),
+    "compact_chat": (
+        "plugins._chat_compaction.helpers.compactor",
+        "plugins._model_config.helpers.model_config",
+    ),
+}
+
+
+def _module_available(module_name: str) -> bool:
+    if module_name in sys.modules:
+        return True
+
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (AttributeError, ModuleNotFoundError, ValueError):
+        return False
+
+
+def _feature_available(feature: str) -> bool:
+    required = _OPTIONAL_FEATURES.get(feature, ())
+    return all(_module_available(module_name) for module_name in required)
+
+
+def _feature_list() -> list[str]:
+    features = list(_BASE_FEATURES)
+    for feature in _OPTIONAL_FEATURES:
+        if _feature_available(feature):
+            features.append(feature)
+    return features
 
 
 class Capabilities(connector_base.PublicConnectorApiHandler):
@@ -21,16 +74,5 @@ class Capabilities(connector_base.PublicConnectorApiHandler):
                 "mode": "base64",
                 "max_files": 20,
             },
-            "features": [
-                "chat_create",
-                "chats_list",
-                "chat_get",
-                "chat_reset",
-                "chat_delete",
-                "message_send",
-                "log_tail",
-                "projects_list",
-                "text_editor_remote",
-                "connector_login",
-            ],
+            "features": _feature_list(),
         }

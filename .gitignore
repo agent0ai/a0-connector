@@ -194,6 +194,10 @@ cython_debug/
 # Legacy CLI config (replaced by env vars + ~/.agent-zero/.env)
 .cli-config.json
 
+# Mirrored plugin cache artifacts
+plugin/**/__pycache__/
+plugin/**/*.pyc
+
 # PyPI configuration file
 .pypirc
 

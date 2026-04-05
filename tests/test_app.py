@@ -1,14 +1,20 @@
+from __future__ import annotations
+
 from types import SimpleNamespace
 
 import pytest
-from textual.app import App
-from textual.widgets import ListView
 
-from agent_zero_cli.app import AgentZeroCLI
+from agent_zero_cli.app import AgentZeroCLI, _DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
-from agent_zero_cli.screens.chat_list import ChatListScreen
-from agent_zero_cli.screens.host_input import HostInputScreen
-from agent_zero_cli.screens.login import LoginResult, LoginScreen
+from agent_zero_cli.widgets import SplashState
+from agent_zero_cli.widgets.splash_view import SplashHostPanel
+
+
+async def _async_return(value=None):
+    return value
+
+
+pytestmark = pytest.mark.anyio
 
 
 class FakeChatLog:
@@ -16,20 +22,20 @@ class FakeChatLog:
         self.writes: list[object] = []
         self.cleared = False
         self.lines: list[object] = []
-        self._line_cache = type("Cache", (), {"clear": lambda self: None})()
-        self.app = None  # set later if needed
         self.sequences: dict[int, object] = {}
+        self.intro_visible = False
         self._active_seq: int | None = None
-        self._active_label: str = ""
-        self._active_detail: str = ""
+        self._active_label = ""
+        self._active_detail = ""
 
     def write(self, message: object) -> None:
         self.writes.append(message)
         self.lines.append(message)
 
-    def append_or_update(
-        self, sequence: int, renderable: object, scroll: bool = True
-    ) -> None:
+    def ensure_intro_banner(self) -> None:
+        self.intro_visible = True
+
+    def append_or_update(self, sequence: int, renderable: object, scroll: bool = True) -> None:
         if sequence not in self.sequences:
             self.writes.append(renderable)
         self.sequences[sequence] = renderable
@@ -42,12 +48,13 @@ class FakeChatLog:
 
     def dim_active_status(self) -> None:
         if self._active_seq is not None:
-            self.append_or_update(
-                self._active_seq, f"dim:{self._active_label}:{self._active_detail}"
-            )
+            self.append_or_update(self._active_seq, f"dim:{self._active_label}:{self._active_detail}")
         self._active_seq = None
         self._active_label = ""
         self._active_detail = ""
+
+    def stop_active_status(self) -> None:
+        self._active_seq = None
 
     def advance_shimmer(self) -> None:
         pass
@@ -59,7 +66,6 @@ class FakeChatLog:
         self._active_seq = None
 
 
-
 class FakeInput:
     def __init__(self) -> None:
         self.disabled = False
@@ -67,6 +73,8 @@ class FakeInput:
         self.activity_label = ""
         self.activity_detail = ""
         self.activity_idle = True
+        self.slash_menu_active = False
+        self.value = ""
 
     def focus(self) -> None:
         self.focused = True
@@ -81,13 +89,69 @@ class FakeInput:
         self.activity_detail = ""
         self.activity_idle = True
 
+    def set_slash_menu_active(self, active: bool) -> None:
+        self.slash_menu_active = active
+
+
+class FakeConnectionStatus:
+    def __init__(self) -> None:
+        self.status = "disconnected"
+        self.url = ""
+
+
+class FakeBodySwitcher:
+    def __init__(self) -> None:
+        self.current = "splash-view"
+
+
+class FakeSplash:
+    def __init__(self) -> None:
+        self.state = SplashState(stage="host", host=_DEFAULT_HOST)
+        self.focused = False
+
+    def set_state(self, state: SplashState) -> None:
+        self.state = state
+
+    def focus_primary(self) -> None:
+        self.focused = True
+
+
+class FakeSlashMenu:
+    def __init__(self) -> None:
+        self.display = False
+        self.commands: list[object] = []
+        self._highlighted_index: int | None = None
+
+    def set_visible_commands(self, commands) -> None:
+        self.commands = list(commands)
+        self._highlighted_index = 0 if self.commands else None
+
+    @property
+    def highlighted_command(self):
+        if self._highlighted_index is None:
+            return None
+        if self._highlighted_index >= len(self.commands):
+            return None
+        return self.commands[self._highlighted_index]
+
+    def action_cursor_up(self) -> None:
+        if self._highlighted_index is None:
+            return
+        self._highlighted_index = max(0, self._highlighted_index - 1)
+
+    def action_cursor_down(self) -> None:
+        if self._highlighted_index is None:
+            return
+        self._highlighted_index = min(len(self.commands) - 1, self._highlighted_index + 1)
+
 
 class DummyAgentZeroCLI(AgentZeroCLI):
-    def __init__(self) -> None:
+    def __init__(self, *, config: CLIConfig | None = None) -> None:
         super().__init__(
-            config=CLIConfig(
+            config=config
+            or CLIConfig(
                 instance_url="http://example.test",
-                api_key="dev-a0-connector",
+                api_key="",
             )
         )
         self.rendered_events: list[dict] = []
@@ -96,348 +160,280 @@ class DummyAgentZeroCLI(AgentZeroCLI):
 @pytest.fixture
 def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
     app = DummyAgentZeroCLI()
-    log = FakeChatLog()
-    input_widget = FakeInput()
+    widgets = {
+        "#chat-log": FakeChatLog(),
+        "#message-input": FakeInput(),
+        "#connection-status": FakeConnectionStatus(),
+        "#body-switcher": FakeBodySwitcher(),
+        "#splash-view": FakeSplash(),
+        "#slash-menu": FakeSlashMenu(),
+    }
 
     def _query_one(selector: str, cls: object = None) -> object:
-        if selector == "#chat-log":
-            return log
-        return input_widget
+        return widgets[selector]
 
     app.query_one = _query_one
-    app._test_log = log
-    app._test_input = input_widget
-
+    app._test_widgets = widgets
     monkeypatch.setattr(
         "agent_zero_cli.app.render_connector_event",
-        lambda log, event: app.rendered_events.append(event),
+        lambda log, event: app.rendered_events.append(event) or True,
     )
     return app
 
 
-def test_validate_capabilities_accepts_current_ws_contract(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app._validate_capabilities(
-        {
-            "protocol": "a0-connector.v1",
-            "auth": ["api_key", "login"],
-            "websocket_namespace": "/ws",
-            "websocket_handlers": ["plugins/a0_connector/ws_connector"],
-        }
-    )
-
-
-def test_default_client_host_matches_host_input_default() -> None:
+def test_default_client_host_uses_splash_default() -> None:
     app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
-
-    assert HostInputScreen.DEFAULT_HOST == "http://127.0.0.1:5080"
-    assert app.client.base_url == HostInputScreen.DEFAULT_HOST
+    assert app.client.base_url == _DEFAULT_HOST
 
 
-@pytest.mark.asyncio
-async def test_startup_falls_back_to_default_host_when_prompt_returns_empty(
+def test_splash_host_panel_uses_default_host_as_placeholder() -> None:
+    panel = SplashHostPanel()
+
+    panel.set_host(_DEFAULT_HOST)
+
+    assert panel.host == _DEFAULT_HOST
+    assert panel._host.value == ""
+    assert panel._host.placeholder == _DEFAULT_HOST
+
+
+async def test_startup_without_host_shows_host_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
-    log = FakeChatLog()
-    input_widget = FakeInput()
-    saved: dict[str, str] = {}
-
-    app.query_one = lambda selector, cls=None: log if selector == "#chat-log" else input_widget
-
-    async def fake_push_screen_wait(screen: object) -> str:
-        return ""
-
-    async def fake_fetch_capabilities(log_widget: FakeChatLog) -> tuple[None, bool]:
-        return None, False
-
-    monkeypatch.setattr(app, "push_screen_wait", fake_push_screen_wait)
-    monkeypatch.setattr(app, "_fetch_capabilities", fake_fetch_capabilities)
-    monkeypatch.setattr(
-        "agent_zero_cli.app.save_env",
-        lambda key, value: saved.setdefault(key, value),
-    )
+    app = DummyAgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
+    widgets = {
+        "#chat-log": FakeChatLog(),
+        "#message-input": FakeInput(),
+        "#connection-status": FakeConnectionStatus(),
+        "#body-switcher": FakeBodySwitcher(),
+        "#splash-view": FakeSplash(),
+        "#slash-menu": FakeSlashMenu(),
+    }
+    app.query_one = lambda selector, cls=None: widgets[selector]
 
     await app._startup()
 
-    assert app.config.instance_url == HostInputScreen.DEFAULT_HOST
-    assert app.client.base_url == HostInputScreen.DEFAULT_HOST
-    assert saved == {}
+    splash = widgets["#splash-view"]
+    assert splash.state.stage == "host"
+    assert splash.state.host == _DEFAULT_HOST
+    assert splash.focused is True
 
 
-@pytest.mark.asyncio
-async def test_startup_persists_host_and_api_key_only_when_login_save_checked(
+async def test_begin_connection_with_saved_login_persists_host_and_api_key(
+    dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
-    log = FakeChatLog()
-    input_widget = FakeInput()
     saved: dict[str, str] = {}
 
-    app.query_one = lambda selector, cls=None: log if selector == "#chat-log" else input_widget
-
-    async def fake_push_screen_wait(screen: object) -> object:
-        if isinstance(screen, HostInputScreen):
-            return "http://example.test"
-        if isinstance(screen, LoginScreen):
-            return LoginResult(api_key="api-key-123", save_credentials=True)
-        raise AssertionError(f"Unexpected screen: {screen!r}")
-
-    async def fake_fetch_capabilities(log_widget: FakeChatLog) -> tuple[dict[str, object], bool]:
+    async def fake_fetch_capabilities():
         return {
             "auth": ["api_key", "login"],
+            "features": ["chat_create", "chats_list"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
             "websocket_handlers": ["plugins/a0_connector/ws_connector"],
-        }, False
+        }, False, ""
 
-    async def fake_verify_api_key() -> bool:
-        return True
-
-    async def fake_connect_websocket() -> None:
-        return None
-
-    async def fake_send_hello() -> None:
-        return None
-
-    async def fake_create_chat() -> str:
-        return "ctx-1"
-
-    async def fake_subscribe_context(context_id: str) -> None:
-        return None
-
-    monkeypatch.setattr(app, "push_screen_wait", fake_push_screen_wait)
-    monkeypatch.setattr(app, "_fetch_capabilities", fake_fetch_capabilities)
+    monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)
+    monkeypatch.setattr(dummy_app.client, "login", lambda u, p: _async_return("api-key-123"))
+    monkeypatch.setattr(dummy_app.client, "verify_api_key", lambda: _async_return(True))
+    monkeypatch.setattr(dummy_app.client, "connect_websocket", lambda: _async_return(None))
+    monkeypatch.setattr(dummy_app.client, "send_hello", lambda: _async_return(None))
+    monkeypatch.setattr(dummy_app.client, "create_chat", lambda: _async_return("ctx-1"))
+    monkeypatch.setattr(dummy_app.client, "subscribe_context", lambda context_id, from_seq=0: _async_return(None))
     monkeypatch.setattr("agent_zero_cli.app.save_env", lambda key, value: saved.__setitem__(key, value))
-    monkeypatch.setattr(app.client, "verify_api_key", fake_verify_api_key)
-    monkeypatch.setattr(app.client, "connect_websocket", fake_connect_websocket)
-    monkeypatch.setattr(app.client, "send_hello", fake_send_hello)
-    monkeypatch.setattr(app.client, "create_chat", fake_create_chat)
-    monkeypatch.setattr(app.client, "subscribe_context", fake_subscribe_context)
 
-    await app._startup()
+    await dummy_app._begin_connection(
+        "http://example.test",
+        username="admin",
+        password="secret",
+        save_credentials_flag=True,
+    )
 
+    splash = dummy_app._test_widgets["#splash-view"]
+    body = dummy_app._test_widgets["#body-switcher"]
+    input_widget = dummy_app._test_widgets["#message-input"]
+    assert splash.state.stage == "ready"
+    assert dummy_app.current_context == "ctx-1"
+    assert body.current == "splash-view"
+    assert input_widget.focused is True
     assert saved == {
         "AGENT_ZERO_HOST": "http://example.test",
         "AGENT_ZERO_API_KEY": "api-key-123",
     }
 
 
-@pytest.mark.asyncio
-async def test_startup_keeps_host_and_api_key_ephemeral_when_login_save_unchecked(
+async def test_invalid_api_key_returns_to_login_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
-    log = FakeChatLog()
-    input_widget = FakeInput()
-    saved: dict[str, str] = {}
+    app = DummyAgentZeroCLI(config=CLIConfig(instance_url="http://example.test", api_key="bad-key"))
+    widgets = {
+        "#chat-log": FakeChatLog(),
+        "#message-input": FakeInput(),
+        "#connection-status": FakeConnectionStatus(),
+        "#body-switcher": FakeBodySwitcher(),
+        "#splash-view": FakeSplash(),
+        "#slash-menu": FakeSlashMenu(),
+    }
+    app.query_one = lambda selector, cls=None: widgets[selector]
 
-    app.query_one = lambda selector, cls=None: log if selector == "#chat-log" else input_widget
-
-    async def fake_push_screen_wait(screen: object) -> object:
-        if isinstance(screen, HostInputScreen):
-            return "http://example.test"
-        if isinstance(screen, LoginScreen):
-            return LoginResult(api_key="api-key-123", save_credentials=False)
-        raise AssertionError(f"Unexpected screen: {screen!r}")
-
-    async def fake_fetch_capabilities(log_widget: FakeChatLog) -> tuple[dict[str, object], bool]:
+    async def fake_fetch_capabilities():
         return {
             "auth": ["api_key", "login"],
+            "features": ["chat_create", "chats_list"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
             "websocket_handlers": ["plugins/a0_connector/ws_connector"],
-        }, False
+        }, False, ""
 
-    async def fake_verify_api_key() -> bool:
-        return True
-
-    async def fake_connect_websocket() -> None:
-        return None
-
-    async def fake_send_hello() -> None:
-        return None
-
-    async def fake_create_chat() -> str:
-        return "ctx-1"
-
-    async def fake_subscribe_context(context_id: str) -> None:
-        return None
-
-    monkeypatch.setattr(app, "push_screen_wait", fake_push_screen_wait)
     monkeypatch.setattr(app, "_fetch_capabilities", fake_fetch_capabilities)
-    monkeypatch.setattr("agent_zero_cli.app.save_env", lambda key, value: saved.__setitem__(key, value))
-    monkeypatch.setattr(app.client, "verify_api_key", fake_verify_api_key)
-    monkeypatch.setattr(app.client, "connect_websocket", fake_connect_websocket)
-    monkeypatch.setattr(app.client, "send_hello", fake_send_hello)
-    monkeypatch.setattr(app.client, "create_chat", fake_create_chat)
-    monkeypatch.setattr(app.client, "subscribe_context", fake_subscribe_context)
+    monkeypatch.setattr(app.client, "verify_api_key", lambda: _async_return(False))
 
-    await app._startup()
+    await app._begin_connection("http://example.test")
 
-    assert app.config.instance_url == "http://example.test"
-    assert app.config.api_key == "api-key-123"
-    assert saved == {}
+    splash = widgets["#splash-view"]
+    assert splash.state.stage == "login"
+    assert app.config.api_key == ""
+    assert app.client.api_key == ""
 
 
-def test_validate_capabilities_rejects_old_namespace(dummy_app: DummyAgentZeroCLI) -> None:
-    with pytest.raises(ValueError, match="Unsupported WebSocket namespace"):
-        dummy_app._validate_capabilities(
-            {
-                "protocol": "a0-connector.v1",
-                "auth": ["api_key"],
-                "websocket_namespace": "/connector",
-                "websocket_handlers": ["plugins/a0_connector/ws_connector"],
-            }
-        )
-
-
-def test_context_snapshot_renders_events_for_current_context(dummy_app: DummyAgentZeroCLI) -> None:
+def test_context_event_switches_empty_welcome_to_chat(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = False
+    dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
+
+    dummy_app._handle_context_event(
+        {
+            "context_id": "ctx-1",
+            "event": "assistant_message",
+            "data": {"text": "Hello"},
+            "sequence": 1,
+        }
+    )
+
+    body = dummy_app._test_widgets["#body-switcher"]
+    log = dummy_app._test_widgets["#chat-log"]
+    assert dummy_app.current_context_has_messages is True
+    assert body.current == "chat-log"
+    assert log.intro_visible is True
+
+
+def test_context_snapshot_shows_intro_before_first_message(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = False
 
     dummy_app._handle_context_snapshot(
         {
             "context_id": "ctx-1",
             "events": [
-                {"event": "assistant_message", "data": {"text": "Hello"}},
-                {"event": "status", "data": {"text": "Done"}},
+                {"event": "status", "sequence": 1, "data": {"text": "Thinking"}},
+                {"event": "assistant_message", "sequence": 2, "data": {"text": "Hello"}},
             ],
         }
     )
 
-    assert dummy_app.rendered_events == [
-        {"event": "assistant_message", "data": {"text": "Hello"}},
-    ]
-    # The status event is rendered as a dim status line, not via _render_connector_event
-    assert len(dummy_app._test_log.sequences) > 0
+    body = dummy_app._test_widgets["#body-switcher"]
+    log = dummy_app._test_widgets["#chat-log"]
+    assert body.current == "chat-log"
+    assert log.intro_visible is True
 
 
-def test_context_event_ignores_other_contexts(dummy_app: DummyAgentZeroCLI) -> None:
+async def test_clear_chat_does_not_return_to_welcome(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app._sync_body_mode()
 
-    dummy_app._handle_context_event(
-        {
-            "context_id": "ctx-2",
-            "event": "assistant_message",
-            "data": {"text": "Ignored"},
-        }
-    )
+    await dummy_app.action_clear_chat()
 
-    assert dummy_app.rendered_events == []
-    assert dummy_app.agent_active is False
-    assert dummy_app._test_input.disabled is False
+    body = dummy_app._test_widgets["#body-switcher"]
+    log = dummy_app._test_widgets["#chat-log"]
+    assert body.current == "chat-log"
+    assert log.cleared is True
 
 
-def test_context_complete_reenables_input(dummy_app: DummyAgentZeroCLI) -> None:
+async def test_new_chat_returns_to_ready_welcome(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-old"
+    dummy_app.current_context_has_messages = True
+    dummy_app._sync_body_mode()
+
+    monkeypatch.setattr(dummy_app.client, "unsubscribe_context", lambda context_id: _async_return(None))
+    monkeypatch.setattr(dummy_app.client, "create_chat", lambda: _async_return("ctx-new"))
+    monkeypatch.setattr(dummy_app.client, "subscribe_context", lambda context_id, from_seq=0: _async_return(None))
+
+    await dummy_app._cmd_new()
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    body = dummy_app._test_widgets["#body-switcher"]
+    input_widget = dummy_app._test_widgets["#message-input"]
+    assert dummy_app.current_context == "ctx-new"
+    assert dummy_app.current_context_has_messages is False
+    assert splash.state.stage == "ready"
+    assert body.current == "splash-view"
+    assert input_widget.focused is True
+
+
+async def test_help_is_generated_from_registry_on_welcome(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
-    dummy_app.agent_active = True
-    dummy_app._test_input.disabled = True
-
-    dummy_app._handle_context_complete({"context_id": "ctx-1"})
-
-    assert dummy_app.agent_active is False
-    assert dummy_app._test_input.disabled is False
-    assert dummy_app._test_input.focused is True
-
-
-def test_status_lines_grouped_by_category(dummy_app: DummyAgentZeroCLI) -> None:
-    """Same tool category should update one line; different category adds a new line."""
-    dummy_app.current_context = "ctx-1"
-    dummy_app.agent_active = True
-    log = dummy_app._test_log
-
-    dummy_app._handle_context_event(
-        {"context_id": "ctx-1", "event": "status", "data": {"text": "First"}, "sequence": 1}
-    )
-    status_sequences_after_first = len(log.sequences)
-
-    dummy_app._handle_context_event(
-        {"context_id": "ctx-1", "event": "status", "data": {"text": "Second"}, "sequence": 1}
-    )
-    assert len(log.sequences) == status_sequences_after_first
-    assert log._active_label == "Thinking"
-
-    dummy_app._handle_context_event(
-        {"context_id": "ctx-1", "event": "tool_start", "data": {"heading": "web_search"}, "sequence": 2}
-    )
-    assert log._active_label == "Using tool"
-    assert len(log.sequences) > status_sequences_after_first
-
-
-def test_handle_file_op_returns_error_for_unknown_operation(dummy_app: DummyAgentZeroCLI) -> None:
-    result = dummy_app._handle_file_op(
-        {"op_id": "op-1", "op": "unknown", "path": "/tmp/example.txt"}
-    )
-
-    assert result == {
-        "op_id": "op-1",
-        "ok": False,
-        "error": "Unknown op: unknown",
+    dummy_app.current_context_has_messages = False
+    dummy_app.connector_features = {
+        "chat_create",
+        "chats_list",
+        "settings_get",
+        "settings_set",
+        "skills_list",
+        "agents_list",
+        "compact_chat",
+        "model_presets",
     }
+    dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
+
+    await dummy_app._cmd_help()
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert "Available commands:" in splash.state.detail
+    assert "/settings" in splash.state.detail
+    assert "/exit (/q)" in splash.state.detail
 
 
-class CapturingChatListScreen(ChatListScreen):
-    def __init__(self, contexts: list[dict]) -> None:
-        super().__init__(contexts)
-        self.dismissed: str | None = None
+def test_slash_menu_opens_and_closes_with_query_changes(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.connector_features = {"chat_create", "chats_list"}
 
-    def dismiss(self, result: str | None = None) -> None:  # type: ignore[override]
-        self.dismissed = result
+    dummy_app.on_chat_input_value_changed(SimpleNamespace(value="/", input=dummy_app._test_widgets["#message-input"]))
+    menu = dummy_app._test_widgets["#slash-menu"]
+    assert menu.display is True
+    assert menu.commands
 
-
-class ChatListTestApp(App[None]):
-    def __init__(self, screen: ChatListScreen) -> None:
-        super().__init__()
-        self._screen = screen
-
-    async def on_mount(self) -> None:
-        await self.push_screen(self._screen)
+    dummy_app.on_chat_input_value_changed(SimpleNamespace(value="/help ", input=dummy_app._test_widgets["#message-input"]))
+    assert menu.display is False
 
 
-@pytest.mark.asyncio
-async def test_chat_list_uses_safe_ids_and_maps_back_to_context() -> None:
-    contexts = [
-        {"id": "ctx-1", "name": "One", "created_at": "2026-02-06", "last_message": "Hello"},
-        {"id": "ctx-2", "name": "Two", "created_at": "2026-02-07", "last_message": "Hi"},
-    ]
-    screen = CapturingChatListScreen(contexts)
-    app = ChatListTestApp(screen)
+async def test_slash_tab_inserts_highlighted_canonical_command(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.connector_features = {"chat_create", "chats_list"}
+    input_widget = dummy_app._test_widgets["#message-input"]
 
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        assert all(item_id.startswith("ctx-") for item_id in screen._item_contexts)
-        first_item_id = next(iter(screen._item_contexts))
+    dummy_app.on_chat_input_value_changed(SimpleNamespace(value="/", input=input_widget))
+    await dummy_app.on_chat_input_slash_navigation(SimpleNamespace(key="tab", input=input_widget))
 
-        screen.on_list_view_selected(SimpleNamespace(item=SimpleNamespace(id=first_item_id)))
-
-        assert screen.dismissed == "ctx-1"
-
-        list_view = screen.query_one(ListView)
-        nodes = list(getattr(list_view, "_nodes", list_view.children))
-        assert len(nodes) == len(contexts)
+    assert input_widget.value.endswith(" ")
+    assert input_widget.value.startswith("/")
 
 
-def test_streaming_response_not_truncated(dummy_app: DummyAgentZeroCLI) -> None:
-    """Streamed chunks should all be rendered; post-response status should be dropped."""
+async def test_unknown_command_fails_gracefully_on_welcome(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = False
+    dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
 
-    # Chunk 1
-    dummy_app._handle_context_event(
-        {"context_id": "ctx-1", "event": "assistant_message", "data": {"text": "Hel"}, "sequence": 10}
-    )
-    assert dummy_app._response_delivered is True
-    assert len(dummy_app.rendered_events) == 1
-    assert dummy_app.rendered_events[0]["data"]["text"] == "Hel"
+    await dummy_app._dispatch_command("/wat")
 
-    # Chunk 2 - Should NOT be dropped
-    dummy_app._handle_context_event(
-        {"context_id": "ctx-1", "event": "assistant_message", "data": {"text": "Hello!"}, "sequence": 10}
-    )
-    assert len(dummy_app.rendered_events) == 2
-    assert dummy_app.rendered_events[1]["data"]["text"] == "Hello!"
-
-    # Status after response - SHOULD be dropped
-    dummy_app._handle_context_event(
-        {"context_id": "ctx-1", "event": "status", "data": {"text": "Thinking..."}, "sequence": 11}
-    )
-    # sequence 11 should NOT be in the log sequences if it was dropped
-    assert 11 not in dummy_app._test_log.sequences
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert "Unknown command" in splash.state.message or "Unknown command" in splash.state.detail

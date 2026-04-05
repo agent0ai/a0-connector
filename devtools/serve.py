@@ -14,9 +14,24 @@ import argparse
 import sys
 from pathlib import Path
 
-# Resolve the .venv python so the subprocess uses the right interpreter.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_VENV_PYTHON = _PROJECT_ROOT / ".venv" / "bin" / "python"
+_VENV_PYTHON_CANDIDATES = (
+    _PROJECT_ROOT / ".venv" / "Scripts" / "python.exe",
+    _PROJECT_ROOT / ".venv" / "Scripts" / "python",
+    _PROJECT_ROOT / ".venv" / "bin" / "python",
+)
+
+
+def _resolve_python() -> str:
+    """Prefer the project's venv interpreter across Windows and POSIX."""
+
+    for candidate in _VENV_PYTHON_CANDIDATES:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return sys.executable
 
 
 def main() -> None:
@@ -29,12 +44,13 @@ def main() -> None:
     try:
         from textual_serve.server import Server
     except ImportError:
+        python = _resolve_python()
         print("textual-serve is not installed. Run:")
-        print(f"  {_VENV_PYTHON} -m pip install textual-serve")
+        print(f"  {python} -m pip install textual-serve")
         sys.exit(1)
 
-    python = str(_VENV_PYTHON) if _VENV_PYTHON.exists() else sys.executable
-    command = f"{python} -m agent_zero_cli"
+    python = _resolve_python()
+    command = f'"{python}" -m agent_zero_cli'
 
     server = Server(
         command,

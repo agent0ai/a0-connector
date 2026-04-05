@@ -111,6 +111,27 @@ class A0Client:
             return nested
         return payload
 
+    def _json(self, response: httpx.Response) -> dict[str, Any]:
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+
+    def _response_message(self, response: httpx.Response) -> str:
+        try:
+            payload = self._json(response)
+        except Exception:
+            payload = {}
+
+        for key in ("message", "error"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        text = response.text.strip()
+        if text:
+            return text
+
+        return f"HTTP {response.status_code}"
+
     def _raise_for_results(self, response: dict[str, Any] | None, event: str) -> dict[str, Any]:
         if not isinstance(response, dict):
             raise A0ProtocolError(f"{event} returned an invalid response")
@@ -344,13 +365,13 @@ class A0Client:
                 "HTTP 404 — the a0_connector plugin is not installed on this Agent Zero server.\n"
                 "\n"
                 "The web UI can work while this endpoint is missing: the CLI needs the plugin.\n"
-                "In your Agent Zero checkout:\n"
-                "  mkdir -p usr/plugins\n"
-                "  ln -sfn /absolute/path/to/a0-connector/plugin/a0_connector usr/plugins/a0_connector\n"
-                "Then restart Agent Zero. On a remote host, repeat the same symlink on that server."
+                "For this workspace, the authoritative runtime plugin copy is:\n"
+                "  C:\\Users\\3CLYP50\\Documents\\GitHub\\dockervolume\\usr\\plugins\\a0_connector\n"
+                "Ensure Agent Zero is running with that plugin mounted at /a0/usr/plugins/a0_connector,\n"
+                "then restart Agent Zero. On a remote host, install the same plugin there before retrying."
             )
         response.raise_for_status()
-        return response.json()
+        return self._json(response)
 
     async def check_health(self) -> bool:
         try:
@@ -369,7 +390,7 @@ class A0Client:
             require_api_key=False,
         )
         if response.status_code == 200:
-            data = response.json()
+            data = self._json(response)
             api_key = data.get("api_key", "")
             if api_key:
                 self.api_key = api_key
@@ -434,14 +455,22 @@ class A0Client:
     async def create_chat(self) -> str:
         response = await self._post("chat_create")
         response.raise_for_status()
-        data = response.json()
+        data = self._json(response)
         return data.get("context_id") or data.get("ctxid", "")
 
     async def list_chats(self) -> list[dict[str, Any]]:
         response = await self._post("chats_list")
         response.raise_for_status()
-        data = response.json()
+        data = self._json(response)
         return data.get("contexts", data.get("chats", []))
+
+    async def get_chat(self, context_id: str) -> dict[str, Any]:
+        response = await self._post(
+            "chat_get",
+            {"context_id": context_id},
+        )
+        response.raise_for_status()
+        return self._json(response)
 
     async def remove_chat(self, context_id: str) -> None:
         response = await self._post(
@@ -453,8 +482,106 @@ class A0Client:
     async def list_projects(self) -> list[dict[str, Any]]:
         response = await self._post("projects_list")
         response.raise_for_status()
-        data = response.json()
+        data = self._json(response)
         return data.get("projects", [])
+
+    async def get_settings(self) -> dict[str, Any]:
+        response = await self._post("settings_get")
+        response.raise_for_status()
+        return self._json(response)
+
+    async def set_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
+        response = await self._post(
+            "settings_set",
+            {"settings": settings},
+        )
+        response.raise_for_status()
+        return self._json(response)
+
+    async def list_agents(self) -> list[dict[str, Any]]:
+        response = await self._post("agents_list")
+        response.raise_for_status()
+        data = self._json(response)
+        agents = data.get("agents", data.get("data", []))
+        return agents if isinstance(agents, list) else []
+
+    async def list_skills(
+        self,
+        *,
+        project_name: str | None = None,
+        agent_profile: str | None = None,
+    ) -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {}
+        if project_name:
+            payload["project_name"] = project_name
+        if agent_profile:
+            payload["agent_profile"] = agent_profile
+
+        response = await self._post("skills_list", payload)
+        response.raise_for_status()
+        data = self._json(response)
+        skills = data.get("skills", data.get("data", []))
+        return skills if isinstance(skills, list) else []
+
+    async def delete_skill(self, skill_path: str) -> dict[str, Any]:
+        response = await self._post(
+            "skills_delete",
+            {"skill_path": skill_path},
+        )
+        response.raise_for_status()
+        return self._json(response)
+
+    async def get_model_presets(self) -> list[dict[str, Any]]:
+        response = await self._post("model_presets")
+        response.raise_for_status()
+        data = self._json(response)
+        presets = data.get("presets", data.get("data", []))
+        return presets if isinstance(presets, list) else []
+
+    async def get_compaction_stats(self, context_id: str) -> dict[str, Any]:
+        response = await self._post(
+            "compact_chat",
+            {"context_id": context_id, "action": "stats"},
+        )
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "message": self._response_message(response),
+                "status_code": response.status_code,
+            }
+
+        data = self._json(response)
+        if "ok" not in data:
+            data["ok"] = True
+        return data
+
+    async def compact_chat(
+        self,
+        context_id: str,
+        *,
+        use_chat_model: bool,
+        preset_name: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "context_id": context_id,
+            "action": "compact",
+            "use_chat_model": use_chat_model,
+        }
+        if preset_name:
+            payload["preset_name"] = preset_name
+
+        response = await self._post("compact_chat", payload)
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "message": self._response_message(response),
+                "status_code": response.status_code,
+            }
+
+        data = self._json(response)
+        if "ok" not in data:
+            data["ok"] = True
+        return data
 
     async def disconnect(self) -> None:
         if self.sio.connected:

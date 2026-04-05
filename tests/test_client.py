@@ -475,6 +475,187 @@ async def test_send_message_uses_prefixed_ws_event() -> None:
     assert "client_message_id" in payload
 
 
+async def test_get_settings_posts_to_connector_endpoint() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={"settings": {"agent_profile": "default"}},
+        )
+    )
+
+    result = await client.get_settings()
+
+    assert result == {"settings": {"agent_profile": "default"}}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/settings_get",
+        json={},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_set_settings_posts_curated_payload() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={"settings": {"agent_profile": "researcher"}},
+        )
+    )
+
+    result = await client.set_settings({"agent_profile": "researcher"})
+
+    assert result == {"settings": {"agent_profile": "researcher"}}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/settings_set",
+        json={"settings": {"agent_profile": "researcher"}},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_get_chat_uses_context_id_payload() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=200, json_data={"context_id": "ctx-1"})
+    )
+
+    result = await client.get_chat("ctx-1")
+
+    assert result == {"context_id": "ctx-1"}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/chat_get",
+        json={"context_id": "ctx-1"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_list_agents_reads_data_array() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={"ok": True, "data": [{"key": "default", "label": "Default"}]},
+        )
+    )
+
+    result = await client.list_agents()
+
+    assert result == [{"key": "default", "label": "Default"}]
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/agents_list",
+        json={},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_list_skills_uses_optional_filters() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={"ok": True, "data": [{"name": "playwright", "path": "/skills/playwright"}]},
+        )
+    )
+
+    result = await client.list_skills(project_name="proj-a", agent_profile="developer")
+
+    assert result == [{"name": "playwright", "path": "/skills/playwright"}]
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/skills_list",
+        json={"project_name": "proj-a", "agent_profile": "developer"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_delete_skill_posts_skill_path() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=200, json_data={"ok": True})
+    )
+
+    result = await client.delete_skill("/skills/playwright")
+
+    assert result == {"ok": True}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/skills_delete",
+        json={"skill_path": "/skills/playwright"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_get_model_presets_returns_preset_list() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={"ok": True, "presets": [{"name": "Balanced"}]},
+        )
+    )
+
+    result = await client.get_model_presets()
+
+    assert result == [{"name": "Balanced"}]
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/model_presets",
+        json={},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_get_compaction_stats_normalizes_http_failure() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=409, text="Cannot compact while agent is running")
+    )
+
+    result = await client.get_compaction_stats("ctx-1")
+
+    assert result == {
+        "ok": False,
+        "message": "Cannot compact while agent is running",
+        "status_code": 409,
+    }
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/compact_chat",
+        json={"context_id": "ctx-1", "action": "stats"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_compact_chat_posts_selected_model_and_preset() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=200, json_data={"ok": True, "message": "Compaction started"})
+    )
+
+    result = await client.compact_chat(
+        "ctx-1",
+        use_chat_model=False,
+        preset_name="Balanced",
+    )
+
+    assert result == {"ok": True, "message": "Compaction started"}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/compact_chat",
+        json={
+            "context_id": "ctx-1",
+            "action": "compact",
+            "use_chat_model": False,
+            "preset_name": "Balanced",
+        },
+        headers={"X-API-KEY": "secret"},
+    )
+
+
 async def test_file_op_requests_are_returned_via_result_event() -> None:
     client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
     client.http = Mock()

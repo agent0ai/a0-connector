@@ -3,10 +3,18 @@ from __future__ import annotations
 from typing import Any
 
 from rich.console import RenderableType
+from rich.text import Text
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from agent_zero_cli.widgets.shimmer import build_dim_status, build_shimmer_text
+
+_AGENT_ZERO_BANNER = """ █████╗   ██████╗ ███████╗███╗   ██╗████████╗   ███████╗███████╗██████╗  ██████╗
+██╔══██╗ ██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝   ╚══███╔╝██╔════╝██╔══██╗██╔═══██╗
+███████║ ██║  ███╗█████╗  ██╔██╗ ██║   ██║        ███╔╝ █████╗  ██████╔╝██║   ██║
+██╔══██║ ██║   ██║██╔══╝  ██║╚██╗██║   ██║       ███╔╝  ██╔══╝  ██╔══██╗██║   ██║
+██║  ██║ ╚██████╔╝███████╗██║ ╚████║   ██║      ███████╗███████╗██║  ██║╚██████╔╝
+╚═╝  ╚═╝  ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝      ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝"""
 
 
 class ChatLog(VerticalScroll):
@@ -16,6 +24,7 @@ class ChatLog(VerticalScroll):
         super().__init__(**kwargs)
         self._seq_to_widget: dict[int, Static] = {}
         self._sys_seq: int = -100
+        self._intro_widget: Static | None = None
 
         # Shimmer state
         self._active_seq: int | None = None
@@ -23,6 +32,18 @@ class ChatLog(VerticalScroll):
         self._active_detail: str = ""
         self._shimmer_phase: float = 0.0
         self._shimmer_frame: int = 0
+
+    def ensure_intro_banner(self) -> None:
+        """Mount the Agent Zero intro banner above the first rendered message."""
+        if self._intro_widget is not None:
+            return
+
+        banner = Text(_AGENT_ZERO_BANNER, style="#00b4ff")
+        banner.no_wrap = True
+        banner.overflow = "ignore"
+        self._intro_widget = Static(banner, classes="chat-intro")
+        before = self.children[0] if self.children else None
+        self.mount(self._intro_widget, before=before)
 
     def write(self, renderable: RenderableType) -> None:
         """Write a new un-updatable message using an internal sequence ID."""
@@ -107,6 +128,7 @@ class ChatLog(VerticalScroll):
     def clear(self) -> None:
         """Clear the timeline and reset the tracking map."""
         self._seq_to_widget.clear()
+        self._intro_widget = None
         self._active_seq = None
         for child in self.children:
             child.remove()

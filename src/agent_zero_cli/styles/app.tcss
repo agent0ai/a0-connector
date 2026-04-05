@@ -3,6 +3,10 @@ Screen {
     layers: base status;
 }
 
+#body-switcher {
+    height: 1fr;
+}
+
 #chat-log {
     height: 1fr;
     padding: 0;
@@ -15,21 +19,25 @@ Screen {
     margin-top: 1;
 }
 
-#message-input {
+.chat-intro {
     margin-top: 0;
+}
+
+#message-input {
+    margin-top: 1;
     margin-bottom: 0;
-    border: round #555555;
-    background: #17181a;
+    border: round #0f6db8;
+    background: #101820;
     padding: 0 1;
 }
 
 /* Subtle highlight while progress placeholder is shown (see WebUI .progress-active). */
 #message-input.progress-active {
-    border: round #777777;
+    border: round #1886c9;
 }
 
 #message-input:focus {
-    border: round #777777;
+    border: round #00b4ff;
 }
 
 #connection-status {
@@ -139,4 +147,182 @@ ChatListScreen {
 #chat-list {
     height: 1fr;
     border: solid $primary;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Splash / welcome surface                                                   */
+/* -------------------------------------------------------------------------- */
+
+SplashView {
+    height: 1fr;
+    padding: 1;
+    background: #17181a;
+}
+
+SplashView Markdown {
+    padding: 0;
+}
+
+#splash-hero {
+    margin-bottom: 0;
+}
+
+#splash-stage-label {
+    margin-top: 1;
+    text-style: bold;
+    color: #00b4ff;
+}
+
+#splash-message {
+    text-style: bold;
+    margin-top: 0;
+}
+
+#splash-detail {
+    color: #9aa7b4;
+    margin-bottom: 0;
+}
+
+SplashView.stage-host #splash-stage-label {
+    color: #88bfff;
+}
+
+SplashView.stage-login #splash-stage-label {
+    color: #80d0ff;
+}
+
+SplashView.stage-connecting #splash-stage-label {
+    color: #f5c35a;
+}
+
+SplashView.stage-ready #splash-stage-label {
+    color: #79d18a;
+}
+
+SplashView.stage-error #splash-stage-label {
+    color: #ff8b6b;
+}
+
+SplashHostPanel,
+SplashLoginPanel,
+SplashStatusPanel {
+    border: round #0f6db8;
+    background: #101820;
+    padding: 1 2;
+    margin-top: 1;
+}
+
+.splash-panel-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.splash-panel-copy,
+.splash-panel-hint,
+.splash-action-description,
+.splash-action-reason {
+    color: #9aa7b4;
+}
+
+.splash-panel-hint,
+.splash-action-reason {
+    margin-top: 1;
+}
+
+#splash-host-input,
+#splash-login-username,
+#splash-login-password {
+    width: 100%;
+    margin-top: 1;
+    background: #17181a;
+    border: round #2a3a4a;
+    color: #f5f7fa;
+}
+
+#splash-host-input:focus,
+#splash-login-username:focus,
+#splash-login-password:focus {
+    border: round #00b4ff;
+}
+
+#splash-host-submit,
+#splash-login-submit,
+#splash-status-retry {
+    width: 100%;
+    margin-top: 1;
+}
+
+#splash-save-credentials {
+    margin-top: 1;
+}
+
+#splash-status-spinner {
+    margin-bottom: 1;
+}
+
+#splash-status-title {
+    text-style: bold;
+}
+
+#splash-status-detail {
+    color: #9aa7b4;
+    margin-top: 1;
+}
+
+#splash-actions-grid {
+    margin-top: 1;
+    layout: grid;
+    grid-size: 2;
+    grid-gutter: 1 1;
+}
+
+.splash-action-card {
+    border: round #2a3a4a;
+    background: #111820;
+    padding: 1;
+    min-height: 6;
+}
+
+.splash-action-card Button {
+    width: 100%;
+}
+
+.splash-action-card Button:disabled {
+    color: #7f8b97;
+}
+
+.splash-action-card .splash-action-description {
+    margin-top: 1;
+}
+
+.splash-action-card .splash-action-reason {
+    color: #f0b54d;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Slash suggestions                                                          */
+/* -------------------------------------------------------------------------- */
+
+SlashCommandMenu {
+    margin-top: 1;
+    border: round #0f6db8;
+    background: #101820;
+    padding: 1 2;
+}
+
+#slash-menu-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#slash-menu-help {
+    color: #9aa7b4;
+    margin-top: 1;
+}
+
+#slash-menu-list {
+    height: auto;
+    max-height: 11;
+    border: round #1f3e57;
+    background: #17181a;
 }
