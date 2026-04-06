@@ -100,6 +100,49 @@ class FakeConnectionStatus:
         self.url = ""
 
 
+class FakeModelSwitcherBar:
+    def __init__(self) -> None:
+        self.visible = False
+        self.busy = False
+        self.allowed = False
+        self.main_model = None
+        self.utility_model = None
+        self.presets: list[object] = []
+        self.selected_preset = ""
+        self.override_label = ""
+
+    def clear(self) -> None:
+        self.visible = False
+        self.busy = False
+        self.allowed = False
+        self.main_model = None
+        self.utility_model = None
+        self.presets = []
+        self.selected_preset = ""
+        self.override_label = ""
+
+    def set_busy(self, busy: bool) -> None:
+        self.busy = busy
+
+    def set_state(
+        self,
+        *,
+        main_model: object,
+        utility_model: object,
+        presets: list[object] | tuple[object, ...],
+        allowed: bool,
+        selected_preset: str = "",
+        override_label: str = "",
+    ) -> None:
+        self.visible = True
+        self.main_model = main_model
+        self.utility_model = utility_model
+        self.presets = list(presets)
+        self.allowed = allowed
+        self.selected_preset = selected_preset
+        self.override_label = override_label
+
+
 class FakeBodySwitcher:
     def __init__(self) -> None:
         self.current = "splash-view"
@@ -165,6 +208,7 @@ def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
         "#chat-log": FakeChatLog(),
         "#message-input": FakeInput(),
         "#connection-status": FakeConnectionStatus(),
+        "#model-switcher-bar": FakeModelSwitcherBar(),
         "#body-switcher": FakeBodySwitcher(),
         "#splash-view": FakeSplash(),
         "#slash-menu": FakeSlashMenu(),
@@ -225,6 +269,7 @@ async def test_startup_without_host_shows_host_stage(
         "#chat-log": FakeChatLog(),
         "#message-input": FakeInput(),
         "#connection-status": FakeConnectionStatus(),
+        "#model-switcher-bar": FakeModelSwitcherBar(),
         "#body-switcher": FakeBodySwitcher(),
         "#splash-view": FakeSplash(),
         "#slash-menu": FakeSlashMenu(),
@@ -248,7 +293,7 @@ async def test_begin_connection_with_saved_login_persists_host_and_api_key(
     async def fake_fetch_capabilities():
         return {
             "auth": ["api_key", "login"],
-            "features": ["chat_create", "chats_list"],
+            "features": ["chat_create", "chats_list", "model_switcher"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
             "websocket_handlers": ["plugins/a0_connector/ws_connector"],
@@ -261,6 +306,20 @@ async def test_begin_connection_with_saved_login_persists_host_and_api_key(
     monkeypatch.setattr(dummy_app.client, "send_hello", lambda: _async_return(None))
     monkeypatch.setattr(dummy_app.client, "create_chat", lambda: _async_return("ctx-1"))
     monkeypatch.setattr(dummy_app.client, "subscribe_context", lambda context_id, from_seq=0: _async_return(None))
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_model_switcher",
+        lambda context_id: _async_return(
+            {
+                "ok": True,
+                "allowed": True,
+                "override": {"preset_name": "Fast"},
+                "presets": [{"name": "Fast"}],
+                "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+            }
+        ),
+    )
     monkeypatch.setattr("agent_zero_cli.app.save_env", lambda key, value: saved.__setitem__(key, value))
 
     await dummy_app._begin_connection(
@@ -273,10 +332,13 @@ async def test_begin_connection_with_saved_login_persists_host_and_api_key(
     splash = dummy_app._test_widgets["#splash-view"]
     body = dummy_app._test_widgets["#body-switcher"]
     input_widget = dummy_app._test_widgets["#message-input"]
+    model_switcher = dummy_app._test_widgets["#model-switcher-bar"]
     assert splash.state.stage == "ready"
     assert dummy_app.current_context == "ctx-1"
     assert body.current == "splash-view"
     assert input_widget.focused is True
+    assert model_switcher.visible is True
+    assert model_switcher.selected_preset == "Fast"
     assert saved == {
         "AGENT_ZERO_HOST": "http://example.test",
         "AGENT_ZERO_API_KEY": "api-key-123",
@@ -291,6 +353,7 @@ async def test_invalid_api_key_returns_to_login_stage(
         "#chat-log": FakeChatLog(),
         "#message-input": FakeInput(),
         "#connection-status": FakeConnectionStatus(),
+        "#model-switcher-bar": FakeModelSwitcherBar(),
         "#body-switcher": FakeBodySwitcher(),
         "#splash-view": FakeSplash(),
         "#slash-menu": FakeSlashMenu(),
@@ -386,6 +449,20 @@ async def test_new_chat_returns_to_ready_welcome(
     monkeypatch.setattr(dummy_app.client, "unsubscribe_context", lambda context_id: _async_return(None))
     monkeypatch.setattr(dummy_app.client, "create_chat", lambda: _async_return("ctx-new"))
     monkeypatch.setattr(dummy_app.client, "subscribe_context", lambda context_id, from_seq=0: _async_return(None))
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_model_switcher",
+        lambda context_id: _async_return(
+            {
+                "ok": True,
+                "allowed": True,
+                "override": {"preset_name": "Fast"},
+                "presets": [{"name": "Fast"}],
+                "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+            }
+        ),
+    )
 
     await dummy_app._cmd_new()
 
@@ -397,6 +474,38 @@ async def test_new_chat_returns_to_ready_welcome(
     assert splash.state.stage == "ready"
     assert body.current == "splash-view"
     assert input_widget.focused is True
+
+
+async def test_model_switcher_preset_change_updates_current_chat_models(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"model_switcher"}
+    bar = dummy_app._test_widgets["#model-switcher-bar"]
+
+    monkeypatch.setattr(
+        dummy_app.client,
+        "set_model_preset",
+        lambda context_id, preset_name: _async_return(
+            {
+                "ok": True,
+                "allowed": True,
+                "override": {"preset_name": preset_name},
+                "presets": [{"name": "Balanced"}],
+                "main_model": {"provider": "anthropic", "name": "claude-sonnet-4"},
+                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+            }
+        ),
+    )
+
+    await dummy_app.on_model_switcher_bar_preset_changed(SimpleNamespace(value="Balanced", bar=bar))
+
+    assert bar.busy is False
+    assert bar.visible is True
+    assert bar.selected_preset == "Balanced"
+    assert bar.main_model == {"provider": "anthropic", "name": "claude-sonnet-4"}
 
 
 async def test_help_is_generated_from_registry_on_welcome(dummy_app: DummyAgentZeroCLI) -> None:

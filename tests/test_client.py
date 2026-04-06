@@ -609,6 +609,67 @@ async def test_get_model_presets_returns_preset_list() -> None:
     )
 
 
+async def test_get_model_switcher_returns_current_models_and_override() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={
+                "ok": True,
+                "allowed": True,
+                "override": {"preset_name": "Balanced"},
+                "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+                "presets": [{"name": "Balanced"}],
+            },
+        )
+    )
+
+    result = await client.get_model_switcher("ctx-1")
+
+    assert result["override"] == {"preset_name": "Balanced"}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
+        json={"action": "get", "context_id": "ctx-1"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_set_model_preset_posts_set_preset_action() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=200, json_data={"ok": True, "override": {"preset_name": "Fast"}})
+    )
+
+    result = await client.set_model_preset("ctx-1", "Fast")
+
+    assert result["override"] == {"preset_name": "Fast"}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
+        json={"context_id": "ctx-1", "action": "set_preset", "preset_name": "Fast"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_set_model_preset_can_clear_override() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=200, json_data={"ok": True, "override": None})
+    )
+
+    result = await client.set_model_preset("ctx-1", None)
+
+    assert result["override"] is None
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
+        json={"context_id": "ctx-1", "action": "clear"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
 async def test_get_compaction_stats_normalizes_http_failure() -> None:
     client = A0Client("http://localhost:5080", api_key="secret")
     client.http = Mock()

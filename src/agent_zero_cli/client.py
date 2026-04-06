@@ -538,6 +538,25 @@ class A0Client:
         presets = data.get("presets", data.get("data", []))
         return presets if isinstance(presets, list) else []
 
+    async def get_model_switcher(self, context_id: str) -> dict[str, Any]:
+        response = await self._post(
+            "model_switcher",
+            {"action": "get", "context_id": context_id},
+        )
+        response.raise_for_status()
+        return self._json(response)
+
+    async def set_model_preset(self, context_id: str, preset_name: str | None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"context_id": context_id}
+        if preset_name:
+            payload["action"] = "set_preset"
+            payload["preset_name"] = preset_name
+        else:
+            payload["action"] = "clear"
+        response = await self._post("model_switcher", payload)
+        response.raise_for_status()
+        return self._json(response)
+
     async def get_compaction_stats(self, context_id: str) -> dict[str, Any]:
         response = await self._post(
             "compact_chat",

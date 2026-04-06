@@ -45,6 +45,7 @@ def _install_fake_helpers(
     runtime_mod = types.ModuleType("helpers.runtime")
     projects_mod = types.ModuleType("helpers.projects")
     files_mod = types.ModuleType("helpers.files")
+    persist_chat_mod = types.ModuleType("helpers.persist_chat")
     subagents_mod = types.ModuleType("helpers.subagents")
     skills_mod = types.ModuleType("helpers.skills")
     state_monitor_mod = types.ModuleType("helpers.state_monitor_integration")
@@ -101,6 +102,7 @@ def _install_fake_helpers(
     files_mod.normalize_a0_path = lambda value: value
     files_mod.is_in_dir = lambda path, root: str(path).startswith(str(root))
     files_mod.get_abs_path = lambda *parts: "/".join(str(part).strip("/") for part in parts if str(part))
+    persist_chat_mod.save_tmp_chat = lambda context: None
     settings_state = {
         "agent_profile": "default",
         "agent_knowledge_subdir": "knowledge",
@@ -149,11 +151,56 @@ def _install_fake_helpers(
     state_monitor_mod.mark_dirty_all = lambda reason=None: None
 
     model_config_state = {
-        "presets": [{"name": "fast", "chat": {"provider": "x", "name": "y"}}]
+        "allowed": True,
+        "chat_model": {"provider": "anthropic", "name": "chat-model"},
+        "utility_model": {"provider": "anthropic", "name": "utility-model"},
+        "presets": [{"name": "fast", "chat": {"provider": "x", "name": "y"}}],
     }
     model_config_mod.get_presets = lambda: list(model_config_state["presets"])
     model_config_mod.save_presets = lambda presets: model_config_state.__setitem__("presets", list(presets))
     model_config_mod.reset_presets = lambda: model_config_state["presets"]
+    model_config_mod.get_preset_by_name = lambda name: next(
+        (preset for preset in model_config_state["presets"] if preset.get("name") == name),
+        None,
+    )
+    model_config_mod.is_chat_override_allowed = lambda agent=None: bool(model_config_state["allowed"])
+
+    def _override(agent):
+        context = getattr(agent, "_context", None) if agent is not None else None
+        if context is None:
+            return None
+        return context.get_data("chat_model_override")
+
+    def _chat_model(agent=None):
+        override = _override(agent)
+        if isinstance(override, dict):
+            preset_name = override.get("preset_name")
+            if preset_name:
+                preset = model_config_mod.get_preset_by_name(preset_name) or {}
+                chat = preset.get("chat", {})
+                if chat.get("provider") or chat.get("name"):
+                    return dict(chat)
+            chat = override.get("chat", override)
+            if isinstance(chat, dict) and (chat.get("provider") or chat.get("name")):
+                return dict(chat)
+        return dict(model_config_state["chat_model"])
+
+    def _utility_model(agent=None):
+        override = _override(agent)
+        if isinstance(override, dict):
+            preset_name = override.get("preset_name")
+            if preset_name:
+                preset = model_config_mod.get_preset_by_name(preset_name) or {}
+                utility = preset.get("utility", {})
+                if utility.get("provider") or utility.get("name"):
+                    return dict(utility)
+            utility = override.get("utility", {})
+            if isinstance(utility, dict) and (utility.get("provider") or utility.get("name")):
+                return dict(utility)
+        return dict(model_config_state["utility_model"])
+
+    model_config_mod.get_chat_model_config = _chat_model
+    model_config_mod.get_utility_model_config = _utility_model
 
     compaction_state = {
         "stats": {
@@ -185,6 +232,7 @@ def _install_fake_helpers(
     sys.modules["helpers.runtime"] = runtime_mod
     sys.modules["helpers.projects"] = projects_mod
     sys.modules["helpers.files"] = files_mod
+    sys.modules["helpers.persist_chat"] = persist_chat_mod
     sys.modules["helpers.subagents"] = subagents_mod
     sys.modules["helpers.skills"] = skills_mod
     sys.modules["helpers.state_monitor_integration"] = state_monitor_mod
@@ -234,6 +282,7 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert "skills_list" in payload["features"]
     assert "skills_delete" in payload["features"]
     assert "model_presets" in payload["features"]
+    assert "model_switcher" in payload["features"]
     assert "compact_chat" in payload["features"]
     assert capabilities_mod.Capabilities.requires_api_key() is False
 
@@ -276,6 +325,7 @@ def test_protected_handlers_require_api_key_only() -> None:
         "usr.plugins.a0_connector.api.v1.skills_list",
         "usr.plugins.a0_connector.api.v1.skills_delete",
         "usr.plugins.a0_connector.api.v1.model_presets",
+        "usr.plugins.a0_connector.api.v1.model_switcher",
         "usr.plugins.a0_connector.api.v1.compact_chat",
         "usr.plugins.a0_connector.api.v1.log_tail",
         "usr.plugins.a0_connector.api.v1.message_send",
@@ -293,6 +343,7 @@ def test_protected_handlers_require_api_key_only() -> None:
         "SkillsList",
         "SkillsDelete",
         "ModelPresets",
+        "ModelSwitcher",
         "CompactChat",
         "LogTail",
         "MessageSend",
@@ -399,6 +450,46 @@ def test_agents_skills_and_model_preset_proxy_payloads() -> None:
 
     presets = asyncio.run(presets_mod.ModelPresets(None, None).process({}, object()))
     assert presets["presets"][0]["name"] == "fast"
+
+
+def test_model_switcher_returns_effective_models_and_updates_override() -> None:
+    _install_fake_helpers()
+
+    class _FakeContext:
+        def __init__(self) -> None:
+            self.data = {"chat_model_override": None}
+            self.agent0 = types.SimpleNamespace(_context=self)
+
+        def get_data(self, key: str):
+            return self.data.get(key)
+
+        def set_data(self, key: str, value):
+            self.data[key] = value
+
+    fake_context = _FakeContext()
+    agent_mod = types.ModuleType("agent")
+    agent_mod.AgentContext = types.SimpleNamespace(get=lambda context_id: fake_context)
+    sys.modules["agent"] = agent_mod
+
+    switcher_mod = _reload("usr.plugins.a0_connector.api.v1.model_switcher")
+    handler = switcher_mod.ModelSwitcher(None, None)
+
+    initial = asyncio.run(handler.process({"action": "get", "context_id": "ctx-1"}, object()))
+    assert initial["allowed"] is True
+    assert initial["main_model"]["label"] == "anthropic/chat-model"
+    assert initial["utility_model"]["label"] == "anthropic/utility-model"
+    assert initial["override"] is None
+
+    updated = asyncio.run(
+        handler.process({"action": "set_preset", "context_id": "ctx-1", "preset_name": "fast"}, object())
+    )
+    assert updated["override"] == {"preset_name": "fast"}
+    assert updated["main_model"]["label"] == "x/y"
+    assert updated["utility_model"]["label"] == "anthropic/utility-model"
+
+    cleared = asyncio.run(handler.process({"action": "clear", "context_id": "ctx-1"}, object()))
+    assert cleared["override"] is None
+    assert fake_context.get_data("chat_model_override") is None
 
 
 def test_compact_chat_returns_stats_and_schedules_compaction() -> None:

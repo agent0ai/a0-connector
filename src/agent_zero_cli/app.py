@@ -33,6 +33,7 @@ from agent_zero_cli.screens.skills_modal import (
 from agent_zero_cli.widgets import (
     ChatInput,
     ConnectionStatus,
+    ModelSwitcherBar,
     SlashCommand,
     SlashCommandMenu,
     SplashAction,
@@ -109,6 +110,7 @@ class AgentZeroCLI(App):
             yield SplashView()
             yield ChatLog(id="chat-log")
         yield SlashCommandMenu()
+        yield ModelSwitcherBar(id="model-switcher-bar")
         yield ChatInput(id="message-input")
         yield Footer()
 
@@ -117,6 +119,7 @@ class AgentZeroCLI(App):
         input_widget.disabled = True
         slash_menu = self.query_one("#slash-menu", SlashCommandMenu)
         slash_menu.display = False
+        self.query_one("#model-switcher-bar", ModelSwitcherBar).clear()
         self.query_one("#splash-view", SplashView).set_state(self._splash_state)
 
         log = self.query_one("#chat-log", ChatLog)
@@ -331,6 +334,57 @@ class AgentZeroCLI(App):
         log.ensure_intro_banner()
         self._chat_intro_pending = False
 
+    def _clear_model_switcher(self) -> None:
+        try:
+            self.query_one("#model-switcher-bar", ModelSwitcherBar).clear()
+        except Exception:
+            pass
+
+    def _apply_model_switcher_state(self, payload: dict[str, Any]) -> None:
+        presets = payload.get("presets") if isinstance(payload.get("presets"), list) else []
+        override = payload.get("override") if isinstance(payload.get("override"), dict) else {}
+        selected_preset = str(override.get("preset_name") or "").strip()
+        override_label = ""
+
+        if override and not selected_preset:
+            override_label = str(override.get("name") or override.get("provider") or "Custom override").strip()
+        elif selected_preset:
+            preset_names = {
+                str(item.get("name") or item.get("value") or "").strip()
+                for item in presets
+                if isinstance(item, dict)
+            }
+            if selected_preset not in preset_names:
+                override_label = f"Preset: {selected_preset}"
+
+        widget = self.query_one("#model-switcher-bar", ModelSwitcherBar)
+        widget.set_state(
+            main_model=payload.get("main_model"),
+            utility_model=payload.get("utility_model"),
+            presets=presets,
+            allowed=bool(payload.get("allowed")),
+            selected_preset=selected_preset,
+            override_label=override_label,
+        )
+
+    async def _refresh_model_switcher(self, *, silent: bool = True) -> None:
+        if "model_switcher" not in self.connector_features or not self.current_context:
+            self._clear_model_switcher()
+            return
+
+        widget = self.query_one("#model-switcher-bar", ModelSwitcherBar)
+        widget.set_busy(True)
+        try:
+            payload = await self.client.get_model_switcher(self.current_context)
+        except Exception as exc:
+            self._clear_model_switcher()
+            if not silent:
+                self._show_notice(f"Failed to load model switcher: {exc}", error=True)
+            return
+
+        self._apply_model_switcher_state(payload)
+        widget.set_busy(False)
+
     def _command_display(self, spec: CommandSpec) -> str:
         if not spec.aliases:
             return spec.canonical_name
@@ -388,6 +442,7 @@ class AgentZeroCLI(App):
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = not value
         if not value:
+            self._clear_model_switcher()
             self._set_splash_stage(
                 "error",
                 message="Connection lost",
@@ -725,6 +780,7 @@ class AgentZeroCLI(App):
             host=normalized_host,
             actions=self._welcome_actions(),
         )
+        await self._refresh_model_switcher()
         self._sync_body_mode()
         self._focus_message_input()
 
@@ -1024,6 +1080,23 @@ class AgentZeroCLI(App):
     def on_slash_command_menu_command_selected(self, event: SlashCommandMenu.CommandSelected) -> None:
         self._insert_slash_command(event.command)
 
+    async def on_model_switcher_bar_preset_changed(self, event: ModelSwitcherBar.PresetChanged) -> None:
+        if "model_switcher" not in self.connector_features or not self.current_context:
+            event.bar.set_busy(False)
+            return
+
+        event.bar.set_busy(True)
+        try:
+            payload = await self.client.set_model_preset(self.current_context, event.value or None)
+        except Exception as exc:
+            event.bar.set_busy(False)
+            await self._refresh_model_switcher()
+            self._show_notice(f"Failed to update model preset: {exc}", error=True)
+            return
+
+        self._apply_model_switcher_state(payload)
+        event.bar.set_busy(False)
+
     def on_splash_view_submit_requested(self, event: SplashView.SubmitRequested) -> None:
         self.run_worker(
             self._begin_connection(
@@ -1080,6 +1153,7 @@ class AgentZeroCLI(App):
         self._set_idle()
         self._sync_body_mode()
         await self.client.subscribe_context(context_id, from_seq=0)
+        await self._refresh_model_switcher()
 
     async def _cmd_chats(self) -> None:
         try:

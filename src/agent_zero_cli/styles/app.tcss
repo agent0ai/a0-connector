@@ -24,7 +24,7 @@ Screen {
 }
 
 #message-input {
-    margin-top: 1;
+    margin-top: 0;
     margin-bottom: 0;
     border: round #0f6db8;
     background: #101820;
@@ -38,6 +38,36 @@ Screen {
 
 #message-input:focus {
     border: round #00b4ff;
+}
+
+#model-switcher-bar {
+    height: auto;
+    min-height: 1;
+    margin-top: 1;
+    padding: 0 1;
+    align: left middle;
+}
+
+#model-switcher-summary {
+    width: 1fr;
+    color: #9aa7b4;
+    content-align: left middle;
+}
+
+#model-switcher-preset {
+    width: auto;
+    min-width: 18;
+    max-width: 34;
+    margin-left: 2;
+    background: transparent;
+}
+
+#model-switcher-preset > SelectCurrent {
+    color: #9aa7b4;
+}
+
+#model-switcher-preset:focus > SelectCurrent {
+    color: #d9e2ec;
 }
 
 #connection-status {
