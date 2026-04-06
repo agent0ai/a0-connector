@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal, Sequence, TypeAlias
 
 from rich.console import Group
@@ -9,7 +8,9 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Grid, Vertical, VerticalScroll
 from textual.message import Message
-from textual.widgets import Button, Checkbox, Input, LoadingIndicator, Markdown, Static
+from textual.widgets import Button, Checkbox, Input, LoadingIndicator, Static
+
+from agent_zero_cli.widgets.chat_log import build_agent_zero_banner_widget
 
 
 SplashStage: TypeAlias = Literal["host", "login", "connecting", "ready", "error"]
@@ -23,11 +24,6 @@ _STAGE_LABELS: dict[SplashStage, str] = {
     "error": "Connection issue",
 }
 _DEFAULT_HOST = "http://127.0.0.1:5080"
-_SPLASH_MD = Path(__file__).resolve().parent.parent / "styles" / "splash.md"
-_DEFAULT_HERO = """# Agent Zero Connector
-
-Quiet shell for connecting to Agent Zero.
-"""
 _DEFAULT_ACTION_KEYS: tuple[str, ...] = ("chats", "settings", "skills", "compact", "pause", "nudge")
 
 
@@ -183,14 +179,18 @@ class SplashStatusPanel(Vertical):
     def set_connecting(self, message: str, detail: str = "") -> None:
         self._spinner.display = True
         self._button.display = False
+        self._title.display = True
+        self._detail.display = True
         self._title.update(Text(message or "Connecting to the connector...", style="bold"))
         self._detail.update(detail)
 
     def set_error(self, message: str, detail: str = "") -> None:
         self._spinner.display = False
         self._button.display = True
-        self._title.update(Text(message or "Connection failed", style="bold"))
-        self._detail.update(detail)
+        self._title.display = False
+        self._detail.display = False
+        self._title.update("")
+        self._detail.update("")
 
 
 class SplashActionCard(Vertical):
@@ -291,8 +291,7 @@ class SplashView(VerticalScroll):
 
     def __init__(self) -> None:
         super().__init__(id="splash-view")
-        hero_markdown = self._load_hero_markdown()
-        self._hero = Markdown(hero_markdown, id="splash-hero")
+        self._hero = build_agent_zero_banner_widget(id="splash-hero")
         self._stage_label = Static("", id="splash-stage-label")
         self._message = Static("", id="splash-message")
         self._detail = Static("", id="splash-detail")
@@ -315,12 +314,6 @@ class SplashView(VerticalScroll):
     def on_mount(self) -> None:
         self._sync_state()
         self.focus_primary()
-
-    def _load_hero_markdown(self) -> str:
-        try:
-            return _SPLASH_MD.read_text(encoding="utf-8").strip() or _DEFAULT_HERO
-        except OSError:
-            return _DEFAULT_HERO
 
     def _apply_stage(self, stage: SplashStage) -> None:
         for value in _STAGE_ORDER:

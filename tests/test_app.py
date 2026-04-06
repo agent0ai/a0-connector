@@ -3,11 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from textual.widgets import Static
 
 from agent_zero_cli.app import AgentZeroCLI, _DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.widgets import SplashState
-from agent_zero_cli.widgets.splash_view import SplashHostPanel
+from agent_zero_cli.widgets.splash_view import SplashHostPanel, SplashStatusPanel, SplashView
 
 
 async def _async_return(value=None):
@@ -194,6 +195,26 @@ def test_splash_host_panel_uses_default_host_as_placeholder() -> None:
     assert panel.host == _DEFAULT_HOST
     assert panel._host.value == ""
     assert panel._host.placeholder == _DEFAULT_HOST
+
+
+def test_splash_view_uses_shared_agent_zero_banner_widget() -> None:
+    view = SplashView()
+
+    hero = next(widget for widget in view.compose() if getattr(widget, "id", "") == "splash-hero")
+
+    assert isinstance(hero, Static)
+    assert "agent-zero-banner" in hero.classes
+
+
+def test_splash_status_panel_hides_duplicate_error_copy() -> None:
+    panel = SplashStatusPanel()
+
+    panel.set_error("WebSocket connection failed", "Detailed connector guidance")
+
+    assert panel._spinner.display is False
+    assert panel._button.display is True
+    assert panel._title.display is False
+    assert panel._detail.display is False
 
 
 async def test_startup_without_host_shows_host_stage(

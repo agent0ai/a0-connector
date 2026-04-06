@@ -19,7 +19,7 @@ Screen {
     margin-top: 1;
 }
 
-.chat-intro {
+.agent-zero-banner {
     margin-top: 0;
 }
 
@@ -157,10 +157,6 @@ SplashView {
     height: 1fr;
     padding: 1;
     background: #17181a;
-}
-
-SplashView Markdown {
-    padding: 0;
 }
 
 #splash-hero {

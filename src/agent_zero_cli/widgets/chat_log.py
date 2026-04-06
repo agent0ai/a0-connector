@@ -38,10 +38,7 @@ class ChatLog(VerticalScroll):
         if self._intro_widget is not None:
             return
 
-        banner = Text(_AGENT_ZERO_BANNER, style="#00b4ff")
-        banner.no_wrap = True
-        banner.overflow = "ignore"
-        self._intro_widget = Static(banner, classes="chat-intro")
+        self._intro_widget = build_agent_zero_banner_widget(classes="agent-zero-banner")
         before = self.children[0] if self.children else None
         self.mount(self._intro_widget, before=before)
 
@@ -132,4 +129,12 @@ class ChatLog(VerticalScroll):
         self._active_seq = None
         for child in self.children:
             child.remove()
+
+
+def build_agent_zero_banner_widget(*, id: str | None = None, classes: str = "agent-zero-banner") -> Static:
+    """Build the shared Agent Zero banner used by splash and chat views."""
+    banner = Text(_AGENT_ZERO_BANNER, style="#00b4ff")
+    banner.no_wrap = True
+    banner.overflow = "ignore"
+    return Static(banner, id=id, classes=classes)
 
