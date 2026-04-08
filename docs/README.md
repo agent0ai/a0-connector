@@ -10,15 +10,17 @@
 ## Troubleshooting
 
 **404 on `/api/plugins/a0_connector/v1/capabilities`**
-The plugin isn't loaded. In your Agent Zero checkout:
+The plugin isn't loaded in the target Agent Zero instance.
+For local development, place this repo's plugin into:
+`<agent-zero>/usr/plugins/a0_connector`, then restart Agent Zero.
+For Docker, place it in the mapped `/a0/usr/plugins/a0_connector` path and restart the container.
 
 ```bash
-mkdir -p usr/plugins
-ln -sfn /path/to/a0-connector/plugin/a0_connector usr/plugins/a0_connector
+cd /path/to/agent-zero
+mkdir -p usr/plugins/a0_connector
+rsync -a /path/to/a0-connector/plugin/a0_connector/ usr/plugins/a0_connector/
 # restart Agent Zero
 ```
-
-On a remote host, repeat the symlink in *that* checkout.
 
 **Works in browser, fails in CLI**
 Same cause — the browser uses Agent Zero's built-in UI, not the connector API.

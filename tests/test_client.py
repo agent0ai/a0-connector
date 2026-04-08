@@ -728,3 +728,83 @@ async def test_file_op_requests_are_returned_via_result_event() -> None:
             "/ws",
         )
     ]
+
+
+async def test_exec_op_requests_are_returned_via_result_event() -> None:
+    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    fake_sio = FakeSocketIOClient()
+    client.sio = fake_sio
+    client.on_exec_op = AsyncMock(
+        return_value={
+            "op_id": "exec-1",
+            "ok": True,
+            "result": {"message": "Session 0 completed.", "output": "42", "running": False},
+        }
+    )
+
+    await client.connect_websocket()
+
+    handler = fake_sio.handlers[("/ws", "connector_exec_op")]
+    await handler(
+        {
+            "handlerId": "plugins.a0_connector.api.ws_connector.WsConnector",
+            "eventId": "evt-2",
+            "correlationId": "corr-2",
+            "ts": "2026-04-01T00:00:00Z",
+            "data": {
+                "op_id": "exec-1",
+                "runtime": "python",
+                "session": 0,
+                "code": "print(42)",
+            },
+        }
+    )
+
+    client.on_exec_op.assert_awaited_once()
+    assert fake_sio.emit_calls == [
+        (
+            "connector_exec_op_result",
+            {
+                "op_id": "exec-1",
+                "ok": True,
+                "result": {"message": "Session 0 completed.", "output": "42", "running": False},
+            },
+            "/ws",
+        )
+    ]
+
+
+async def test_send_remote_tree_update_uses_prefixed_ws_event() -> None:
+    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    fake_sio = FakeSocketIOClient(
+        call_response={
+            "results": [
+                {
+                    "ok": True,
+                    "data": {"accepted": True},
+                }
+            ]
+        }
+    )
+    client.sio = fake_sio
+
+    payload = {
+        "root_path": "/tmp/workspace",
+        "tree": "/tmp/workspace/\n└── app.py",
+        "tree_hash": "abc123",
+        "generated_at": "2026-04-08T12:00:00Z",
+    }
+    result = await client.send_remote_tree_update(payload)
+
+    assert result == {"accepted": True}
+    event, sent_payload, namespace = fake_sio.call_calls[0]
+    assert event == "connector_remote_tree_update"
+    assert namespace == "/ws"
+    assert sent_payload == payload

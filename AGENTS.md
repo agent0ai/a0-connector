@@ -9,13 +9,15 @@ Run TUI: `agentzero` (or `python -m agent_zero_cli`)
 **UI preview in browser: `python devtools/serve.py` → http://localhost:8566**
 Run tests: `pytest tests/ -v`
 Docs: `docs/` | Architecture: `docs/architecture.md` | TUI: `docs/tui-frontend.md`
+Workspace root: this repository (`a0-connector`)
+Plugin runtime path: `usr/plugins/a0_connector` (or `/a0/usr/plugins/a0_connector` in Docker)
 
 ---
 
 ## Table of Contents
 
 1. [Project Overview](#project-overview)
-2. [Repo Structure](#repo-structure)
+2. [Runtime Setup](#runtime-setup)
 3. [Dev Workflow — Browser Preview](#dev-workflow--browser-preview)
 4. [Project Structure & Key Files](#project-structure--key-files)
 5. [TUI Architecture](#tui-architecture)
@@ -35,12 +37,32 @@ Docs: `docs/` | Architecture: `docs/architecture.md` | TUI: `docs/tui-frontend.m
    instance, streams live agent events, and lets the user chat via a WebSocket
    protocol (`a0-connector.v1`).
 
-2. **`plugin/a0_connector`** — the Agent Zero plugin (symlinked into
-   `usr/plugins/`) that exposes the HTTP + Socket.IO API the CLI talks to.
+2. **`a0_connector` plugin backend** — source lives in this repo under
+   `plugin/a0_connector/`, and is deployed to Agent Zero at
+   `usr/plugins/a0_connector` (or `/a0/usr/plugins/a0_connector` for Dockerized
+   deployments).
 
 Both must be running for a live end-to-end session. For **UI-only work** the
 browser preview (see below) launches just the CLI against any available backend
 (or none — the disconnected screen is still fully renderable).
+
+---
+
+## Runtime Setup
+
+Use two running pieces:
+- an Agent Zero instance with `a0_connector` plugin deployed in `usr/plugins/a0_connector`
+- this connector CLI (`agentzero`)
+
+Recommended dev flow for backend changes:
+1. Keep plugin source in this repo at `plugin/a0_connector/`.
+2. Sync/deploy that folder into your target Agent Zero runtime copy.
+3. Restart Agent Zero and run connector tests from this repo:
+   `./.venv/bin/python -m pytest tests/ -v`
+
+Deployment targets:
+- Local Agent Zero checkout: `<agent-zero>/usr/plugins/a0_connector`
+- Dockerized Agent Zero: `/a0/usr/plugins/a0_connector` via your mapped volume
 
 ---
 
@@ -113,7 +135,7 @@ a0-connector/
 │   │   └── chat_list.py         # ChatListScreen — switch between contexts
 │   └── styles/
 │       └── app.tcss             # All TUI CSS (colors, borders, layout, .progress-active)
-├── plugin/a0_connector/         # Agent Zero plugin (backend)
+├── plugin/a0_connector/         # Plugin backend source (deploy to Agent Zero usr/plugins/a0_connector)
 ├── devtools/                    # UI development tools (browser preview, snapshots)
 │   ├── serve.py                 # textual-serve wrapper → browser at :8566
 │   ├── snapshot.py              # SVG snapshot capture
@@ -208,8 +230,9 @@ Screens are pushed modally with `push_screen_wait()` and return a value:
 
 ## Plugin Backend
 
-The plugin lives in `plugin/a0_connector/` and is symlinked into the Agent Zero
-`usr/plugins/` directory. It provides:
+The plugin source lives in this repo at `plugin/a0_connector/` and should be
+deployed into Agent Zero at `usr/plugins/a0_connector` (or
+`/a0/usr/plugins/a0_connector` in Docker). It provides:
 
 - HTTP handlers under `/api/plugins/a0_connector/v1/`
 - Socket.IO events on the `/ws` namespace (all prefixed `connector_`)
@@ -228,6 +251,37 @@ from agent import AgentContext   # BAD
 async def process(self, ...):
     from agent import AgentContext  # GOOD
 ```
+
+### Critical Streaming Invariant (`ws_connector.py`)
+
+In `api/ws_connector.py`, `from_sequence` is a **log-output cursor**
+(`LogOutput.end`), not an event `sequence` id.
+
+Keep cursor and event sequence separate:
+
+```python
+# Correct pattern
+cursor = from_sequence
+events, next_cursor = get_context_log_entries(context_id, after=cursor)
+cursor = max(cursor, next_cursor)
+```
+
+Never do this:
+
+```python
+# Wrong: mixes cursor domain with event sequence domain
+cursor = event["sequence"]
+```
+
+Why this matters:
+- Mixing them replays older status/tool events.
+- Replayed events make the TUI active-step shimmer jump back to previous lines
+  and flash.
+
+Quick regression signal:
+- During a single run, streamed `event.sequence` should be non-decreasing
+  (equal values are valid for in-place updates).
+- Backward jumps are a red flag for cursor misuse in the stream loop.
 
 ---
 
@@ -323,7 +377,8 @@ Tests use `anyio` with the asyncio backend. Async test fixtures use
 
 ### Ask before doing
 - `pip install` (new dependencies not already in `.venv`).
-- Editing `plugin/a0_connector/` backend files.
+- Editing backend files in `plugin/a0_connector/` or in a separately deployed
+  runtime copy under Agent Zero `usr/plugins/a0_connector`.
 - Deleting files outside of the above allowed paths.
 - Making git commits or pushes.
 

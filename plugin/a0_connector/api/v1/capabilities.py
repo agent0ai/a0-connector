@@ -18,6 +18,8 @@ _BASE_FEATURES = [
     "log_tail",
     "projects_list",
     "text_editor_remote",
+    "code_execution_remote",
+    "remote_file_tree",
     "connector_login",
 ]
 

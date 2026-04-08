@@ -12,7 +12,7 @@
 ```
 
 - **CLI** (`agent-zero-cli`): Textual TUI, installed via `pip install -e .`
-- **Plugin** (`plugin/a0_connector`): loaded from `usr/plugins/a0_connector` in the Agent Zero checkout
+- **Plugin** (`a0_connector`): source in `plugin/a0_connector/`, deployed into Agent Zero `usr/plugins/a0_connector`
 
 ## Startup flow
 
@@ -60,6 +60,8 @@ All events are `connector_`-prefixed to avoid collisions on the shared `/ws` nam
 | `connector_unsubscribe_context` | Unsubscribe from a context |
 | `connector_send_message` | Send user message (async; returns `accepted`) |
 | `connector_file_op_result` | Return result of a local file operation |
+| `connector_remote_tree_update` | Publish frontend workspace tree snapshots |
+| `connector_exec_op_result` | Return result of a frontend Python TTY execution operation |
 
 ### Server → Client
 
@@ -70,6 +72,7 @@ All events are `connector_`-prefixed to avoid collisions on the shared `/ws` nam
 | `connector_context_complete` | Agent finished responding |
 | `connector_error` | Application-level error for a context |
 | `connector_file_op` | Request a local file operation (read/write/patch) |
+| `connector_exec_op` | Request a frontend Python TTY execution operation |
 
 ### Event bridge
 
@@ -91,7 +94,24 @@ All events are `connector_`-prefixed to avoid collisions on the shared `/ws` nam
 
 The `text_editor_remote` tool (agent-side) emits `connector_file_op` to the subscribed CLI client. The CLI performs the file read/write/patch on the **local machine** and returns `connector_file_op_result`. Operations are correlated by `op_id`.
 
-`ws_runtime.py` manages the in-memory state: SID-to-context subscriptions and pending file operation futures, all thread-safe via `threading.RLock`.
+`ws_runtime.py` manages the in-memory state: SID-to-context subscriptions, pending file operation futures, pending execution futures, and latest remote tree snapshots per SID, all thread-safe via `threading.RLock`.
+
+## Remote execution operations
+
+The `code_execution_remote` tool emits `connector_exec_op` to the subscribed CLI client, which runs a Python TTY session on the frontend machine and returns `connector_exec_op_result`.
+
+Supported runtimes:
+- `python` (execute code)
+- `input` (send follow-up stdin)
+- `output` (poll more output for long-running jobs)
+- `reset` (discard a session)
+
+Each operation is correlated by `op_id` and scoped to a numeric `session` id.
+
+## Prompt context injection
+
+The frontend publishes a bounded remote workspace tree via `connector_remote_tree_update` (immediate on connect + periodic changed-only updates).  
+During prompt build, extension `extensions/python/message_loop_prompts_after/_76_include_remote_file_structure.py` injects a `remote_file_structure` prompt block into `loop_data.extras_temporary` when a snapshot is fresh (<= 90 seconds old) for the active context subscription.
 
 ## Security
 

@@ -5,18 +5,26 @@
 ```
 a0-connector/
 ├── src/agent_zero_cli/     # CLI (Textual, httpx, python-socketio)
-├── plugin/a0_connector/    # Plugin — symlink into Agent Zero usr/plugins/
+├── plugin/a0_connector/    # Plugin source for deployment to Agent Zero usr/plugins/a0_connector
 ├── tests/                  # pytest
 └── docs/                   # You are here
 ```
 
+## Runtime setup options
+
+- Local Agent Zero checkout (recommended for plugin iteration): deploy to
+  `<agent-zero>/usr/plugins/a0_connector`.
+- Dockerized Agent Zero: deploy to the mapped container path
+  `/a0/usr/plugins/a0_connector`.
+
 ## Setup
 
-### Plugin (in Agent Zero checkout)
+### Plugin runtime (in Agent Zero checkout)
 
 ```bash
-mkdir -p usr/plugins
-ln -sfn /path/to/a0-connector/plugin/a0_connector usr/plugins/a0_connector
+cd /path/to/agent-zero
+mkdir -p usr/plugins/a0_connector
+rsync -a /path/to/a0-connector/plugin/a0_connector/ usr/plugins/a0_connector/
 A0_SET_mcp_server_token=your-token python run_ui.py --host=127.0.0.1 --port=50001
 ```
 
@@ -31,6 +39,15 @@ agentzero
 ```
 
 > `aiohttp` is a transitive dependency of `python-engineio` but not declared in `pyproject.toml`. You must install it explicitly or WebSocket connections will fail.
+
+### Mirroring backend changes back into this repo
+
+If you edit an external runtime copy of the plugin, mirror changes back into
+this repo copy before testing/committing:
+
+```bash
+rsync -a --delete /path/to/agent-zero/usr/plugins/a0_connector/ plugin/a0_connector/
+```
 
 ## Tests
 

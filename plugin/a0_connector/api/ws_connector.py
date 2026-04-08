@@ -10,9 +10,13 @@ from helpers.ws_manager import WsResult
 
 from usr.plugins.a0_connector.helpers.event_bridge import get_context_log_entries
 from usr.plugins.a0_connector.helpers.ws_runtime import (
+    clear_remote_tree_snapshot,
     fail_pending_file_ops_for_sid,
+    fail_pending_exec_ops_for_sid,
     register_sid,
     resolve_pending_file_op,
+    resolve_pending_exec_op,
+    store_remote_tree_snapshot,
     subscribe_sid_to_context,
     subscribed_contexts_for_sid,
     subscribed_sids_for_context,
@@ -29,6 +33,8 @@ WS_FEATURES = [
     "connector_subscribe_context",
     "connector_send_message",
     "text_editor_remote",
+    "remote_file_tree",
+    "code_execution_remote",
 ]
 
 
@@ -55,9 +61,14 @@ class WsConnector(WsHandler):
         contexts = unregister_sid(sid)
         for context_id in contexts:
             self._cancel_streaming(sid, context_id)
+        clear_remote_tree_snapshot(sid)
         fail_pending_file_ops_for_sid(
             sid,
             error="CLI disconnected before completing the requested file operation",
+        )
+        fail_pending_exec_ops_for_sid(
+            sid,
+            error="CLI disconnected before completing the requested remote execution",
         )
         PrintStyle.debug(f"[a0-connector] /ws disconnected: {sid}")
 
@@ -84,6 +95,12 @@ class WsConnector(WsHandler):
 
         if event == "connector_file_op_result":
             return self._handle_file_op_result(data, sid)
+
+        if event == "connector_remote_tree_update":
+            return self._handle_remote_tree_update(data, sid)
+
+        if event == "connector_exec_op_result":
+            return self._handle_exec_op_result(data, sid)
 
         if event.startswith("connector_"):
             return WsResult.error(
@@ -248,6 +265,66 @@ class WsConnector(WsHandler):
 
         return {"op_id": op_id, "accepted": True}
 
+    def _handle_remote_tree_update(
+        self,
+        data: dict[str, Any],
+        sid: str,
+    ) -> dict[str, Any] | WsResult:
+        tree = data.get("tree")
+        root_path = data.get("root_path")
+        tree_hash = data.get("tree_hash")
+
+        if not isinstance(tree, str) or not tree.strip():
+            return WsResult.error(
+                code="INVALID_TREE_PAYLOAD",
+                message="tree is required",
+                correlation_id=data.get("correlationId"),
+            )
+
+        if not isinstance(root_path, str) or not root_path.strip():
+            return WsResult.error(
+                code="INVALID_TREE_PAYLOAD",
+                message="root_path is required",
+                correlation_id=data.get("correlationId"),
+            )
+
+        if not isinstance(tree_hash, str) or not tree_hash.strip():
+            return WsResult.error(
+                code="INVALID_TREE_PAYLOAD",
+                message="tree_hash is required",
+                correlation_id=data.get("correlationId"),
+            )
+
+        snapshot = store_remote_tree_snapshot(sid, data)
+        return {
+            "accepted": True,
+            "sid": sid,
+            "tree_hash": tree_hash,
+            "updated_at": snapshot.updated_at,
+        }
+
+    def _handle_exec_op_result(
+        self,
+        data: dict[str, Any],
+        sid: str,
+    ) -> dict[str, Any] | WsResult:
+        op_id = str(data.get("op_id", "")).strip()
+        if not op_id:
+            return WsResult.error(
+                code="MISSING_OP_ID",
+                message="op_id is required",
+                correlation_id=data.get("correlationId"),
+            )
+
+        if not resolve_pending_exec_op(op_id, sid=sid, payload=data):
+            return WsResult.error(
+                code="UNKNOWN_OP_ID",
+                message=f"No pending exec operation for op_id '{op_id}'",
+                correlation_id=data.get("correlationId"),
+            )
+
+        return {"op_id": op_id, "accepted": True}
+
     async def _resolve_context(
         self,
         *,
@@ -377,28 +454,14 @@ class WsConnector(WsHandler):
         *,
         from_sequence: int,
     ) -> None:
-        last_sequence = from_sequence
-        last_event_data = None
+        # `from_sequence` is a log-output cursor (not an event sequence number).
+        cursor = max(int(from_sequence or 0), 0)
         try:
             while context_id in subscribed_contexts_for_sid(sid):
-                # Poll starting from the last known sequence (overlapping by 1)
-                # to catch updates to the same log entry (streaming responses).
-                events, _ = get_context_log_entries(
-                    context_id,
-                    after=max(0, last_sequence - 1) if last_sequence > 0 else 0,
-                )
+                events, next_cursor = get_context_log_entries(context_id, after=cursor)
                 for event in events:
-                    seq = event.get("sequence")
-                    data = event.get("data")
-                    
-                    # Avoid sending the exact same event repeatedly if nothing changed
-                    if seq == last_sequence and data == last_event_data:
-                        continue
-                    
                     await self.emit_to(sid, "connector_context_event", event)
-                    last_sequence = seq
-                    last_event_data = data
-                
+                cursor = max(cursor, int(next_cursor or cursor))
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             raise

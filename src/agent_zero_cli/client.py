@@ -26,6 +26,9 @@ _EVENT_CONTEXT_EVENT = "connector_context_event"
 _EVENT_CONTEXT_COMPLETE = "connector_context_complete"
 _EVENT_FILE_OP = "connector_file_op"
 _EVENT_FILE_OP_RESULT = "connector_file_op_result"
+_EVENT_EXEC_OP = "connector_exec_op"
+_EVENT_EXEC_OP_RESULT = "connector_exec_op_result"
+_EVENT_REMOTE_TREE_UPDATE = "connector_remote_tree_update"
 _EVENT_ERROR = "connector_error"
 
 _SOCKET_IO_PROBE_QUERY = {"transport": "polling", "EIO": "4"}
@@ -75,6 +78,7 @@ class A0Client:
         self.on_context_complete: Callable[[dict[str, Any]], None] | None = None
         self.on_error: Callable[[dict[str, Any]], None] | None = None
         self.on_file_op: Callable[[dict[str, Any]], Any] | None = None
+        self.on_exec_op: Callable[[dict[str, Any]], Any] | None = None
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -326,6 +330,16 @@ class A0Client:
                 namespace=_WS_NAMESPACE,
             )
 
+        @self.sio.on(_EVENT_EXEC_OP, namespace=_WS_NAMESPACE)
+        async def _on_exec_op(payload: dict[str, Any]) -> None:
+            request = self._unwrap_envelope(payload)
+            result = await self._handle_exec_op(request)
+            await self.sio.emit(
+                _EVENT_EXEC_OP_RESULT,
+                result,
+                namespace=_WS_NAMESPACE,
+            )
+
         self._events_registered = True
 
     async def _handle_file_op(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -358,6 +372,36 @@ class A0Client:
             "error": "Invalid file_op handler result",
         }
 
+    async def _handle_exec_op(self, data: dict[str, Any]) -> dict[str, Any]:
+        callback = self.on_exec_op
+        op_id = data.get("op_id")
+        if callback is None:
+            return {
+                "op_id": op_id,
+                "ok": False,
+                "error": "No exec_op handler configured",
+            }
+
+        try:
+            result = callback(data)
+            if asyncio.iscoroutine(result):
+                result = await result
+        except Exception as exc:
+            return {
+                "op_id": op_id,
+                "ok": False,
+                "error": str(exc),
+            }
+
+        if isinstance(result, dict):
+            return result
+
+        return {
+            "op_id": op_id,
+            "ok": False,
+            "error": "Invalid exec_op handler result",
+        }
+
     async def fetch_capabilities(self) -> dict[str, Any]:
         response = await self._post("capabilities", require_api_key=False)
         if response.status_code == 404:
@@ -366,7 +410,7 @@ class A0Client:
                 "\n"
                 "The web UI can work while this endpoint is missing: the CLI needs the plugin.\n"
                 "For this workspace, the authoritative runtime plugin copy is:\n"
-                "  C:\\Users\\3CLYP50\\Documents\\GitHub\\dockervolume\\usr\\plugins\\a0_connector\n"
+                "  /home/eclypso/agentdocker/usr/plugins/a0_connector\n"
                 "Ensure Agent Zero is running with that plugin mounted at /a0/usr/plugins/a0_connector,\n"
                 "then restart Agent Zero. On a remote host, install the same plugin there before retrying."
             )
@@ -435,6 +479,9 @@ class A0Client:
             _EVENT_SUBSCRIBE,
             {"context_id": context_id, "from": from_seq},
         )
+
+    async def send_remote_tree_update(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._call(_EVENT_REMOTE_TREE_UPDATE, payload)
 
     async def unsubscribe_context(self, context_id: str) -> dict[str, Any]:
         return await self._call(

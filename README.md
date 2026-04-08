@@ -5,27 +5,39 @@ Terminal chat client + server plugin for [Agent Zero](https://github.com/frdel/a
 | Component | Location | What it does |
 |-----------|----------|--------------|
 | **CLI** (`agent-zero-cli`) | `src/agent_zero_cli/` | Textual TUI — connects over HTTP + Socket.IO |
-| **Plugin** (`a0_connector`) | `plugin/a0_connector/` | Runs inside Agent Zero — exposes HTTP routes + WebSocket handler |
+| **Plugin** (`a0_connector`) | `plugin/a0_connector/` (source), deployed to `usr/plugins/a0_connector` in Agent Zero | Runs inside Agent Zero — exposes HTTP routes + WebSocket handler |
 
 > The CLI and plugin are **installed separately**. If `agentzero` returns 404 on `/api/plugins/a0_connector/v1/capabilities`, the plugin isn't loaded — see [Troubleshooting](docs/README.md#troubleshooting).
 
 ## Quick start
 
-**1. Install the plugin** (in your Agent Zero checkout):
+**1. Run an Agent Zero instance with the connector plugin loaded**
+
+Local development instance (recommended for plugin work):
 
 ```bash
-mkdir -p usr/plugins
-ln -sfn /path/to/a0-connector/plugin/a0_connector usr/plugins/a0_connector
+cd /path/to/agent-zero
+mkdir -p usr/plugins/a0_connector
+rsync -a /path/to/a0-connector/plugin/a0_connector/ usr/plugins/a0_connector/
 A0_SET_mcp_server_token=your-token python run_ui.py --host=127.0.0.1 --port=50001
 ```
+
+Docker runtime is also supported if your container maps `/a0/usr/plugins`.
 
 **2. Install and run the CLI** (in this repo):
 
 ```bash
+python -m venv .venv && source .venv/bin/activate
 pip install -e .
-pip install aiohttp>=3.11.0   # transitive runtime dep — must be installed explicitly
+pip install "aiohttp>=3.11.0"   # transitive runtime dep — must be installed explicitly
 export AGENT_ZERO_HOST=http://127.0.0.1:50001
 agentzero
+```
+
+**3. If you edit backend/plugin code**, keep `plugin/a0_connector/` and the runtime `usr/plugins/a0_connector` copy in sync:
+
+```bash
+rsync -a --delete plugin/a0_connector/ /path/to/agent-zero/usr/plugins/a0_connector/
 ```
 
 If `AGENT_ZERO_HOST` or `AGENT_ZERO_API_KEY` are unset, the TUI prompts interactively. Values stay in memory unless you opt in to saving them to `~/.agent-zero/.env`. See [Configuration](docs/configuration.md).

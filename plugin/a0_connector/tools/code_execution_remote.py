@@ -1,0 +1,170 @@
+"""code_execution_remote tool — run Python TTY operations on the CLI machine via `/ws`."""
+from __future__ import annotations
+
+import asyncio
+import uuid
+from typing import Any
+
+from helpers.tool import Response, Tool
+from helpers.ws import NAMESPACE
+from helpers.ws_manager import ConnectionNotFoundError, get_shared_ws_manager
+
+from usr.plugins.a0_connector.helpers.ws_runtime import (
+    clear_pending_exec_op,
+    select_target_sid,
+    store_pending_exec_op,
+)
+
+
+EXEC_OP_TIMEOUT = 120.0
+EXEC_OP_EVENT = "connector_exec_op"
+
+
+class CodeExecutionRemote(Tool):
+    """Send Python TTY operations to the connected CLI machine."""
+
+    async def execute(self, **kwargs: Any) -> Response:
+        runtime = str(self.args.get("runtime", "")).strip().lower()
+        if runtime not in {"python", "output", "input", "reset"}:
+            return Response(
+                message=(
+                    "runtime is required (python, output, input, or reset)"
+                ),
+                break_loop=False,
+            )
+
+        context_id = self.agent.context.id
+        sid = select_target_sid(context_id)
+        if not sid:
+            return Response(
+                message=(
+                    "code_execution_remote: no CLI client connected to this context. "
+                    "Make sure the CLI is connected and subscribed."
+                ),
+                break_loop=False,
+            )
+
+        try:
+            session = int(self.args.get("session", 0) or 0)
+        except (TypeError, ValueError):
+            return Response(
+                message="session must be an integer",
+                break_loop=False,
+            )
+
+        op_id = str(uuid.uuid4())
+        payload: dict[str, Any] = {
+            "op_id": op_id,
+            "runtime": runtime,
+            "session": session,
+            "context_id": context_id,
+        }
+
+        if runtime == "python":
+            code = self.args.get("code")
+            if code is None or not str(code).strip():
+                return Response(
+                    message="code is required for runtime=python",
+                    break_loop=False,
+                )
+            payload["code"] = str(code)
+
+        elif runtime == "input":
+            keyboard = self.args.get("keyboard")
+            if keyboard is None:
+                keyboard = self.args.get("code")
+            if keyboard is None:
+                return Response(
+                    message="keyboard is required for runtime=input",
+                    break_loop=False,
+                )
+            payload["keyboard"] = str(keyboard)
+
+        elif runtime == "reset":
+            reason = self.args.get("reason")
+            if reason is not None:
+                payload["reason"] = str(reason)
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[dict[str, Any]] = loop.create_future()
+        store_pending_exec_op(
+            op_id,
+            sid=sid,
+            future=future,
+            loop=loop,
+            context_id=context_id,
+        )
+
+        try:
+            await get_shared_ws_manager().emit_to(
+                NAMESPACE,
+                sid,
+                EXEC_OP_EVENT,
+                payload,
+                handler_id=f"{self.__class__.__module__}.{self.__class__.__name__}",
+            )
+            result = await asyncio.wait_for(future, timeout=EXEC_OP_TIMEOUT)
+        except ConnectionNotFoundError:
+            clear_pending_exec_op(op_id)
+            return Response(
+                message=(
+                    "code_execution_remote: the selected CLI client disconnected before "
+                    "the execution request could be delivered"
+                ),
+                break_loop=False,
+            )
+        except asyncio.TimeoutError:
+            clear_pending_exec_op(op_id)
+            return Response(
+                message=(
+                    "code_execution_remote: timed out waiting for CLI to respond "
+                    f"to runtime={runtime!r} in session {session}"
+                ),
+                break_loop=False,
+            )
+        except Exception as exc:
+            clear_pending_exec_op(op_id)
+            return Response(
+                message=f"code_execution_remote: error sending exec_op: {exc}",
+                break_loop=False,
+            )
+        finally:
+            clear_pending_exec_op(op_id)
+
+        return Response(
+            message=self._extract_result(result, runtime, session),
+            break_loop=False,
+        )
+
+    def _extract_result(self, result: Any, runtime: str, session: int) -> str:
+        if not isinstance(result, dict):
+            return f"Unexpected response format from CLI: {result!r}"
+
+        ok = bool(result.get("ok"))
+        data = result.get("result")
+        error = result.get("error")
+
+        if not ok:
+            return (
+                f"Error (runtime={runtime!r}, session={session}): "
+                f"{error or 'Unknown error'}"
+            )
+
+        if not isinstance(data, dict):
+            data = {}
+
+        output = str(data.get("output") or data.get("text") or "").strip()
+        message = str(data.get("message") or "").strip()
+        running = bool(data.get("running"))
+
+        parts: list[str] = []
+        if message:
+            parts.append(message)
+        if output:
+            parts.append(output)
+
+        if not parts:
+            state = "running" if running else "completed"
+            parts.append(f"Session {session} {state}.")
+
+        return "\n\n".join(parts)

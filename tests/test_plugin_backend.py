@@ -2,7 +2,8 @@ import importlib
 import sys
 import types
 import asyncio
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -11,10 +12,13 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DOCKERVOLUME_ROOT = PROJECT_ROOT.parent / "dockervolume"
-PLUGIN_ROOT = DOCKERVOLUME_ROOT / "usr" / "plugins"
+PLUGIN_ROOT = PROJECT_ROOT / "plugin"
+if not (PLUGIN_ROOT / "a0_connector").exists():
+    PLUGIN_ROOT = DOCKERVOLUME_ROOT / "usr" / "plugins"
+
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-if str(DOCKERVOLUME_ROOT) not in sys.path:
+if DOCKERVOLUME_ROOT.exists() and str(DOCKERVOLUME_ROOT) not in sys.path:
     sys.path.insert(0, str(DOCKERVOLUME_ROOT))
 
 
@@ -41,6 +45,9 @@ def _install_fake_helpers(
     print_style_mod = types.ModuleType("helpers.print_style")
     security_mod = types.ModuleType("helpers.security")
     dotenv_mod = types.ModuleType("helpers.dotenv")
+    extension_mod = types.ModuleType("helpers.extension")
+    ws_mod = types.ModuleType("helpers.ws")
+    ws_manager_mod = types.ModuleType("helpers.ws_manager")
     settings_mod = types.ModuleType("helpers.settings")
     runtime_mod = types.ModuleType("helpers.runtime")
     projects_mod = types.ModuleType("helpers.projects")
@@ -88,10 +95,65 @@ def _install_fake_helpers(
         def error(*args, **kwargs) -> None:
             return None
 
+        @staticmethod
+        def debug(*args, **kwargs) -> None:
+            return None
+
+    class Extension:
+        def __init__(self, *args, **kwargs) -> None:
+            self.agent = None
+
+    class WsResult(dict):
+        @classmethod
+        def error(
+            cls,
+            *,
+            code: str,
+            message: str,
+            correlation_id: str | None = None,
+        ):
+            payload: dict[str, object] = {
+                "ok": False,
+                "error": {
+                    "code": code,
+                    "message": message,
+                },
+            }
+            if correlation_id is not None:
+                payload["correlationId"] = correlation_id
+            return cls(payload)
+
+    class WsHandler:
+        def __init__(self, app=None, thread_lock=None) -> None:
+            self.app = app
+            self.thread_lock = thread_lock
+
+        async def emit_to(
+            self,
+            sid: str,
+            event: str,
+            payload: dict,
+            correlation_id: str | None = None,
+        ) -> None:
+            return None
+
+    class ConnectionNotFoundError(RuntimeError):
+        pass
+
+    class _FakeSharedWsManager:
+        async def emit_to(self, *args, **kwargs) -> None:
+            return None
+
     api_mod.ApiHandler = ApiHandler
     api_mod.Request = Request
     api_mod.Response = Response
     print_style_mod.PrintStyle = PrintStyle
+    extension_mod.Extension = Extension
+    ws_mod.WsHandler = WsHandler
+    ws_mod.NAMESPACE = "/ws"
+    ws_manager_mod.WsResult = WsResult
+    ws_manager_mod.ConnectionNotFoundError = ConnectionNotFoundError
+    ws_manager_mod.get_shared_ws_manager = lambda: _FakeSharedWsManager()
     security_mod.safe_filename = lambda value: value
     runtime_mod.is_development = lambda: True
     runtime_mod.is_dockerized = lambda: False
@@ -226,6 +288,9 @@ def _install_fake_helpers(
     sys.modules["helpers"] = helpers_pkg
     sys.modules["helpers.api"] = api_mod
     sys.modules["helpers.print_style"] = print_style_mod
+    sys.modules["helpers.extension"] = extension_mod
+    sys.modules["helpers.ws"] = ws_mod
+    sys.modules["helpers.ws_manager"] = ws_manager_mod
     sys.modules["helpers.security"] = security_mod
     sys.modules["helpers.dotenv"] = dotenv_mod
     sys.modules["helpers.settings"] = settings_mod
@@ -262,6 +327,15 @@ def _reload(module_name: str):
     return importlib.import_module(module_name)
 
 
+def _reset_ws_runtime_state(ws_runtime_mod) -> None:
+    with ws_runtime_mod._state_lock:
+        ws_runtime_mod._context_subscriptions.clear()
+        ws_runtime_mod._sid_contexts.clear()
+        ws_runtime_mod._pending_file_ops.clear()
+        ws_runtime_mod._pending_exec_ops.clear()
+        ws_runtime_mod._remote_tree_snapshots.clear()
+
+
 def test_capabilities_advertise_current_ws_contract() -> None:
     _install_fake_helpers()
 
@@ -276,6 +350,8 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert payload["websocket_namespace"] == "/ws"
     assert payload["websocket_handlers"] == ["plugins/a0_connector/ws_connector"]
     assert "connector_login" in payload["features"]
+    assert "remote_file_tree" in payload["features"]
+    assert "code_execution_remote" in payload["features"]
     assert "settings_get" in payload["features"]
     assert "settings_set" in payload["features"]
     assert "agents_list" in payload["features"]
@@ -589,3 +665,189 @@ def test_event_bridge_uses_log_output_cursor() -> None:
             },
         }
     ]
+
+
+def test_ws_connector_hello_advertises_remote_exec_and_tree_features() -> None:
+    _install_fake_helpers()
+
+    ws_connector_mod = _reload("usr.plugins.a0_connector.api.ws_connector")
+    handler = ws_connector_mod.WsConnector(None, None)
+
+    payload = asyncio.run(handler.process("connector_hello", {}, "sid-1"))
+
+    assert payload["protocol"] == "a0-connector.v1"
+    assert "remote_file_tree" in payload["features"]
+    assert "code_execution_remote" in payload["features"]
+
+
+def test_ws_connector_remote_tree_update_stores_latest_snapshot() -> None:
+    _install_fake_helpers()
+
+    ws_runtime_mod = _reload("usr.plugins.a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+    ws_connector_mod = _reload("usr.plugins.a0_connector.api.ws_connector")
+    handler = ws_connector_mod.WsConnector(None, None)
+
+    sid = "sid-tree"
+    context_id = "ctx-tree"
+    ws_runtime_mod.register_sid(sid)
+    ws_runtime_mod.subscribe_sid_to_context(sid, context_id)
+
+    result = handler._handle_remote_tree_update(
+        {
+            "root_path": "/tmp/workspace",
+            "tree": "/tmp/workspace/\n└── app.py",
+            "tree_hash": "tree-hash-1",
+            "generated_at": "2026-04-08T00:00:00Z",
+        },
+        sid,
+    )
+
+    assert result["accepted"] is True
+    latest = ws_runtime_mod.latest_remote_tree_for_context(context_id, max_age_seconds=90.0)
+    assert latest is not None
+    assert latest["tree_hash"] == "tree-hash-1"
+    assert latest["root_path"] == "/tmp/workspace"
+
+    _reset_ws_runtime_state(ws_runtime_mod)
+
+
+def test_ws_connector_exec_op_result_resolves_pending_future() -> None:
+    _install_fake_helpers()
+
+    ws_runtime_mod = _reload("usr.plugins.a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+    ws_connector_mod = _reload("usr.plugins.a0_connector.api.ws_connector")
+    handler = ws_connector_mod.WsConnector(None, None)
+
+    async def _scenario() -> None:
+        sid = "sid-exec"
+        ws_runtime_mod.register_sid(sid)
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        ws_runtime_mod.store_pending_exec_op(
+            "exec-1",
+            sid=sid,
+            future=future,
+            loop=loop,
+            context_id="ctx-exec",
+        )
+
+        result = handler._handle_exec_op_result(
+            {
+                "op_id": "exec-1",
+                "ok": True,
+                "result": {"message": "Session 0 completed.", "output": "42", "running": False},
+            },
+            sid,
+        )
+
+        assert result == {"op_id": "exec-1", "accepted": True}
+        resolved = await asyncio.wait_for(future, timeout=0.25)
+        assert resolved["result"]["output"] == "42"
+
+    asyncio.run(_scenario())
+    _reset_ws_runtime_state(ws_runtime_mod)
+
+
+def _install_fake_agent_loopdata_module() -> None:
+    agent_mod = types.ModuleType("agent")
+
+    @dataclass
+    class LoopData:
+        extras_temporary: dict[str, str] = field(default_factory=dict)
+
+    agent_mod.LoopData = LoopData
+    sys.modules["agent"] = agent_mod
+
+
+def test_remote_tree_prompt_extension_injects_when_snapshot_is_fresh() -> None:
+    _install_fake_helpers()
+    _install_fake_agent_loopdata_module()
+
+    ws_runtime_mod = _reload("usr.plugins.a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+    extension_mod = _reload(
+        "usr.plugins.a0_connector.extensions.python.message_loop_prompts_after._76_include_remote_file_structure"
+    )
+
+    sid = "sid-ext-fresh"
+    context_id = "ctx-ext-fresh"
+    ws_runtime_mod.register_sid(sid)
+    ws_runtime_mod.subscribe_sid_to_context(sid, context_id)
+    ws_runtime_mod.store_remote_tree_snapshot(
+        sid,
+        {
+            "root_path": "/workspace",
+            "tree": "/workspace/\n└── README.md",
+            "tree_hash": "fresh-tree",
+            "generated_at": "2026-04-08T00:00:00Z",
+        },
+    )
+
+    extension = extension_mod.IncludeRemoteFileStructure()
+    extension.agent = types.SimpleNamespace(
+        context=types.SimpleNamespace(id=context_id),
+        read_prompt=lambda _name, **kwargs: (
+            f"{kwargs['folder']}|{kwargs['generated_at']}|{kwargs['age_seconds']}|{kwargs['file_structure']}"
+        ),
+    )
+
+    loop_data = sys.modules["agent"].LoopData()
+    asyncio.run(extension.execute(loop_data))
+
+    assert "remote_file_structure" in loop_data.extras_temporary
+    injected = loop_data.extras_temporary["remote_file_structure"]
+    assert "/workspace" in injected
+    assert "README.md" in injected
+
+    _reset_ws_runtime_state(ws_runtime_mod)
+
+
+def test_remote_tree_prompt_extension_skips_stale_or_missing_snapshots() -> None:
+    _install_fake_helpers()
+    _install_fake_agent_loopdata_module()
+
+    ws_runtime_mod = _reload("usr.plugins.a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+    extension_mod = _reload(
+        "usr.plugins.a0_connector.extensions.python.message_loop_prompts_after._76_include_remote_file_structure"
+    )
+
+    sid = "sid-ext-stale"
+    context_id = "ctx-ext-stale"
+    ws_runtime_mod.register_sid(sid)
+    ws_runtime_mod.subscribe_sid_to_context(sid, context_id)
+    ws_runtime_mod.store_remote_tree_snapshot(
+        sid,
+        {
+            "root_path": "/workspace",
+            "tree": "/workspace/\n└── stale.txt",
+            "tree_hash": "stale-tree",
+            "generated_at": "2026-04-08T00:00:00Z",
+        },
+    )
+    with ws_runtime_mod._state_lock:
+        snapshot = ws_runtime_mod._remote_tree_snapshots[sid]
+        ws_runtime_mod._remote_tree_snapshots[sid] = ws_runtime_mod.RemoteTreeSnapshot(
+            sid=snapshot.sid,
+            payload=dict(snapshot.payload),
+            updated_at=time.time() - 200.0,
+        )
+
+    extension = extension_mod.IncludeRemoteFileStructure()
+    extension.agent = types.SimpleNamespace(
+        context=types.SimpleNamespace(id=context_id),
+        read_prompt=lambda _name, **kwargs: "should-not-be-used",
+    )
+
+    stale_loop_data = sys.modules["agent"].LoopData()
+    asyncio.run(extension.execute(stale_loop_data))
+    assert "remote_file_structure" not in stale_loop_data.extras_temporary
+
+    ws_runtime_mod.unregister_sid(sid)
+    missing_loop_data = sys.modules["agent"].LoopData()
+    asyncio.run(extension.execute(missing_loop_data))
+    assert "remote_file_structure" not in missing_loop_data.extras_temporary
+
+    _reset_ws_runtime_state(ws_runtime_mod)

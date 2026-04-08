@@ -15,6 +15,8 @@ from textual.widgets import ContentSwitcher, Footer
 from agent_zero_cli.client import A0Client, A0ConnectorPluginMissingError
 from agent_zero_cli.commands import CommandAvailability, CommandSpec
 from agent_zero_cli.config import CLIConfig, load_config, save_env
+from agent_zero_cli.remote_exec import PythonTTYManager
+from agent_zero_cli.remote_files import RemoteFileUtility
 from agent_zero_cli.rendering import (
     _EVENT_CATEGORY,
     _STATUS_LABEL,
@@ -101,6 +103,10 @@ class AgentZeroCLI(App):
             for spec in self._command_registry
             for name in spec.names()
         }
+        self._remote_files = RemoteFileUtility(scan_root=os.getcwd())
+        self._python_tty = PythonTTYManager(cwd=self._remote_files.scan_root)
+        self._remote_tree_task: asyncio.Task[None] | None = None
+        self._last_remote_tree_hash = ""
 
     def compose(self) -> ComposeResult:
         yield ConnectionStatus(id="connection-status")
@@ -453,6 +459,8 @@ class AgentZeroCLI(App):
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = not value
         if not value:
+            self._stop_remote_tree_publisher()
+            asyncio.create_task(self._python_tty.close())
             self._clear_model_switcher()
             self._set_splash_stage(
                 "error",
@@ -583,6 +591,8 @@ class AgentZeroCLI(App):
         password: str = "",
         save_credentials_flag: bool = False,
     ) -> None:
+        self._stop_remote_tree_publisher()
+        self._last_remote_tree_hash = ""
         normalized_host = self._normalize_host(host)
         self.config.instance_url = normalized_host
         self.client.base_url = normalized_host.rstrip("/")
@@ -734,6 +744,7 @@ class AgentZeroCLI(App):
         self.client.on_context_complete = lambda data: self._run_on_ui(self._handle_context_complete, data)
         self.client.on_error = lambda data: self._run_on_ui(self._handle_connector_error, data)
         self.client.on_file_op = self._handle_file_op
+        self.client.on_exec_op = self._handle_exec_op
 
         try:
             await self.client.connect_websocket()
@@ -783,6 +794,7 @@ class AgentZeroCLI(App):
         self._sync_connection_status("connected", normalized_host)
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = False
+        self._start_remote_tree_publisher()
         self._set_splash_stage(
             "ready",
             message="Ready when you are.",
@@ -884,86 +896,44 @@ class AgentZeroCLI(App):
         self._show_notice(f"{code}: {message}", error=True)
 
     def _handle_file_op(self, data: dict[str, Any]) -> dict[str, Any]:
-        op_id = data.get("op_id", "")
-        op = data.get("op", "")
-        path = data.get("path", "")
+        return self._remote_files.handle_file_op(data)
+
+    async def _handle_exec_op(self, data: dict[str, Any]) -> dict[str, Any]:
+        return await self._python_tty.handle_exec_op(data)
+
+    def _start_remote_tree_publisher(self) -> None:
+        self._stop_remote_tree_publisher()
+        self._remote_tree_task = asyncio.create_task(self._remote_tree_publish_loop())
+
+    def _stop_remote_tree_publisher(self) -> None:
+        task = self._remote_tree_task
+        self._remote_tree_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _remote_tree_publish_loop(self) -> None:
+        try:
+            await self._publish_remote_tree_snapshot()
+            while self.connected:
+                await asyncio.sleep(30.0)
+                await self._publish_remote_tree_snapshot()
+        except asyncio.CancelledError:
+            return
+
+    async def _publish_remote_tree_snapshot(self) -> None:
+        if not self.connected:
+            return
+
+        snapshot = self._remote_files.build_tree_snapshot()
+        if snapshot.tree_hash == self._last_remote_tree_hash:
+            return
 
         try:
-            if op == "read":
-                return self._file_op_read(op_id, path, data)
-            if op == "write":
-                return self._file_op_write(op_id, path, data)
-            if op == "patch":
-                return self._file_op_patch(op_id, path, data)
-            return {"op_id": op_id, "ok": False, "error": f"Unknown op: {op}"}
-        except Exception as exc:
-            return {"op_id": op_id, "ok": False, "error": str(exc)}
+            await self.client.send_remote_tree_update(snapshot.as_payload())
+        except Exception:
+            return
 
-    def _file_op_read(self, op_id: str, path: str, data: dict[str, Any]) -> dict[str, Any]:
-        line_from = data.get("line_from")
-        line_to = data.get("line_to")
-
-        if not os.path.isfile(path):
-            return {"op_id": op_id, "ok": False, "error": f"File not found: {path}"}
-
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            lines = handle.readlines()
-
-        total = len(lines)
-        start = (line_from - 1) if line_from and line_from > 0 else 0
-        end = line_to if line_to and line_to <= total else total
-        selected = lines[start:end]
-
-        content = ""
-        for index, line in enumerate(selected, start=start + 1):
-            content += f"{index:>4} | {line}"
-
-        return {
-            "op_id": op_id,
-            "ok": True,
-            "result": {
-                "content": content,
-                "total_lines": total,
-                "line_from": start + 1,
-                "line_to": end,
-            },
-        }
-
-    def _file_op_write(self, op_id: str, path: str, data: dict[str, Any]) -> dict[str, Any]:
-        content = data.get("content", "")
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        return {"op_id": op_id, "ok": True, "result": {"path": path}}
-
-    def _file_op_patch(self, op_id: str, path: str, data: dict[str, Any]) -> dict[str, Any]:
-        edits = data.get("edits", [])
-        if not os.path.isfile(path):
-            return {"op_id": op_id, "ok": False, "error": f"File not found: {path}"}
-
-        with open(path, "r", encoding="utf-8") as handle:
-            lines = handle.readlines()
-
-        sorted_edits = sorted(edits, key=lambda item: item.get("from", 0), reverse=True)
-        for edit in sorted_edits:
-            fr = edit.get("from", 1)
-            to = edit.get("to")
-            content = edit.get("content")
-            idx = fr - 1
-
-            if to is None and content is not None:
-                lines[idx:idx] = content.splitlines(True)
-            elif content is None:
-                to_idx = to if to else fr
-                del lines[idx:to_idx]
-            else:
-                to_idx = to if to else fr
-                lines[idx:to_idx] = content.splitlines(True)
-
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.writelines(lines)
-
-        return {"op_id": op_id, "ok": True, "result": {"path": path}}
+        self._last_remote_tree_hash = snapshot.tree_hash
 
     def _slash_query(self, text: str) -> str | None:
         if not text:
@@ -1308,6 +1278,8 @@ class AgentZeroCLI(App):
             self._sync_ready_actions()
 
     async def _disconnect_and_exit(self) -> None:
+        self._stop_remote_tree_publisher()
+        await self._python_tty.close()
         try:
             await self.client.disconnect()
         except Exception:
