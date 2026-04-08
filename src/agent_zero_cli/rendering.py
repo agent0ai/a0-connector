@@ -21,9 +21,9 @@ _EVENT_CATEGORY: dict[str, str] = {
     "warning": "warning",
     "error": "error",
     "info": "info",
-    "status": "info",
-    "message_complete": "info",
-    "context_updated": "info",
+    "status": "status",
+    "message_complete": "status",
+    "context_updated": "status",
 }
 
 # Human-readable activity labels per event type.
@@ -46,6 +46,7 @@ def extract_detail(event_type: str, data: dict[str, Any]) -> str:
     """Extract a short human-readable detail string from event data."""
     heading = (data.get("heading") or "").strip()
     text = (data.get("text") or "").strip()
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
 
     if event_type in ("tool_start", "tool_output", "tool_end"):
         # heading is the tool name
@@ -58,6 +59,18 @@ def extract_detail(event_type: str, data: dict[str, Any]) -> str:
         return "memory"
 
     if event_type == "status":
+        step = str(meta.get("step") or "").strip()
+        if step:
+            return step[:50]
+
+        headline = str(meta.get("headline") or "").strip()
+        if headline:
+            return headline[:50]
+
+        tool_name = str(meta.get("tool_name") or "").strip()
+        if tool_name:
+            return f"Using {tool_name}"[:50]
+
         # text may be a JSON blob or a sentence — take first sentence only
         raw = heading or text
         # strip obvious JSON artifacts
@@ -112,7 +125,7 @@ def render_connector_event(log: ChatLog, event: dict[str, Any]) -> bool:
     if category == "info":
         msg = f"{heading}: {text}" if heading else text
         if msg:
-            log.append_or_update(seq, f"[dim]{msg}[/dim]")
+            log.append_or_update(seq, Padding(f"[dim]{msg}[/dim]", (0, 0, 0, 2)))
             return True
         return False
 

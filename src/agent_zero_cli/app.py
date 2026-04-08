@@ -878,7 +878,13 @@ class AgentZeroCLI(App):
                     event_data = event.get("data", {})
                     detail = extract_detail(event_type, event_data)
                     seq = event.get("sequence", -1)
-                    log.append_or_update(seq, f"[dim]{label}{f' [{detail}]' if detail else ''}[/dim]")
+                    log.append_or_update_status(
+                        seq,
+                        label,
+                        detail,
+                        event_data.get("meta"),
+                        active=False,
+                    )
 
         self._sync_body_mode()
 
@@ -919,7 +925,7 @@ class AgentZeroCLI(App):
             event_data = data.get("data", {})
             detail = extract_detail(event_type, event_data)
             self._set_activity(label, detail)
-            log.set_active_status(data.get("sequence", -1), label, detail)
+            log.set_active_status(data.get("sequence", -1), label, detail, event_data.get("meta"))
 
         if category in ("warning", "error", "user", "code", "info"):
             self._show_chat_intro(log, category)

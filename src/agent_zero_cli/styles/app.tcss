@@ -19,6 +19,14 @@ Screen {
     margin-top: 1;
 }
 
+#chat-log > StatusEntry {
+    margin-top: 1;
+}
+
+.status-entry:focus {
+    background: #1b232d;
+}
+
 .agent-zero-banner {
     margin-top: 0;
 }
@@ -46,6 +54,7 @@ Screen {
     margin-top: 1;
     padding: 0 1;
     align: left middle;
+    background: #101820;
 }
 
 #model-switcher-summary {
@@ -64,6 +73,7 @@ Screen {
 
 #model-switcher-preset > SelectCurrent {
     color: #9aa7b4;
+    background: #101820;
 }
 
 #model-switcher-preset:focus > SelectCurrent {
@@ -132,7 +142,7 @@ ModelPresetsScreen {
 }
 
 Footer {
-    background: #17181a;
+    background: #101820;
 }
 
 HostInputScreen {

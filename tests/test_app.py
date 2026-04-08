@@ -3,10 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from rich.padding import Padding
 from textual.widgets import Static
 
 from agent_zero_cli.app import AgentZeroCLI, _DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
+from agent_zero_cli.rendering import render_connector_event
 from agent_zero_cli.screens.model_presets import ModelPresetsResult
 from agent_zero_cli.widgets.chat_log import (
     _AGENT_ZERO_BANNER,
@@ -31,10 +33,12 @@ class FakeChatLog:
         self.cleared = False
         self.lines: list[object] = []
         self.sequences: dict[int, object] = {}
+        self.status_entries: dict[int, dict[str, object]] = {}
         self.intro_visible = False
         self._active_seq: int | None = None
         self._active_label = ""
         self._active_detail = ""
+        self._active_meta: dict[str, object] = {}
 
     def write(self, message: object) -> None:
         self.writes.append(message)
@@ -48,21 +52,57 @@ class FakeChatLog:
             self.writes.append(renderable)
         self.sequences[sequence] = renderable
 
-    def set_active_status(self, seq: int, label: str, detail: str) -> None:
+    def append_or_update_status(
+        self,
+        sequence: int,
+        label: str,
+        detail: str,
+        meta: dict[str, object] | None = None,
+        *,
+        active: bool = False,
+        scroll: bool = True,
+    ) -> None:
+        entry = {
+            "label": label,
+            "detail": detail,
+            "meta": meta or {},
+            "active": active,
+        }
+        if sequence not in self.sequences:
+            self.writes.append(entry)
+        self.status_entries[sequence] = entry
+        self.sequences[sequence] = entry
+
+    def set_active_status(
+        self,
+        seq: int,
+        label: str,
+        detail: str,
+        meta: dict[str, object] | None = None,
+    ) -> None:
         self._active_seq = seq
         self._active_label = label
         self._active_detail = detail
-        self.append_or_update(seq, f"active:{label}:{detail}")
+        self._active_meta = meta or {}
+        self.append_or_update_status(seq, label, detail, meta, active=True)
 
     def dim_active_status(self) -> None:
         if self._active_seq is not None:
-            self.append_or_update(self._active_seq, f"dim:{self._active_label}:{self._active_detail}")
+            self.append_or_update_status(
+                self._active_seq,
+                self._active_label,
+                self._active_detail,
+                self._active_meta,
+                active=False,
+            )
         self._active_seq = None
         self._active_label = ""
         self._active_detail = ""
+        self._active_meta = {}
 
     def stop_active_status(self) -> None:
         self._active_seq = None
+        self._active_meta = {}
 
     def advance_shimmer(self) -> None:
         pass
@@ -71,6 +111,7 @@ class FakeChatLog:
         self.cleared = True
         self.lines.clear()
         self.sequences.clear()
+        self.status_entries.clear()
         self._active_seq = None
 
 
@@ -457,6 +498,85 @@ def test_context_event_renders_info_messages_as_standalone_entries(dummy_app: Du
     )
 
     assert dummy_app.rendered_events[-1]["event"] == "info"
+
+
+def test_render_connector_event_pads_info_messages() -> None:
+    log = FakeChatLog()
+
+    rendered = render_connector_event(
+        log,
+        {
+            "event": "info",
+            "sequence": 7,
+            "data": {"text": "Process reset, agent nudged."},
+        },
+    )
+
+    assert rendered is True
+    assert isinstance(log.writes[-1], Padding)
+
+
+def test_context_event_keeps_status_messages_in_activity_lane(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+
+    dummy_app._handle_context_event(
+        {
+            "context_id": "ctx-1",
+            "event": "status",
+            "sequence": 4,
+            "data": {
+                "text": "Thinking about the next step",
+                "meta": {
+                    "step": "Using response...",
+                    "thoughts": ["Plan the answer", "Send the answer"],
+                },
+            },
+        }
+    )
+
+    input_widget = dummy_app._test_widgets["#message-input"]
+    log = dummy_app._test_widgets["#chat-log"]
+    assert input_widget.activity_label == "Thinking"
+    assert input_widget.activity_detail == "Using response..."
+    assert log._active_seq == 4
+    assert log._active_meta == {
+        "step": "Using response...",
+        "thoughts": ["Plan the answer", "Send the answer"],
+    }
+    assert dummy_app.rendered_events == []
+
+
+def test_context_snapshot_preserves_status_meta_for_history(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+
+    dummy_app._handle_context_snapshot(
+        {
+            "context_id": "ctx-1",
+            "events": [
+                {
+                    "event": "status",
+                    "sequence": 9,
+                    "data": {
+                        "meta": {
+                            "step": "Using web_search...",
+                            "thoughts": ["Search docs", "Compare options"],
+                        }
+                    },
+                }
+            ],
+        }
+    )
+
+    log = dummy_app._test_widgets["#chat-log"]
+    assert log.status_entries[9]["detail"] == "Using web_search..."
+    assert log.status_entries[9]["meta"] == {
+        "step": "Using web_search...",
+        "thoughts": ["Search docs", "Compare options"],
+    }
 
 
 async def test_clear_chat_does_not_return_to_welcome(dummy_app: DummyAgentZeroCLI) -> None:
