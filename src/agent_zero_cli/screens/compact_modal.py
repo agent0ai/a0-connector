@@ -1,22 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
-from rich.markdown import Markdown
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual import events
 from textual.containers import Center, Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Select, Static
-
-
-@dataclass(frozen=True)
-class ModelPreset:
-    name: str
-    label: str = ""
-    description: str = ""
+from textual.widgets import Button, Static
 
 
 @dataclass(frozen=True)
@@ -25,81 +18,19 @@ class CompactResult:
     preset_name: str | None
 
 
-def _coerce_model_preset(value: object) -> ModelPreset:
-    if isinstance(value, ModelPreset):
-        return value
-    if isinstance(value, str):
-        clean = value.strip()
-        return ModelPreset(name=clean, label=clean or "Unnamed preset")
-    if isinstance(value, Mapping):
-        raw_name = str(value.get("name") or value.get("value") or "").strip()
-        raw_label = str(value.get("label") or value.get("title") or raw_name).strip()
-        raw_description = str(value.get("description") or value.get("summary") or "").strip()
-        return ModelPreset(
-            name=raw_name,
-            label=raw_label or raw_name or "Unnamed preset",
-            description=raw_description,
-        )
-    clean = str(value).strip()
-    return ModelPreset(name=clean, label=clean or "Unnamed preset")
-
-
-def _render_stats(stats: Mapping[str, Any] | None) -> Markdown:
-    if not stats:
-        return Markdown(
-            "\n".join(
-                [
-                    "# Compaction stats",
-                    "",
-                    "No compaction stats are available yet.",
-                ]
-            )
-        )
-
-    lines = ["# Compaction stats", ""]
-    seen: set[str] = set()
-    preferred_fields = (
-        ("message_count", "Messages"),
-        ("token_count", "Tokens"),
-        ("visible_count", "Visible messages"),
-        ("minimum_tokens", "Minimum tokens"),
-        ("max_tokens", "Maximum tokens"),
-    )
-    for key, label in preferred_fields:
-        if key in stats:
-            lines.append(f"- {label}: {stats[key]}")
-            seen.add(key)
-
-    extras = [key for key in stats if key not in seen and key != "ok"]
-    if extras:
-        lines.extend(["", "Additional details:"])
-        for key in sorted(extras):
-            lines.append(f"- {key.replace('_', ' ').title()}: {stats[key]}")
-
-    return Markdown("\n".join(lines))
-
-
-def _preset_options(
-    presets: Sequence[ModelPreset | Mapping[str, Any] | str] | None,
-) -> list[tuple[str, str]]:
-    options: list[tuple[str, str]] = [("No preset", "")]
-    for raw in presets or []:
-        preset = _coerce_model_preset(raw)
-        if not preset.name:
-            continue
-        label = preset.label or preset.name
-        if preset.description:
-            label = f"{label} - {preset.description}"
-        options.append((label, preset.name))
-    return options
-
-
-def _preset_values(presets: Sequence[ModelPreset | Mapping[str, Any] | str] | None) -> set[str]:
-    return {
-        preset.name
-        for preset in (_coerce_model_preset(raw) for raw in presets or [])
-        if preset.name
-    }
+def _format_metric(value: object, default: str = "0") -> str:
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        if value.is_integer():
+            return f"{int(value):,}"
+        return f"{value:,.2f}"
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text if text else default
 
 
 class CompactScreen(ModalScreen[CompactResult | None]):
@@ -113,50 +44,45 @@ class CompactScreen(ModalScreen[CompactResult | None]):
     def __init__(
         self,
         stats: Mapping[str, Any] | None = None,
-        presets: Sequence[ModelPreset | Mapping[str, Any] | str] | None = None,
         *,
         use_chat_model: bool = True,
-        preset_name: str | None = None,
         available: bool = False,
         reason: str = "",
     ) -> None:
         super().__init__()
         self._stats = dict(stats or {})
-        self._presets = list(presets or [])
         self._use_chat_model = use_chat_model
-        self._preset_name = preset_name or ""
         self._available = available
         self._reason = reason
         self._status = ""
-        self._suppress_events = False
 
     def compose(self) -> ComposeResult:
         with Center():
             with Vertical(id="compact-box"):
-                yield Static("Compact Chat", id="compact-title")
+                yield Static("Compact Chat History", id="compact-title")
                 yield Static(
-                    "Review the compaction stats, choose a model, and start compaction.",
+                    "This will summarize your entire conversation into a single optimized message.",
                     id="compact-description",
                 )
-                yield Static(_render_stats(self._stats), id="compact-stats")
-                with Horizontal(id="compact-controls"):
+                with Horizontal(id="compact-metrics"):
+                    with Vertical(classes="compact-metric-card", id="compact-messages-card"):
+                        yield Static("MESSAGES", classes="compact-metric-label")
+                        yield Static("0", classes="compact-metric-value", id="compact-messages-value")
+                    with Vertical(classes="compact-metric-card", id="compact-tokens-card"):
+                        yield Static("TOKENS", classes="compact-metric-label")
+                        yield Static("0", classes="compact-metric-value", id="compact-tokens-value")
+                with Horizontal(id="compact-model-and-note"):
                     with Vertical(id="compact-model-field"):
-                        yield Static("Model", id="compact-model-label")
-                        yield Select(
-                            [("Chat model", "chat"), ("Utility model", "utility")],
-                            prompt="Model",
-                            allow_blank=False,
-                            value="chat" if self._use_chat_model else "utility",
-                            id="compact-model",
-                        )
-                    with Vertical(id="compact-preset-field"):
-                        yield Static("Preset", id="compact-preset-label")
-                        yield Select(
-                            _preset_options(self._presets),
-                            prompt="Optional preset",
-                            allow_blank=False,
-                            value=self._preset_name or "",
-                            id="compact-preset",
+                        yield Static("MODEL", id="compact-model-label")
+                        with Horizontal(id="compact-mode-toggle"):
+                            yield Button("Chat", id="compact-mode-chat")
+                            yield Button("Utility", id="compact-mode-utility")
+                        yield Static("", id="compact-model-preview")
+                    with Vertical(id="compact-note-field"):
+                        yield Static(
+                            "The context will be replaced with a compacted summary. "
+                            "The original conversation will be backed up.",
+                            id="compact-note",
                         )
                 yield Static("", id="compact-status")
                 with Horizontal(id="compact-actions"):
@@ -165,32 +91,55 @@ class CompactScreen(ModalScreen[CompactResult | None]):
 
     def on_mount(self) -> None:
         self._sync_controls()
-        self._focus_model_select()
+        self._sync_responsive_layout(self.size.width)
+        self._focus_primary_control()
 
-    def _focus_model_select(self) -> None:
-        self.query_one("#compact-model", Select).focus()
+    def on_resize(self, event: events.Resize) -> None:
+        self._sync_responsive_layout(event.size.width)
+
+    def _sync_responsive_layout(self, width: int) -> None:
+        if width < 110:
+            self.add_class("compact-narrow")
+        else:
+            self.remove_class("compact-narrow")
+
+    def _focus_primary_control(self) -> None:
+        button_id = "#compact-mode-chat" if self._use_chat_model else "#compact-mode-utility"
+        self.query_one(button_id, Button).focus()
 
     def _sync_controls(self) -> None:
-        preset_values = _preset_values(self._presets)
-        self._suppress_events = True
-        try:
-            self.query_one("#compact-stats", Static).update(_render_stats(self._stats))
-            self.query_one("#compact-model", Select).value = "chat" if self._use_chat_model else "utility"
-            self.query_one("#compact-preset", Select).value = (
-                self._preset_name if self._preset_name in preset_values else ""
-            )
-        finally:
-            self._suppress_events = False
+        self.query_one("#compact-messages-value", Static).update(
+            _format_metric(self._stats.get("message_count"), default="0")
+        )
+        self.query_one("#compact-tokens-value", Static).update(
+            _format_metric(self._stats.get("token_count"), default="0")
+        )
+        self._sync_mode_buttons()
+        self._sync_mode_preview()
         self._update_status()
         self._update_submit_state()
+
+    def _sync_mode_buttons(self) -> None:
+        chat_button = self.query_one("#compact-mode-chat", Button)
+        utility_button = self.query_one("#compact-mode-utility", Button)
+        if self._use_chat_model:
+            chat_button.add_class("is-active")
+            utility_button.remove_class("is-active")
+        else:
+            utility_button.add_class("is-active")
+            chat_button.remove_class("is-active")
+
+    def _sync_mode_preview(self) -> None:
+        mode_label = "Chat" if self._use_chat_model else "Utility"
+        self.query_one("#compact-model-preview", Static).update(f"{mode_label} model selected")
 
     def _update_status(self, message: str = "") -> None:
         self._status = message
         status = self.query_one("#compact-status", Static)
         if message:
-            status.update(Text.from_markup(message))
+            status.update(Text(message))
         elif not self._available and self._reason:
-            status.update(Text.from_markup(f"[yellow]{self._reason}[/yellow]"))
+            status.update(Text(self._reason, style="yellow"))
         else:
             status.update("")
 
@@ -201,37 +150,25 @@ class CompactScreen(ModalScreen[CompactResult | None]):
         self,
         *,
         stats: Mapping[str, Any] | None = None,
-        presets: Sequence[ModelPreset | Mapping[str, Any] | str] | None = None,
         available: bool | None = None,
         reason: str | None = None,
     ) -> None:
-        """Replace the stats/presets snapshot shown by the modal."""
+        """Replace the compaction snapshot shown by the modal."""
 
         if stats is not None:
             self._stats = dict(stats)
-        if presets is not None:
-            self._presets = list(presets)
         if available is not None:
             self._available = available
         if reason is not None:
             self._reason = reason
 
-        self._suppress_events = True
-        try:
-            self.query_one("#compact-stats", Static).update(_render_stats(self._stats))
-            self.query_one("#compact-preset", Select).set_options(_preset_options(self._presets))
-        finally:
-            self._suppress_events = False
-        preset_values = _preset_values(self._presets)
-        if self._preset_name not in preset_values:
-            self._preset_name = ""
         self._sync_controls()
 
     @property
     def current_result(self) -> CompactResult:
         return CompactResult(
             use_chat_model=self._use_chat_model,
-            preset_name=self._preset_name or None,
+            preset_name=None,
         )
 
     def action_cancel(self) -> None:
@@ -245,26 +182,21 @@ class CompactScreen(ModalScreen[CompactResult | None]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
+        if button_id == "compact-mode-chat":
+            self._use_chat_model = True
+            self._sync_controls()
+            return
+        if button_id == "compact-mode-utility":
+            self._use_chat_model = False
+            self._sync_controls()
+            return
         if button_id == "compact-submit":
             self.action_compact()
         elif button_id == "compact-cancel":
             self.dismiss(None)
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if self._suppress_events:
-            return
-        widget_id = event.select.id or ""
-        if widget_id == "compact-model":
-            self._use_chat_model = str(event.value) == "chat"
-        elif widget_id == "compact-preset":
-            self._preset_name = str(event.value)
-        else:
-            return
-        self._update_status()
-
 
 __all__ = [
     "CompactResult",
     "CompactScreen",
-    "ModelPreset",
 ]

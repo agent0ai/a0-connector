@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ from textual.widgets import Static
 from agent_zero_cli.app import AgentZeroCLI, _DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.rendering import render_connector_event
+from agent_zero_cli.screens.compact_modal import CompactResult
 from agent_zero_cli.screens.model_presets import ModelPresetsResult
 from agent_zero_cli.widgets.command_palette import AgentCommandPalette
 from agent_zero_cli.widgets.chat_log import (
@@ -979,6 +981,172 @@ async def test_model_presets_command_opens_picker_and_applies_selection(
     await dummy_app._cmd_model_presets()
 
     assert selected == ["Fast"]
+
+
+async def test_compact_command_works_without_model_presets_feature(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app.connector_features = {"compact_chat"}
+
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_compaction_stats",
+        lambda context_id: _async_return({"ok": True, "stats": {"message_count": 4, "token_count": 1298}}),
+    )
+
+    presets_calls: list[bool] = []
+
+    async def fail_if_called():
+        presets_calls.append(True)
+        raise AssertionError("get_model_presets should not be called when feature is unavailable")
+
+    monkeypatch.setattr(dummy_app.client, "get_model_presets", fail_if_called)
+
+    opened: list[object] = []
+
+    async def fake_push_screen_wait(screen):
+        opened.append(screen)
+        return CompactResult(use_chat_model=False, preset_name=None)
+
+    monkeypatch.setattr(dummy_app, "push_screen_wait", fake_push_screen_wait)
+
+    compact_calls: list[tuple[str, bool, str | None]] = []
+
+    async def fake_compact_chat(
+        context_id: str,
+        *,
+        use_chat_model: bool,
+        preset_name: str | None = None,
+    ):
+        compact_calls.append((context_id, use_chat_model, preset_name))
+        return {"ok": True, "message": "Compaction started"}
+
+    monkeypatch.setattr(dummy_app.client, "compact_chat", fake_compact_chat)
+    refresh_contexts: list[str] = []
+    monkeypatch.setattr(
+        dummy_app,
+        "_begin_compaction_refresh",
+        lambda context_id: refresh_contexts.append(context_id),
+    )
+
+    await dummy_app._cmd_compact()
+
+    assert opened
+    assert compact_calls == [("ctx-1", False, None)]
+    assert presets_calls == []
+    assert refresh_contexts == ["ctx-1"]
+
+
+async def test_compact_command_handles_compact_request_exception_gracefully(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app.connector_features = {"compact_chat", "model_presets"}
+
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_compaction_stats",
+        lambda context_id: _async_return({"ok": True, "stats": {"message_count": 4, "token_count": 1298}}),
+    )
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_model_presets",
+        lambda: _async_return([{"name": "Balanced"}]),
+    )
+    monkeypatch.setattr(
+        dummy_app,
+        "push_screen_wait",
+        lambda screen: _async_return(CompactResult(use_chat_model=True, preset_name=None)),
+    )
+
+    async def fail_compact_chat(
+        context_id: str,
+        *,
+        use_chat_model: bool,
+        preset_name: str | None = None,
+    ):
+        del context_id, use_chat_model, preset_name
+        raise RuntimeError("[Errno 104] Connection reset by peer")
+
+    monkeypatch.setattr(dummy_app.client, "compact_chat", fail_compact_chat)
+
+    await dummy_app._cmd_compact()
+
+    log = dummy_app._test_widgets["#chat-log"]
+    assert any("Failed to start compaction:" in str(line) for line in log.writes)
+
+
+def test_context_event_suppresses_stream_during_compaction_refresh(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app._compaction_refresh_context = "ctx-1"
+
+    dummy_app._handle_context_event(
+        {
+            "context_id": "ctx-1",
+            "event": "assistant_message",
+            "sequence": 7,
+            "data": {"text": "Compacting chat history..."},
+        }
+    )
+
+    dummy_app._handle_context_event(
+        {
+            "context_id": "ctx-1",
+            "event": "status",
+            "sequence": 8,
+            "data": {"meta": {"step": "Analyzing context"}},
+        }
+    )
+
+    assert dummy_app.rendered_events == []
+    log = dummy_app._test_widgets["#chat-log"]
+    assert log.status_entries == {}
+
+
+async def test_wait_for_compaction_and_reload_resubscribes_context(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app._compaction_refresh_context = "ctx-1"
+    dummy_app._compaction_refresh_task = asyncio.current_task()
+
+    polls = iter(
+        [
+            {"ok": False, "status_code": 409, "message": "Cannot compact while agent is running"},
+            {"ok": False, "message": "Not enough content to compact (minimum 1,000 tokens)"},
+        ]
+    )
+
+    async def fake_get_compaction_stats(context_id: str):
+        assert context_id == "ctx-1"
+        return next(polls)
+
+    monkeypatch.setattr(dummy_app.client, "get_compaction_stats", fake_get_compaction_stats)
+    monkeypatch.setattr("agent_zero_cli.app._COMPACTION_POLL_INTERVAL_SECONDS", 0.0)
+
+    switched: list[tuple[str, bool]] = []
+
+    async def fake_switch_context(context_id: str, *, has_messages_hint: bool) -> None:
+        switched.append((context_id, has_messages_hint))
+
+    monkeypatch.setattr(dummy_app, "_switch_context", fake_switch_context)
+
+    await dummy_app._wait_for_compaction_and_reload("ctx-1")
+
+    assert switched == [("ctx-1", True)]
+    assert dummy_app._compaction_refresh_context is None
 
 
 def test_slash_query_opens_command_palette_with_seeded_query(

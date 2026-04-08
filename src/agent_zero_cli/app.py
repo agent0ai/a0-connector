@@ -47,6 +47,8 @@ _DEFAULT_HOST = "http://127.0.0.1:5080"
 _PROTOCOL_VERSION = "a0-connector.v1"
 _WS_NAMESPACE = "/ws"
 _WS_HANDLER = "plugins/a0_connector/ws_connector"
+_COMPACTION_POLL_INTERVAL_SECONDS = 0.75
+_COMPACTION_POLL_TIMEOUT_SECONDS = 180.0
 
 
 class AgentZeroCLI(App):
@@ -111,6 +113,8 @@ class AgentZeroCLI(App):
         self._model_switch_allowed = False
         self._pause_latched = False
         self._slash_palette_query: str | None = None
+        self._compaction_refresh_context: str | None = None
+        self._compaction_refresh_task: asyncio.Task[None] | None = None
 
     def compose(self) -> ComposeResult:
         yield ConnectionStatus(id="connection-status")
@@ -471,6 +475,7 @@ class AgentZeroCLI(App):
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = not value
         if not value:
+            self._cancel_compaction_refresh()
             self._set_pause_latched(False)
             self._stop_remote_tree_publisher()
             asyncio.create_task(self._python_tty.close())
@@ -507,7 +512,7 @@ class AgentZeroCLI(App):
         return CommandAvailability(True)
 
     def _compact_availability(self) -> CommandAvailability:
-        base = self._require_features("compact_chat", "model_presets")
+        base = self._require_features("compact_chat")
         if not base.available:
             return base
         if not self.current_context:
@@ -873,6 +878,9 @@ class AgentZeroCLI(App):
             return
 
         event_type = data.get("event", "")
+        if self._compaction_refresh_context == context_id and event_type != "error":
+            return
+
         if self._message_flag_for_event(event_type):
             self._mark_context_has_messages()
 
@@ -1148,6 +1156,9 @@ class AgentZeroCLI(App):
         self._set_idle()
 
     async def _switch_context(self, context_id: str, *, has_messages_hint: bool) -> None:
+        if self._compaction_refresh_context and self._compaction_refresh_context != context_id:
+            self._cancel_compaction_refresh()
+
         if self.current_context:
             await self.client.unsubscribe_context(self.current_context)
 
@@ -1162,6 +1173,73 @@ class AgentZeroCLI(App):
         self._sync_body_mode()
         await self.client.subscribe_context(context_id, from_seq=0)
         await self._refresh_model_switcher()
+
+    def _cancel_compaction_refresh(self) -> None:
+        task = self._compaction_refresh_task
+        self._compaction_refresh_task = None
+        self._compaction_refresh_context = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _finalize_compaction_refresh(self, context_id: str) -> None:
+        if self._compaction_refresh_context == context_id:
+            self._compaction_refresh_context = None
+
+        if self._compaction_refresh_task is asyncio.current_task():
+            self._compaction_refresh_task = None
+
+        if self.current_context != context_id:
+            return
+
+        self.agent_active = False
+        self._sync_ready_actions()
+        input_widget = self.query_one("#message-input", ChatInput)
+        input_widget.disabled = False
+        self._focus_message_input()
+        self._set_idle()
+
+    def _begin_compaction_refresh(self, context_id: str) -> None:
+        self._cancel_compaction_refresh()
+        self._compaction_refresh_context = context_id
+        self._set_pause_latched(False)
+        self.agent_active = True
+        self._sync_ready_actions()
+        input_widget = self.query_one("#message-input", ChatInput)
+        input_widget.disabled = True
+        self._set_activity("Compacting chat history", "Updating context")
+        self._compaction_refresh_task = asyncio.create_task(
+            self._wait_for_compaction_and_reload(context_id)
+        )
+
+    async def _wait_for_compaction_and_reload(self, context_id: str) -> None:
+        deadline = asyncio.get_running_loop().time() + _COMPACTION_POLL_TIMEOUT_SECONDS
+        try:
+            while asyncio.get_running_loop().time() < deadline:
+                if self._compaction_refresh_context != context_id:
+                    return
+                if not self.connected or self.current_context != context_id:
+                    return
+
+                try:
+                    stats = await self.client.get_compaction_stats(context_id)
+                except Exception:
+                    await asyncio.sleep(_COMPACTION_POLL_INTERVAL_SECONDS)
+                    continue
+
+                status_code = int(stats.get("status_code") or 0)
+                if status_code == 409:
+                    await asyncio.sleep(_COMPACTION_POLL_INTERVAL_SECONDS)
+                    continue
+
+                await self._switch_context(context_id, has_messages_hint=True)
+                return
+
+            self._show_notice(
+                "Compaction is taking longer than expected. Reopen this chat from /chats to refresh it.",
+                error=True,
+            )
+        finally:
+            self._finalize_compaction_refresh(context_id)
 
     async def _cmd_chats(self) -> None:
         try:
@@ -1286,40 +1364,66 @@ class AgentZeroCLI(App):
             self._show_notice(availability.reason or "Compaction is unavailable.", error=True)
             return
 
+        context_id = self.current_context or ""
+        screen = CompactScreen(
+            stats=None,
+            available=False,
+            reason="Loading compaction data...",
+        )
+        result_task = asyncio.create_task(self.push_screen_wait(screen))
+
+        stats_payload: dict[str, Any]
         try:
-            stats_payload, presets = await asyncio.gather(
-                self.client.get_compaction_stats(self.current_context or ""),
-                self.client.get_model_presets(),
-            )
+            stats_result = await self.client.get_compaction_stats(context_id)
         except Exception as exc:
-            self._show_notice(f"Failed to load compaction data: {exc}", error=True)
-            return
+            stats_payload = {
+                "ok": False,
+                "message": f"Failed to load compaction stats: {exc}",
+            }
+        else:
+            if isinstance(stats_result, dict):
+                stats_payload = stats_result
+            else:
+                stats_payload = {
+                    "ok": False,
+                    "message": "Compaction stats returned an unexpected response.",
+                }
 
         available = bool(stats_payload.get("ok"))
         reason = "" if available else str(stats_payload.get("message") or "Compaction is unavailable.")
-        screen = CompactScreen(
-            stats=stats_payload.get("stats"),
-            presets=presets,
-            available=available,
-            reason=reason,
-        )
-        result = await self.push_screen_wait(screen)
+
+        if not result_task.done():
+            try:
+                screen.set_compaction_data(
+                    stats=stats_payload.get("stats"),
+                    available=available,
+                    reason=reason,
+                )
+            except Exception:
+                pass
+
+        result = await result_task
         if result is None:
             return
 
         if not isinstance(result, CompactResult):
-            raise TypeError(f"Unexpected compact result: {result!r}")
+            self._show_notice(f"Unexpected compaction result: {result!r}", error=True)
+            return
 
-        response = await self.client.compact_chat(
-            self.current_context or "",
-            use_chat_model=result.use_chat_model,
-            preset_name=result.preset_name,
-        )
+        try:
+            response = await self.client.compact_chat(
+                context_id,
+                use_chat_model=result.use_chat_model,
+                preset_name=result.preset_name,
+            )
+        except Exception as exc:
+            self._show_notice(f"Failed to start compaction: {exc}", error=True)
+            return
         if not response.get("ok"):
             self._show_notice(str(response.get("message") or "Compaction failed."), error=True)
             return
 
-        self._show_notice(str(response.get("message") or "Compaction started."))
+        self._begin_compaction_refresh(context_id)
 
     async def _cmd_pause(self) -> None:
         availability = self._pause_availability()
