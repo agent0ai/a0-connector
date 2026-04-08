@@ -551,6 +551,87 @@ async def test_help_is_generated_from_registry_on_welcome(dummy_app: DummyAgentZ
     assert "/exit" not in splash.state.detail
 
 
+def test_pause_requires_advertised_feature(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.agent_active = True
+    dummy_app.connector_features = set()
+
+    availability = dummy_app._pause_availability()
+
+    assert availability.available is False
+    assert "pause" in (availability.reason or "")
+
+
+async def test_pause_command_releases_input_and_latches_paused_state(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app.agent_active = True
+    dummy_app.connector_features = {"pause"}
+    input_widget = dummy_app._test_widgets["#message-input"]
+    input_widget.disabled = True
+
+    monkeypatch.setattr(
+        dummy_app.client,
+        "pause_agent",
+        lambda context_id: _async_return({"ok": True, "message": "Agent paused."}),
+    )
+
+    await dummy_app._cmd_pause()
+
+    log = dummy_app._test_widgets["#chat-log"]
+    assert dummy_app.agent_active is False
+    assert dummy_app._pause_latched is True
+    assert input_widget.disabled is False
+    assert input_widget.focused is True
+    assert input_widget.activity_idle is True
+    assert log.writes == []
+
+
+def test_binding_description_switches_to_resume_when_paused(dummy_app: DummyAgentZeroCLI) -> None:
+    binding = next(binding for binding in dummy_app.BINDINGS if binding.action == "pause_agent")
+
+    assert dummy_app.get_binding_description(binding) == "Pause"
+
+    dummy_app._pause_latched = True
+
+    assert dummy_app.get_binding_description(binding) == "Resume"
+
+
+async def test_pause_action_resumes_when_paused(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app.connector_features = {"pause"}
+    dummy_app._pause_latched = True
+    input_widget = dummy_app._test_widgets["#message-input"]
+
+    calls: list[tuple[str | None, bool]] = []
+
+    async def fake_pause_agent(context_id: str | None, *, paused: bool = True):
+        calls.append((context_id, paused))
+        return {"ok": True, "message": "Agent unpaused."}
+
+    monkeypatch.setattr(dummy_app.client, "pause_agent", fake_pause_agent)
+
+    await dummy_app.action_pause_agent()
+
+    log = dummy_app._test_widgets["#chat-log"]
+    assert calls == [("ctx-1", False)]
+    assert dummy_app._pause_latched is False
+    assert dummy_app.agent_active is True
+    assert input_widget.disabled is True
+    assert input_widget.activity_label == "Resuming"
+    assert log.writes == []
+
+
 def test_system_commands_are_curated_and_ordered(dummy_app: DummyAgentZeroCLI) -> None:
     screen = SimpleNamespace(query=lambda selector: [])
 

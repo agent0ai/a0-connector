@@ -10,7 +10,7 @@ from textual.binding import Binding
 from textual.command import CommandPalette
 from textual.reactive import reactive
 from textual.theme import Theme
-from textual.widgets import ContentSwitcher, Footer
+from textual.widgets import ContentSwitcher
 
 from agent_zero_cli.client import A0Client, A0ConnectorPluginMissingError
 from agent_zero_cli.commands import CommandAvailability, CommandSpec
@@ -34,6 +34,7 @@ from agent_zero_cli.widgets.command_palette import (
 from agent_zero_cli.widgets import (
     ChatInput,
     ConnectionStatus,
+    DynamicFooter,
     ModelSwitcherBar,
     SlashCommand,
     SlashCommandMenu,
@@ -109,6 +110,7 @@ class AgentZeroCLI(App):
         self._remote_tree_task: asyncio.Task[None] | None = None
         self._last_remote_tree_hash = ""
         self._model_switch_allowed = False
+        self._pause_latched = False
 
     def compose(self) -> ComposeResult:
         yield ConnectionStatus(id="connection-status")
@@ -118,7 +120,7 @@ class AgentZeroCLI(App):
         yield SlashCommandMenu()
         yield ModelSwitcherBar(id="model-switcher-bar")
         yield ChatInput(id="message-input")
-        yield Footer()
+        yield DynamicFooter()
 
     async def on_mount(self) -> None:
         input_widget = self.query_one("#message-input", ChatInput)
@@ -296,6 +298,13 @@ class AgentZeroCLI(App):
             return
         self._set_splash_state(actions=self._welcome_actions())
 
+    def _set_pause_latched(self, value: bool) -> None:
+        if self._pause_latched == value:
+            return
+        self._pause_latched = value
+        self.refresh_bindings()
+        self._sync_ready_actions()
+
     def _sync_body_mode(self) -> None:
         body = self.query_one("#body-switcher", ContentSwitcher)
         if self.connected and self.current_context_has_messages:
@@ -342,6 +351,11 @@ class AgentZeroCLI(App):
 
         log = self.query_one("#chat-log", ChatLog)
         log.write(f"[red]{message}[/red]" if error else message)
+
+    def get_binding_description(self, binding: Binding) -> str:
+        if binding.action == "pause_agent":
+            return "Resume" if self._pause_latched else "Pause"
+        return binding.description
 
     def _message_flag_for_event(self, event_type: str) -> bool:
         return event_type in {"user_message", "assistant_message", "assistant_delta"}
@@ -469,6 +483,7 @@ class AgentZeroCLI(App):
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = not value
         if not value:
+            self._set_pause_latched(False)
             self._stop_remote_tree_publisher()
             asyncio.create_task(self._python_tty.close())
             self._clear_model_switcher()
@@ -516,16 +531,27 @@ class AgentZeroCLI(App):
         return CommandAvailability(True)
 
     def _pause_availability(self) -> CommandAvailability:
-        base = self._require_connection()
+        base = self._require_features("pause")
         if not base.available:
             return base
-        if not hasattr(self.client, "pause_agent"):
-            return CommandAvailability(False, "Pause is not exposed by this connector build.")
         if not self.current_context:
             return CommandAvailability(False, "Open or create a chat context first.")
         if not self.agent_active:
             return CommandAvailability(False, "Pause becomes available while the agent is running.")
         return CommandAvailability(True)
+
+    def _resume_availability(self) -> CommandAvailability:
+        base = self._require_features("pause")
+        if not base.available:
+            return base
+        if not self.current_context:
+            return CommandAvailability(False, "Open or create a chat context first.")
+        if not self._pause_latched:
+            return CommandAvailability(False, "Resume becomes available after pausing the active run.")
+        return CommandAvailability(True)
+
+    def _pause_toggle_availability(self) -> CommandAvailability:
+        return self._resume_availability() if self._pause_latched else self._pause_availability()
 
     def _nudge_availability(self) -> CommandAvailability:
         base = self._require_context()
@@ -560,7 +586,12 @@ class AgentZeroCLI(App):
         return (
             action("chats", "Chats", "Open chat history.", self._require_features("chats_list")),
             action("compact", "Compact", "Compact this chat.", self._compact_availability()),
-            action("pause", "Pause", "Pause the active run.", self._pause_availability()),
+            action(
+                "pause",
+                "Resume" if self._pause_latched else "Pause",
+                "Resume the paused run." if self._pause_latched else "Pause the active run.",
+                self._pause_toggle_availability(),
+            ),
             action("nudge", "Nudge", "Continue the current run.", self._nudge_availability()),
         )
 
@@ -870,10 +901,11 @@ class AgentZeroCLI(App):
                 render_connector_event(log, data)
             return
 
-        self.agent_active = True
-        self._sync_ready_actions()
         input_widget = self.query_one("#message-input", ChatInput)
-        input_widget.disabled = True
+        if not self._pause_latched:
+            self.agent_active = True
+            self._sync_ready_actions()
+            input_widget.disabled = True
 
         if category == "response":
             self._response_delivered = True
@@ -902,6 +934,7 @@ class AgentZeroCLI(App):
         if context_id != self.current_context:
             return
 
+        self._set_pause_latched(False)
         self.agent_active = False
         self._sync_ready_actions()
         input_widget = self.query_one("#message-input", ChatInput)
@@ -1030,6 +1063,7 @@ class AgentZeroCLI(App):
             self._show_notice("No active chat context.", error=True)
             return
 
+        self._set_pause_latched(False)
         self._mark_context_has_messages()
         self._response_delivered = False
         event.input.disabled = True
@@ -1144,10 +1178,13 @@ class AgentZeroCLI(App):
             )
             return
 
+        if event.action == "pause":
+            self.run_worker(self.action_pause_agent(), exclusive=True, name="splash-pause")
+            return
+
         command = {
             "chats": "/chats",
             "compact": "/compact",
-            "pause": "/pause",
             "nudge": "/nudge",
         }.get(event.action)
         if command:
@@ -1165,6 +1202,7 @@ class AgentZeroCLI(App):
             await self.client.unsubscribe_context(self.current_context)
 
         self.current_context = context_id
+        self._set_pause_latched(False)
         self.current_context_has_messages = has_messages_hint
         self._response_delivered = False
         log = self.query_one("#chat-log", ChatLog)
@@ -1339,12 +1377,43 @@ class AgentZeroCLI(App):
             return
 
         try:
-            await self.client.pause_agent(self.current_context)
+            response = await self.client.pause_agent(self.current_context)
         except Exception as exc:
             self._show_notice(f"Pause failed: {exc}", error=True)
             return
 
-        self._show_notice("Agent paused.")
+        if not response.get("ok"):
+            self._show_notice(str(response.get("message") or "Pause failed."), error=True)
+            return
+
+        self._set_pause_latched(True)
+        self.agent_active = False
+        input_widget = self.query_one("#message-input", ChatInput)
+        input_widget.disabled = False
+        self._focus_message_input()
+        self._set_idle()
+
+    async def _cmd_resume(self) -> None:
+        availability = self._resume_availability()
+        if not availability.available:
+            self._show_notice(availability.reason or "Resume is unavailable.", error=True)
+            return
+
+        try:
+            response = await self.client.pause_agent(self.current_context, paused=False)
+        except Exception as exc:
+            self._show_notice(f"Resume failed: {exc}", error=True)
+            return
+
+        if not response.get("ok"):
+            self._show_notice(str(response.get("message") or "Resume failed."), error=True)
+            return
+
+        self._set_pause_latched(False)
+        self.agent_active = True
+        input_widget = self.query_one("#message-input", ChatInput)
+        input_widget.disabled = True
+        self._set_activity("Resuming")
 
     async def _cmd_nudge(self) -> None:
         availability = self._nudge_availability()
@@ -1353,6 +1422,7 @@ class AgentZeroCLI(App):
             return
 
         input_widget = self.query_one("#message-input", ChatInput)
+        self._set_pause_latched(False)
         input_widget.disabled = True
         self.agent_active = True
         self._response_delivered = False
@@ -1384,6 +1454,9 @@ class AgentZeroCLI(App):
         await self._cmd_nudge()
 
     async def action_pause_agent(self) -> None:
+        if self._pause_latched:
+            await self._cmd_resume()
+            return
         await self._cmd_pause()
 
     async def action_quit(self) -> None:

@@ -526,6 +526,28 @@ class A0Client:
         )
         response.raise_for_status()
 
+    async def pause_agent(
+        self,
+        context_id: str | None,
+        *,
+        paused: bool = True,
+    ) -> dict[str, Any]:
+        response = await self._post(
+            "pause",
+            {"context_id": context_id or "", "paused": paused},
+        )
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "message": self._response_message(response),
+                "status_code": response.status_code,
+            }
+
+        data = self._json(response)
+        if "ok" not in data:
+            data["ok"] = True
+        return data
+
     async def list_projects(self) -> list[dict[str, Any]]:
         response = await self._post("projects_list")
         response.raise_for_status()

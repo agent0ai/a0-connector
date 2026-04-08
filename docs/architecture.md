@@ -43,6 +43,7 @@ All routes: `POST /api/plugins/a0_connector/v1/<endpoint>`
 | `chat_get` | API key | Get a single context |
 | `chat_reset` | API key | Reset a context |
 | `chat_delete` | API key | Delete a context |
+| `pause` | API key | Pause the currently running context |
 | `message_send` | API key | Send a message (with optional base64 attachments) |
 | `log_tail` | API key | Paginated context log entries |
 | `projects_list` | API key | List available projects |

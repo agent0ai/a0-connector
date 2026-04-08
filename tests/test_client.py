@@ -532,6 +532,62 @@ async def test_get_chat_uses_context_id_payload() -> None:
     )
 
 
+async def test_pause_agent_posts_pause_request_and_normalizes_success() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={"ok": True, "paused": True, "message": "Agent paused."},
+        )
+    )
+
+    result = await client.pause_agent("ctx-1")
+
+    assert result == {"ok": True, "paused": True, "message": "Agent paused."}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/pause",
+        json={"context_id": "ctx-1", "paused": True},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_pause_agent_can_resume_with_paused_false() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={"ok": True, "paused": False, "message": "Agent unpaused."},
+        )
+    )
+
+    result = await client.pause_agent("ctx-1", paused=False)
+
+    assert result == {"ok": True, "paused": False, "message": "Agent unpaused."}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/pause",
+        json={"context_id": "ctx-1", "paused": False},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_pause_agent_normalizes_http_failure() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=409, text="Context is not currently running")
+    )
+
+    result = await client.pause_agent("ctx-1")
+
+    assert result == {
+        "ok": False,
+        "message": "Context is not currently running",
+        "status_code": 409,
+    }
+
+
 async def test_list_projects_returns_project_array() -> None:
     client = A0Client("http://localhost:5080", api_key="secret")
     client.http = Mock()

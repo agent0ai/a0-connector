@@ -352,6 +352,7 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert "connector_login" in payload["features"]
     assert "remote_file_tree" in payload["features"]
     assert "code_execution_remote" in payload["features"]
+    assert "pause" in payload["features"]
     assert "settings_get" in payload["features"]
     assert "settings_set" in payload["features"]
     assert "agents_list" in payload["features"]
@@ -395,6 +396,7 @@ def test_protected_handlers_require_api_key_only() -> None:
         "usr.plugins.a0_connector.api.v1.chat_get",
         "usr.plugins.a0_connector.api.v1.chat_reset",
         "usr.plugins.a0_connector.api.v1.chats_list",
+        "usr.plugins.a0_connector.api.v1.pause",
         "usr.plugins.a0_connector.api.v1.settings_get",
         "usr.plugins.a0_connector.api.v1.settings_set",
         "usr.plugins.a0_connector.api.v1.agents_list",
@@ -413,6 +415,7 @@ def test_protected_handlers_require_api_key_only() -> None:
         "ChatGet",
         "ChatReset",
         "ChatsList",
+        "Pause",
         "SettingsGet",
         "SettingsSet",
         "AgentsList",
@@ -501,6 +504,36 @@ def test_settings_round_trip_uses_connector_helpers() -> None:
         set_handler.process({"settings": {"agent_profile": "researcher"}}, object())
     )
     assert updated["settings"]["agent_profile"] == "researcher"
+
+
+def test_pause_handler_marks_running_context_paused() -> None:
+    _install_fake_helpers()
+
+    class _FakeContext:
+        def __init__(self) -> None:
+            self.paused = False
+
+        def is_running(self) -> bool:
+            return True
+
+    fake_context = _FakeContext()
+    agent_mod = types.ModuleType("agent")
+    agent_mod.AgentContext = types.SimpleNamespace(get=lambda context_id: fake_context)
+    sys.modules["agent"] = agent_mod
+
+    pause_mod = _reload("usr.plugins.a0_connector.api.v1.pause")
+    result = asyncio.run(
+        pause_mod.Pause(None, None).process({"context_id": "ctx-1", "paused": True}, object())
+    )
+
+    assert result == {
+        "ok": True,
+        "context_id": "ctx-1",
+        "paused": True,
+        "status": "paused",
+        "message": "Agent paused.",
+    }
+    assert fake_context.paused is True
 
 
 def test_agents_skills_and_model_preset_proxy_payloads() -> None:
