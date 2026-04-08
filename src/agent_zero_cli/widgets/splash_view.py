@@ -5,8 +5,9 @@ from urllib.parse import urlparse
 from typing import Literal, Sequence, TypeAlias
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
-from textual.containers import Grid, Vertical, VerticalScroll
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.widgets import Button, Checkbox, Input, LoadingIndicator, Static
 
@@ -57,6 +58,34 @@ def _connection_target_summary(host: str) -> tuple[str, str, bool]:
     return label, normalized_host, scheme == "https"
 
 
+def _validate_connection_target(host: str) -> tuple[bool, str]:
+    raw_host = host.strip()
+    if not raw_host:
+        return True, ""
+
+    try:
+        parsed = urlparse(raw_host)
+    except ValueError:
+        return False, "Invalid URL format. Use http://host[:port]."
+
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"}:
+        return False, "Invalid URL format. Include http:// or https://."
+
+    if not parsed.hostname:
+        return False, "Invalid URL format. Include a hostname or IP."
+
+    try:
+        port = parsed.port
+    except ValueError:
+        return False, "Invalid URL format. Port must be numeric."
+
+    if port is None:
+        return False, "Missing port. Include :port (for example :5080)."
+
+    return True, "URL format looks valid."
+
+
 @dataclass(frozen=True)
 class SplashAction:
     key: str
@@ -90,15 +119,17 @@ class SplashHostPanel(Vertical):
 
     def __init__(self) -> None:
         super().__init__(id="splash-host-panel")
-        self._title = Static("Agent Zero URL", classes="splash-panel-title")
+        self._title = Static("Agent Zero WebUI URL", classes="splash-panel-title")
         self._copy = Static(
             "Local or remote endpoint.",
             classes="splash-panel-copy",
         )
+        self._host_valid = True
         self._host = Input(placeholder=_DEFAULT_HOST, id="splash-host-input")
+        self._validation = Static("", id="splash-host-validation")
         self._button = Button("Connect", id="splash-host-submit", variant="primary")
         self._hint = Static(
-            "Press Enter to use the default or connect.",
+            "Press Enter to connect.",
             classes="splash-panel-hint",
         )
 
@@ -106,16 +137,42 @@ class SplashHostPanel(Vertical):
         yield self._title
         yield self._copy
         yield self._host
+        yield self._validation
         yield self._button
         yield self._hint
+
+    def on_mount(self) -> None:
+        self.refresh_validation()
 
     def set_host(self, host: str) -> None:
         host_text = host.strip()
         if self._host.has_focus and self._host.value.strip():
             self._host.placeholder = _DEFAULT_HOST
+            self.refresh_validation()
             return
         self._host.value = "" if host_text == _DEFAULT_HOST else host_text
         self._host.placeholder = _DEFAULT_HOST
+        self.refresh_validation()
+
+    def _safe_update(self, widget: Static, renderable: Text | str) -> None:
+        if not self.is_mounted:
+            return
+        try:
+            widget.update(renderable)
+        except Exception:
+            # During splash transitions widgets can briefly be unmounted.
+            # Ignore transient update failures and let the next sync repaint.
+            pass
+
+    def refresh_validation(self) -> None:
+        valid, message = _validate_connection_target(self._host.value)
+        self._host_valid = valid
+
+        if message.strip():
+            color = "#79d18a" if valid else "#ff8b6b"
+            self._safe_update(self._validation, Text(message, style=color))
+        self._validation.display = bool(message.strip())
+        self._button.disabled = not valid
 
     def focus_input(self) -> None:
         self._host.focus()
@@ -123,6 +180,10 @@ class SplashHostPanel(Vertical):
     @property
     def host(self) -> str:
         return self._host.value.strip() or _DEFAULT_HOST
+
+    @property
+    def is_valid(self) -> bool:
+        return self._host_valid
 
 
 class SplashLoginPanel(Vertical):
@@ -136,8 +197,7 @@ class SplashLoginPanel(Vertical):
 
     def __init__(self) -> None:
         super().__init__(id="splash-login-panel")
-        target_label, target_host, target_secure = _connection_target_summary(_DEFAULT_HOST)
-        self._target_label = target_label
+        _, target_host, target_secure = _connection_target_summary(_DEFAULT_HOST)
         self._target_host = target_host
         self._target_secure = target_secure
         self._login_error = ""
@@ -148,29 +208,23 @@ class SplashLoginPanel(Vertical):
         )
         self._target_summary = Static("", id="splash-login-target-summary")
         self._target_url = Static("", id="splash-login-target-url")
-        self._username_label = Static("Username", classes="splash-field-label")
         self._username = Input(placeholder="Username", id="splash-login-username")
-        self._password_label = Static("Password", classes="splash-field-label")
         self._password = Input(placeholder="Password", password=True, id="splash-login-password")
         self._save_credentials = Checkbox("Save credentials", id="splash-save-credentials")
-        self._button = Button("Sign in", id="splash-login-submit", variant="primary")
-        self._hint = Static(
-            "Save credentials writes the connector token to the local `.env` file.",
-            classes="splash-panel-hint",
-        )
+        self._back_button = Button("Change URL", id="splash-login-back")
+        self._button = Button("Login", id="splash-login-submit", variant="primary")
 
     def compose(self) -> ComposeResult:
         yield self._title
         yield self._copy
         yield self._target_summary
-        yield self._target_url
-        yield self._username_label
+        with Horizontal(id="splash-login-target-row"):
+            yield self._target_url
+            yield self._back_button
         yield self._username
-        yield self._password_label
         yield self._password
         yield self._save_credentials
         yield self._button
-        yield self._hint
 
     def on_mount(self) -> None:
         self._render_target_context()
@@ -187,8 +241,7 @@ class SplashLoginPanel(Vertical):
             pass
 
     def set_target(self, host: str) -> None:
-        label, normalized_host, is_secure = _connection_target_summary(host)
-        self._target_label = label
+        _, normalized_host, is_secure = _connection_target_summary(host)
         self._target_host = normalized_host
         self._target_secure = is_secure
         self._render_target_context()
@@ -211,6 +264,8 @@ class SplashLoginPanel(Vertical):
             pass
 
     def _render_target_context(self) -> None:
+        target_render: Text | str = self._target_host
+        summary_visible = True
         if self._login_error:
             summary: Text | str = Text.assemble(
                 ("Login issue ", "bold #ff8b6b"),
@@ -219,14 +274,21 @@ class SplashLoginPanel(Vertical):
         else:
             security_tag = "[secure]" if self._target_secure else "[insecure]"
             security_style = "#79d18a" if self._target_secure else "#f0b54d"
-            summary = Text.assemble(
-                ("Connection target ", "#9aa7b4"),
-                (self._target_label, "bold #f5f7fa"),
+            summary = ""
+            summary_visible = False
+            target_render = Text.assemble(
+                (self._target_host, "#9aa7b4"),
                 (f"  {security_tag}", security_style),
             )
 
         self._safe_update(self._target_summary, summary)
-        self._safe_update(self._target_url, self._target_host)
+        self._safe_update(self._target_url, target_render)
+        if not self.is_mounted:
+            return
+        try:
+            self._target_summary.display = summary_visible
+        except Exception:
+            pass
 
     @property
     def error_message(self) -> str:
@@ -459,12 +521,14 @@ class SplashView(VerticalScroll):
 
     def _sync_state(self) -> None:
         self._apply_stage(self._state.stage)
-        self._stage_label.update(Text(_STAGE_LABELS.get(self._state.stage, self._state.stage.title()), style="bold"))
-        self._stage_label.display = bool(_STAGE_LABELS.get(self._state.stage, self._state.stage.title()).strip())
+        show_header_copy = self._state.stage not in {"host", "login"}
+        stage_label_text = _STAGE_LABELS.get(self._state.stage, self._state.stage.title())
+        self._stage_label.update(Text(stage_label_text, style="bold"))
+        self._stage_label.display = show_header_copy and bool(stage_label_text.strip())
         self._message.update(self._state.message)
-        self._message.display = bool(self._state.message.strip())
+        self._message.display = show_header_copy and bool(self._state.message.strip())
         self._detail.update(self._state.detail)
-        self._detail.display = bool(self._state.detail.strip())
+        self._detail.display = show_header_copy and bool(self._state.detail.strip())
         self._host_panel.set_host(self._state.host)
         self._login_panel.set_credentials(
             self._state.username,
@@ -558,19 +622,15 @@ class SplashView(VerticalScroll):
         button_id = event.button.id or ""
 
         if button_id == "splash-host-submit":
-            self.post_message(
-                self.SubmitRequested(
-                    stage="host",
-                    host=self._host_panel.host,
-                    username="",
-                    password="",
-                    save_credentials=False,
-                )
-            )
+            self._submit_host()
             return
 
         if button_id == "splash-login-submit":
             self._submit_login()
+            return
+
+        if button_id == "splash-login-back":
+            self._request_back_to_host()
             return
 
         if button_id == "splash-status-retry":
@@ -583,15 +643,7 @@ class SplashView(VerticalScroll):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "splash-host-input":
-            self.post_message(
-                self.SubmitRequested(
-                    stage="host",
-                    host=self._host_panel.host,
-                    username="",
-                    password="",
-                    save_credentials=False,
-                )
-            )
+            self._submit_host()
             return
 
         if event.input.id == "splash-login-username" and self._login_panel.username:
@@ -602,10 +654,19 @@ class SplashView(VerticalScroll):
             self._submit_login()
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "splash-host-input":
+            self._host_panel.refresh_validation()
+            return
+
         if event.input.id in {"splash-login-username", "splash-login-password"}:
             if self._is_login_state_sync_event(event):
                 return
             self._login_panel.clear_error()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape" and self._state.stage == "login":
+            self._request_back_to_host()
+            event.stop()
 
     def _is_login_state_sync_event(self, event: Input.Changed) -> bool:
         if self._state.stage != "login":
@@ -637,3 +698,21 @@ class SplashView(VerticalScroll):
                 save_credentials=self._login_panel.save_credentials,
             )
         )
+
+    def _submit_host(self) -> None:
+        self._host_panel.refresh_validation()
+        if not self._host_panel.is_valid:
+            self._host_panel.focus_input()
+            return
+        self.post_message(
+            self.SubmitRequested(
+                stage="host",
+                host=self._host_panel.host,
+                username="",
+                password="",
+                save_credentials=False,
+            )
+        )
+
+    def _request_back_to_host(self) -> None:
+        self.post_message(self.ActionRequested("back"))

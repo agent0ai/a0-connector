@@ -390,6 +390,9 @@ SplashView.stage-error #splash-stage-label {
 SplashHostPanel,
 SplashLoginPanel,
 SplashStatusPanel {
+    width: 100%;
+    height: auto;
+    min-height: 0;
     border: round #0f6db8;
     background: #101820;
     padding: 1 2;
@@ -408,12 +411,6 @@ SplashStatusPanel {
     color: #9aa7b4;
 }
 
-.splash-field-label {
-    margin-top: 1;
-    color: #9aa7b4;
-    text-style: bold;
-}
-
 .splash-panel-hint,
 .splash-action-reason {
     margin-top: 1;
@@ -424,7 +421,40 @@ SplashStatusPanel {
 }
 
 #splash-login-target-url {
+    width: 1fr;
     color: #9aa7b4;
+}
+
+#splash-login-target-row {
+    width: 100%;
+    height: auto;
+    min-height: 1;
+    margin-top: 0;
+    layout: horizontal;
+    align: left middle;
+}
+
+#splash-host-validation {
+    margin-top: 1;
+    min-height: 1;
+}
+
+#splash-login-back {
+    width: auto;
+    height: auto;
+    margin-top: 0;
+    min-width: 14;
+    margin-left: 1;
+    background: transparent;
+    color: #80d0ff;
+    border: none;
+    text-style: bold;
+}
+
+#splash-login-back:focus {
+    background: #172533;
+    color: #f5f7fa;
+    border: round #00b4ff;
 }
 
 #splash-host-input,

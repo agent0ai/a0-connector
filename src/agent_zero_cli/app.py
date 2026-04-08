@@ -604,7 +604,7 @@ class AgentZeroCLI(App):
         if not host:
             self._set_splash_stage(
                 "host",
-                message="Enter an Agent Zero URL.",
+                message="Enter the Agent Zero WebUI URL and port.",
                 detail="",
                 host=_DEFAULT_HOST,
             )
@@ -1140,6 +1140,20 @@ class AgentZeroCLI(App):
         )
 
     def on_splash_view_action_requested(self, event: SplashView.ActionRequested) -> None:
+        if event.action == "back":
+            self._set_splash_stage(
+                "host",
+                message="",
+                detail="",
+                host=self._splash_host(),
+                username=self._splash_state.username,
+                password="",
+                save_credentials=self._splash_state.save_credentials,
+                login_error="",
+            )
+            self._focus_splash_primary()
+            return
+
         if event.action == "retry":
             self.run_worker(
                 self._begin_connection(

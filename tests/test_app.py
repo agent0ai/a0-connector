@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from rich.padding import Padding
 from textual.app import App, ComposeResult
-from textual.widgets import Static
+from textual.widgets import Button, Input, Static
 
 from agent_zero_cli.app import AgentZeroCLI, _DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
@@ -27,6 +27,7 @@ from agent_zero_cli.widgets.splash_view import (
     SplashStatusPanel,
     SplashView,
     _connection_target_summary,
+    _validate_connection_target,
 )
 
 
@@ -370,6 +371,34 @@ def test_splash_login_panel_restores_target_context_after_error() -> None:
     assert panel.target_host == target
 
 
+async def test_splash_host_panel_blocks_invalid_url_submission() -> None:
+    app = SplashHarnessApp()
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        view = app.query_one(SplashView)
+        view.set_state(SplashState(stage="host", host=_DEFAULT_HOST))
+        await pilot.pause(0.1)
+
+        host_input = view.query_one("#splash-host-input", Input)
+        host_input.value = "localhost:5080"
+        await pilot.pause(0.1)
+
+        assert view._host_panel.is_valid is False
+        assert view.query_one("#splash-host-submit", Button).disabled is True
+
+
+def test_splash_view_back_action_posts_back_request() -> None:
+    view = SplashView()
+    posted: list[object] = []
+    view.post_message = posted.append
+
+    view._request_back_to_host()
+
+    assert len(posted) == 1
+    assert isinstance(posted[0], SplashView.ActionRequested)
+    assert posted[0].action == "back"
+
+
 async def test_splash_view_preserves_login_error_during_state_credentials_sync() -> None:
     app = SplashHarnessApp()
 
@@ -415,6 +444,53 @@ def test_connection_target_summary_handles_malformed_ipv6_url() -> None:
     assert label == "Connector endpoint"
     assert normalized == "http://[::1"
     assert secure is False
+
+
+def test_validate_connection_target_accepts_empty_as_default() -> None:
+    valid, message = _validate_connection_target("")
+
+    assert valid is True
+    assert message == ""
+
+
+def test_validate_connection_target_rejects_missing_scheme() -> None:
+    valid, message = _validate_connection_target("127.0.0.1:5080")
+
+    assert valid is False
+    assert "http://" in message
+
+
+def test_validate_connection_target_rejects_missing_port() -> None:
+    valid, message = _validate_connection_target("http://127.0.0.1")
+
+    assert valid is False
+    assert "Missing port" in message
+
+
+def test_validate_connection_target_accepts_explicit_port() -> None:
+    valid, message = _validate_connection_target("http://127.0.0.1:5080")
+
+    assert valid is True
+    assert "looks valid" in message
+
+
+async def test_splash_host_stage_hides_redundant_header_copy() -> None:
+    app = SplashHarnessApp()
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        view = app.query_one(SplashView)
+        view.set_state(
+            SplashState(
+                stage="host",
+                message="Enter an Agent Zero WebUI URL and port.",
+                detail="",
+                host=_DEFAULT_HOST,
+            )
+        )
+        await pilot.pause(0.1)
+
+        assert view.query_one("#splash-stage-label", Static).display is False
+        assert view.query_one("#splash-message", Static).display is False
 
 
 async def test_startup_without_host_shows_host_stage(
@@ -562,6 +638,24 @@ async def test_rejected_login_shows_inline_retry_copy(
     splash = dummy_app._test_widgets["#splash-view"]
     assert splash.state.stage == "login"
     assert splash.state.login_error == "Wrong username or password: retry."
+
+
+def test_splash_back_action_returns_to_host_stage(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app._set_splash_state(
+        stage="login",
+        host="http://example.test:5080",
+        username="admin",
+        save_credentials=True,
+        login_error="Wrong username or password: retry.",
+    )
+
+    dummy_app.on_splash_view_action_requested(SplashView.ActionRequested("back"))
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert splash.state.stage == "host"
+    assert splash.state.host == "http://example.test:5080"
+    assert splash.state.login_error == ""
+    assert splash.focused is True
 
 
 def test_login_stage_hides_composer_until_ready(dummy_app: DummyAgentZeroCLI) -> None:
