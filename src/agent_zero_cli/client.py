@@ -548,6 +548,23 @@ class A0Client:
             data["ok"] = True
         return data
 
+    async def nudge_agent(self, context_id: str | None) -> dict[str, Any]:
+        response = await self._post(
+            "nudge",
+            {"context_id": context_id or ""},
+        )
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "message": self._response_message(response),
+                "status_code": response.status_code,
+            }
+
+        data = self._json(response)
+        if "ok" not in data:
+            data["ok"] = True
+        return data
+
     async def list_projects(self) -> list[dict[str, Any]]:
         response = await self._post("projects_list")
         response.raise_for_status()

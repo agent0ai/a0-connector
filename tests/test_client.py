@@ -588,6 +588,42 @@ async def test_pause_agent_normalizes_http_failure() -> None:
     }
 
 
+async def test_nudge_agent_posts_nudge_request_and_normalizes_success() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={"ok": True, "status": "nudged", "message": "Process reset, agent nudged."},
+        )
+    )
+
+    result = await client.nudge_agent("ctx-1")
+
+    assert result == {"ok": True, "status": "nudged", "message": "Process reset, agent nudged."}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/nudge",
+        json={"context_id": "ctx-1"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_nudge_agent_normalizes_http_failure() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=409, text="Context is already running")
+    )
+
+    result = await client.nudge_agent("ctx-1")
+
+    assert result == {
+        "ok": False,
+        "message": "Context is already running",
+        "status_code": 409,
+    }
+
+
 async def test_list_projects_returns_project_array() -> None:
     client = A0Client("http://localhost:5080", api_key="secret")
     client.http = Mock()

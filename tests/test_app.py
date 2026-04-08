@@ -563,6 +563,18 @@ def test_pause_requires_advertised_feature(dummy_app: DummyAgentZeroCLI) -> None
     assert "pause" in (availability.reason or "")
 
 
+def test_nudge_requires_advertised_feature(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app.connector_features = set()
+
+    availability = dummy_app._nudge_availability()
+
+    assert availability.available is False
+    assert "nudge" in (availability.reason or "")
+
+
 async def test_pause_command_releases_input_and_latches_paused_state(
     dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,
@@ -630,6 +642,31 @@ async def test_pause_action_resumes_when_paused(
     assert input_widget.disabled is True
     assert input_widget.activity_label == "Resuming"
     assert log.writes == []
+
+
+async def test_nudge_command_uses_connector_nudge_endpoint(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app.connector_features = {"nudge"}
+    input_widget = dummy_app._test_widgets["#message-input"]
+
+    called: list[str | None] = []
+
+    async def fake_nudge_agent(context_id: str | None):
+        called.append(context_id)
+        return {"ok": True, "status": "nudged"}
+
+    monkeypatch.setattr(dummy_app.client, "nudge_agent", fake_nudge_agent)
+
+    await dummy_app._cmd_nudge()
+
+    assert called == ["ctx-1"]
+    assert dummy_app.agent_active is True
+    assert input_widget.disabled is True
 
 
 def test_system_commands_are_curated_and_ordered(dummy_app: DummyAgentZeroCLI) -> None:

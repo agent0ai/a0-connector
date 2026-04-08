@@ -353,6 +353,7 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert "remote_file_tree" in payload["features"]
     assert "code_execution_remote" in payload["features"]
     assert "pause" in payload["features"]
+    assert "nudge" in payload["features"]
     assert "settings_get" in payload["features"]
     assert "settings_set" in payload["features"]
     assert "agents_list" in payload["features"]
@@ -397,6 +398,7 @@ def test_protected_handlers_require_api_key_only() -> None:
         "usr.plugins.a0_connector.api.v1.chat_reset",
         "usr.plugins.a0_connector.api.v1.chats_list",
         "usr.plugins.a0_connector.api.v1.pause",
+        "usr.plugins.a0_connector.api.v1.nudge",
         "usr.plugins.a0_connector.api.v1.settings_get",
         "usr.plugins.a0_connector.api.v1.settings_set",
         "usr.plugins.a0_connector.api.v1.agents_list",
@@ -416,6 +418,7 @@ def test_protected_handlers_require_api_key_only() -> None:
         "ChatReset",
         "ChatsList",
         "Pause",
+        "Nudge",
         "SettingsGet",
         "SettingsSet",
         "AgentsList",
@@ -534,6 +537,44 @@ def test_pause_handler_marks_running_context_paused() -> None:
         "message": "Agent paused.",
     }
     assert fake_context.paused is True
+
+
+def test_nudge_handler_starts_nudged_context() -> None:
+    _install_fake_helpers()
+
+    class _FakeContext:
+        def __init__(self) -> None:
+            self.nudged = False
+            self.log_entries: list[tuple[str, str]] = []
+            self.log = types.SimpleNamespace(log=self._log)
+
+        def is_running(self) -> bool:
+            return False
+
+        def nudge(self) -> None:
+            self.nudged = True
+
+        def _log(self, *, type: str, content: str) -> None:
+            self.log_entries.append((type, content))
+
+    fake_context = _FakeContext()
+    agent_mod = types.ModuleType("agent")
+    agent_mod.AgentContext = types.SimpleNamespace(get=lambda context_id: fake_context)
+    sys.modules["agent"] = agent_mod
+
+    nudge_mod = _reload("usr.plugins.a0_connector.api.v1.nudge")
+    result = asyncio.run(
+        nudge_mod.Nudge(None, None).process({"context_id": "ctx-1"}, object())
+    )
+
+    assert result == {
+        "ok": True,
+        "context_id": "ctx-1",
+        "status": "nudged",
+        "message": "Process reset, agent nudged.",
+    }
+    assert fake_context.nudged is True
+    assert fake_context.log_entries == [("info", "Process reset, agent nudged.")]
 
 
 def test_agents_skills_and_model_preset_proxy_payloads() -> None:

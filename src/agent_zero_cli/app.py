@@ -554,9 +554,11 @@ class AgentZeroCLI(App):
         return self._resume_availability() if self._pause_latched else self._pause_availability()
 
     def _nudge_availability(self) -> CommandAvailability:
-        base = self._require_context()
+        base = self._require_features("nudge")
         if not base.available:
             return base
+        if not self.current_context:
+            return CommandAvailability(False, "Open or create a chat context first.")
         if not self.current_context_has_messages:
             return CommandAvailability(False, "Start a conversation before nudging it forward.")
         if self.agent_active:
@@ -1428,9 +1430,16 @@ class AgentZeroCLI(App):
         self._response_delivered = False
         self._sync_ready_actions()
         try:
-            await self.client.send_message(".", self.current_context or "")
+            response = await self.client.nudge_agent(self.current_context)
         except Exception as exc:
             self._show_notice(f"Nudge failed: {exc}", error=True)
+            input_widget.disabled = False
+            self.agent_active = False
+            self._sync_ready_actions()
+            return
+
+        if not response.get("ok"):
+            self._show_notice(str(response.get("message") or "Nudge failed."), error=True)
             input_widget.disabled = False
             self.agent_active = False
             self._sync_ready_actions()

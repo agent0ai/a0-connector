@@ -15,6 +15,7 @@ _BASE_FEATURES = [
     "chat_reset",
     "chat_delete",
     "pause",
+    "nudge",
     "message_send",
     "log_tail",
     "projects_list",
