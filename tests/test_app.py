@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from rich.padding import Padding
+from textual.app import App, ComposeResult
 from textual.widgets import Static
 
 from agent_zero_cli.app import AgentZeroCLI, _DEFAULT_HOST
@@ -19,8 +20,14 @@ from agent_zero_cli.widgets.chat_log import (
     _AGENT_ZERO_BANNER_TINY,
     _select_agent_zero_banner,
 )
-from agent_zero_cli.widgets import SplashState
-from agent_zero_cli.widgets.splash_view import SplashHostPanel, SplashStatusPanel, SplashView
+from agent_zero_cli.widgets import DynamicFooter, SplashState
+from agent_zero_cli.widgets.splash_view import (
+    SplashHostPanel,
+    SplashLoginPanel,
+    SplashStatusPanel,
+    SplashView,
+    _connection_target_summary,
+)
 
 
 async def _async_return(value=None):
@@ -121,6 +128,7 @@ class FakeChatLog:
 class FakeInput:
     def __init__(self) -> None:
         self.disabled = False
+        self.display = True
         self.focused = False
         self.activity_label = ""
         self.activity_detail = ""
@@ -149,6 +157,11 @@ class FakeConnectionStatus:
     def __init__(self) -> None:
         self.status = "disconnected"
         self.url = ""
+
+
+class FakeFooter:
+    def __init__(self) -> None:
+        self.display = True
 
 
 class FakeModelSwitcherBar:
@@ -252,6 +265,11 @@ class DummyAgentZeroCLI(AgentZeroCLI):
         self.rendered_events: list[dict] = []
 
 
+class SplashHarnessApp(App[None]):
+    def compose(self) -> ComposeResult:
+        yield SplashView()
+
+
 @pytest.fixture
 def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
     app = DummyAgentZeroCLI()
@@ -263,6 +281,7 @@ def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
         "#body-switcher": FakeBodySwitcher(),
         "#splash-view": FakeSplash(),
         "#slash-menu": FakeSlashMenu(),
+        DynamicFooter: FakeFooter(),
     }
 
     def _query_one(selector: str, cls: object = None) -> object:
@@ -322,6 +341,80 @@ def test_splash_status_panel_hides_duplicate_error_copy() -> None:
     assert panel._button.display is True
     assert panel._title.display is False
     assert panel._detail.display is False
+
+
+def test_splash_login_submit_requires_both_fields_in_top_context() -> None:
+    view = SplashView()
+    posted: list[object] = []
+    view.post_message = posted.append
+
+    view._submit_login()
+
+    assert posted == []
+    assert view._login_panel.error_message == "Username and password are required."
+
+
+def test_splash_login_panel_restores_target_context_after_error() -> None:
+    panel = SplashLoginPanel()
+    target = "http://207.148.13.38:32080"
+
+    panel.set_target(target)
+    panel.set_error("Wrong username or password: retry.")
+
+    assert panel.error_message == "Wrong username or password: retry."
+    assert panel.target_host == target
+
+    panel.clear_error()
+
+    assert panel.error_message == ""
+    assert panel.target_host == target
+
+
+async def test_splash_view_preserves_login_error_during_state_credentials_sync() -> None:
+    app = SplashHarnessApp()
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        view = app.query_one(SplashView)
+        view.set_state(
+            SplashState(
+                stage="login",
+                host="http://127.0.0.1:5080",
+                username="admin",
+                password="wrong",
+                login_error="Wrong username or password: retry.",
+            )
+        )
+        await pilot.pause(0.1)
+
+        view.set_state(
+            SplashState(
+                stage="login",
+                host="http://127.0.0.1:5080",
+                username="admin",
+                password="",
+                login_error="Wrong username or password: retry.",
+            )
+        )
+        await pilot.pause(0.1)
+
+        assert view._login_panel.error_message == "Wrong username or password: retry."
+        assert len(view.query("#splash-login-error")) == 0
+
+
+def test_connection_target_summary_handles_invalid_port() -> None:
+    label, normalized, secure = _connection_target_summary("http://bad:abc")
+
+    assert label == "bad"
+    assert normalized == "http://bad:abc"
+    assert secure is False
+
+
+def test_connection_target_summary_handles_malformed_ipv6_url() -> None:
+    label, normalized, secure = _connection_target_summary("http://[::1")
+
+    assert label == "Connector endpoint"
+    assert normalized == "http://[::1"
+    assert secure is False
 
 
 async def test_startup_without_host_shows_host_stage(
@@ -441,6 +534,51 @@ async def test_invalid_api_key_returns_to_login_stage(
     assert splash.state.stage == "login"
     assert app.config.api_key == ""
     assert app.client.api_key == ""
+
+
+async def test_rejected_login_shows_inline_retry_copy(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch_capabilities():
+        return {
+            "auth": ["api_key", "login"],
+            "features": ["chat_create", "chats_list"],
+            "protocol": "a0-connector.v1",
+            "websocket_namespace": "/ws",
+            "websocket_handlers": ["plugins/a0_connector/ws_connector"],
+        }, False, ""
+
+    monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)
+    monkeypatch.setattr(dummy_app.client, "login", lambda u, p: _async_return(None))
+
+    await dummy_app._begin_connection(
+        "http://example.test",
+        username="admin",
+        password="wrong-password",
+        save_credentials_flag=False,
+    )
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert splash.state.stage == "login"
+    assert splash.state.login_error == "Wrong username or password: retry."
+
+
+def test_login_stage_hides_composer_until_ready(dummy_app: DummyAgentZeroCLI) -> None:
+    input_widget = dummy_app._test_widgets["#message-input"]
+    footer = dummy_app._test_widgets[DynamicFooter]
+    dummy_app.connected = True
+    dummy_app.current_context_has_messages = False
+
+    dummy_app._set_splash_state(stage="login")
+
+    assert input_widget.display is False
+    assert footer.display is False
+
+    dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
+
+    assert input_widget.display is True
+    assert footer.display is True
 
 
 def test_context_event_switches_empty_welcome_to_chat(dummy_app: DummyAgentZeroCLI) -> None:

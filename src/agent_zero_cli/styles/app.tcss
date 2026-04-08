@@ -309,73 +309,6 @@ Footer {
     background: #101820;
 }
 
-HostInputScreen {
-    align: center middle;
-}
-
-#host-box {
-    width: 60%;
-    min-width: 40;
-    border: solid $primary;
-    padding: 2;
-    background: $panel;
-}
-
-#host-title {
-    content-align: center middle;
-    text-style: bold;
-    margin-bottom: 1;
-}
-
-#host-description {
-    margin-bottom: 1;
-}
-
-#host-url {
-    margin-bottom: 1;
-}
-
-#host-btn,
-#login-btn {
-    width: 100%;
-    height: 3;
-}
-
-LoginScreen {
-    align: center middle;
-}
-
-#login-box {
-    width: 60%;
-    min-width: 40;
-    border: solid $primary;
-    padding: 2;
-    background: $panel;
-}
-
-#username,
-#password,
-#save-credentials {
-    width: 100%;
-    margin-bottom: 1;
-}
-
-#login-btn {
-    margin-top: 1;
-}
-
-#login-title {
-    content-align: center middle;
-    text-style: bold;
-    margin-bottom: 1;
-}
-
-#login-error {
-    color: $error;
-    height: 1;
-    margin-top: 1;
-}
-
 ChatListScreen {
     align: left top;
 }
@@ -475,9 +408,23 @@ SplashStatusPanel {
     color: #9aa7b4;
 }
 
+.splash-field-label {
+    margin-top: 1;
+    color: #9aa7b4;
+    text-style: bold;
+}
+
 .splash-panel-hint,
 .splash-action-reason {
     margin-top: 1;
+}
+
+#splash-login-target-summary {
+    margin-top: 1;
+}
+
+#splash-login-target-url {
+    color: #9aa7b4;
 }
 
 #splash-host-input,
@@ -501,10 +448,38 @@ SplashStatusPanel {
 #splash-status-retry {
     width: 100%;
     margin-top: 1;
+    background: #0f6db8;
+    color: #f5f7fa;
+    border: round #0f6db8;
+    text-style: bold;
+}
+
+#splash-host-submit:focus,
+#splash-login-submit:focus,
+#splash-status-retry:focus {
+    background: #00b4ff;
+    color: #08131d;
+    border: round #8ad7ff;
+}
+
+#splash-host-submit:disabled,
+#splash-login-submit:disabled,
+#splash-status-retry:disabled {
+    background: #1c2732;
+    color: #7f8b97;
+    border: round #2a3a4a;
 }
 
 #splash-save-credentials {
     margin-top: 1;
+    padding: 0 1;
+    color: #c7d2dd;
+}
+
+#splash-save-credentials:focus {
+    background: #172533;
+    color: #f5f7fa;
+    border: round #00b4ff;
 }
 
 #splash-status-spinner {

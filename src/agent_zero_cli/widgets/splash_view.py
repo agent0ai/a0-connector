@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 from typing import Literal, Sequence, TypeAlias
 
 from rich.text import Text
@@ -17,12 +18,43 @@ SplashStage: TypeAlias = Literal["host", "login", "connecting", "ready", "error"
 _STAGE_ORDER: tuple[SplashStage, ...] = ("host", "login", "connecting", "ready", "error")
 _STAGE_LABELS: dict[SplashStage, str] = {
     "host": "Connect",
-    "login": "Sign in",
+    "login": "",
     "connecting": "Connecting",
     "ready": "Ready",
     "error": "Connection issue",
 }
 _DEFAULT_HOST = "http://127.0.0.1:5080"
+
+
+def _connection_target_summary(host: str) -> tuple[str, str, bool]:
+    normalized_host = host.strip() or _DEFAULT_HOST
+    try:
+        parsed = urlparse(normalized_host)
+    except ValueError:
+        # urlparse can raise for malformed values (for example invalid IPv6
+        # bracket syntax). Keep the splash resilient and never crash render.
+        is_secure = normalized_host.lower().startswith("https://")
+        return "Connector endpoint", normalized_host, is_secure
+    scheme = (parsed.scheme or "http").lower()
+    hostname = (parsed.hostname or "").strip()
+    try:
+        port = parsed.port
+    except ValueError:
+        # Keep the splash resilient when users type malformed ports; this should
+        # never crash the login surface.
+        port = None
+
+    if hostname in {"127.0.0.1", "localhost", "::1"}:
+        label = "Local connector"
+    elif hostname:
+        label = hostname
+    else:
+        label = "Connector endpoint"
+
+    if port and hostname and hostname not in {"127.0.0.1", "localhost", "::1"}:
+        label = f"{label}:{port}"
+
+    return label, normalized_host, scheme == "https"
 
 
 @dataclass(frozen=True)
@@ -43,6 +75,7 @@ class SplashState:
     username: str = ""
     password: str = ""
     save_credentials: bool = False
+    login_error: str = ""
     actions: Sequence[SplashAction] = ()
 
 
@@ -103,39 +136,121 @@ class SplashLoginPanel(Vertical):
 
     def __init__(self) -> None:
         super().__init__(id="splash-login-panel")
+        target_label, target_host, target_secure = _connection_target_summary(_DEFAULT_HOST)
+        self._target_label = target_label
+        self._target_host = target_host
+        self._target_secure = target_secure
+        self._login_error = ""
         self._title = Static("Sign in", classes="splash-panel-title")
         self._copy = Static(
-            "Connector login.",
+            "Authenticate with the connector endpoint below.",
             classes="splash-panel-copy",
         )
+        self._target_summary = Static("", id="splash-login-target-summary")
+        self._target_url = Static("", id="splash-login-target-url")
+        self._username_label = Static("Username", classes="splash-field-label")
         self._username = Input(placeholder="Username", id="splash-login-username")
+        self._password_label = Static("Password", classes="splash-field-label")
         self._password = Input(placeholder="Password", password=True, id="splash-login-password")
         self._save_credentials = Checkbox("Save credentials", id="splash-save-credentials")
-        self._button = Button("Log in", id="splash-login-submit", variant="primary")
+        self._button = Button("Sign in", id="splash-login-submit", variant="primary")
         self._hint = Static(
-            "Save writes the token to the local `.env` file.",
+            "Save credentials writes the connector token to the local `.env` file.",
             classes="splash-panel-hint",
         )
 
     def compose(self) -> ComposeResult:
         yield self._title
         yield self._copy
+        yield self._target_summary
+        yield self._target_url
+        yield self._username_label
         yield self._username
+        yield self._password_label
         yield self._password
         yield self._save_credentials
         yield self._button
         yield self._hint
+
+    def on_mount(self) -> None:
+        self._render_target_context()
 
     def set_credentials(self, username: str = "", password: str = "", *, save: bool = False) -> None:
         self._username.value = username
         self._password.value = password
         self._save_credentials.value = save
 
+    def _safe_focus(self, widget: Input) -> None:
+        try:
+            widget.focus()
+        except Exception:
+            pass
+
+    def set_target(self, host: str) -> None:
+        label, normalized_host, is_secure = _connection_target_summary(host)
+        self._target_label = label
+        self._target_host = normalized_host
+        self._target_secure = is_secure
+        self._render_target_context()
+
+    def set_error(self, message: str = "") -> None:
+        self._login_error = message.strip()
+        self._render_target_context()
+
+    def clear_error(self) -> None:
+        self.set_error("")
+
+    def _safe_update(self, widget: Static, renderable: Text | str) -> None:
+        if not self.is_mounted:
+            return
+        try:
+            widget.update(renderable)
+        except Exception:
+            # During splash transitions widgets can briefly be unmounted.
+            # Ignore transient update failures and let the next sync repaint.
+            pass
+
+    def _render_target_context(self) -> None:
+        if self._login_error:
+            summary: Text | str = Text.assemble(
+                ("Login issue ", "bold #ff8b6b"),
+                (self._login_error, "#ff8b6b"),
+            )
+        else:
+            security_tag = "[secure]" if self._target_secure else "[insecure]"
+            security_style = "#79d18a" if self._target_secure else "#f0b54d"
+            summary = Text.assemble(
+                ("Connection target ", "#9aa7b4"),
+                (self._target_label, "bold #f5f7fa"),
+                (f"  {security_tag}", security_style),
+            )
+
+        self._safe_update(self._target_summary, summary)
+        self._safe_update(self._target_url, self._target_host)
+
+    @property
+    def error_message(self) -> str:
+        return self._login_error
+
+    @property
+    def target_host(self) -> str:
+        return self._target_host
+
     def focus_input(self) -> None:
         if self._username.value:
-            self._password.focus()
+            self._safe_focus(self._password)
         else:
-            self._username.focus()
+            self._safe_focus(self._username)
+
+    def focus_missing_field(self) -> None:
+        if not self.username:
+            self._safe_focus(self._username)
+            return
+        if not self.password:
+            self._safe_focus(self._password)
+
+    def focus_password(self) -> None:
+        self._safe_focus(self._password)
 
     @property
     def username(self) -> str:
@@ -345,14 +460,19 @@ class SplashView(VerticalScroll):
     def _sync_state(self) -> None:
         self._apply_stage(self._state.stage)
         self._stage_label.update(Text(_STAGE_LABELS.get(self._state.stage, self._state.stage.title()), style="bold"))
+        self._stage_label.display = bool(_STAGE_LABELS.get(self._state.stage, self._state.stage.title()).strip())
         self._message.update(self._state.message)
+        self._message.display = bool(self._state.message.strip())
         self._detail.update(self._state.detail)
+        self._detail.display = bool(self._state.detail.strip())
         self._host_panel.set_host(self._state.host)
         self._login_panel.set_credentials(
             self._state.username,
             self._state.password,
             save=self._state.save_credentials,
         )
+        self._login_panel.set_target(self._state.host)
+        self._login_panel.set_error(self._state.login_error)
 
         if self._state.stage == "connecting":
             self._status_panel.set_connecting(
@@ -386,6 +506,7 @@ class SplashView(VerticalScroll):
         username: str = "",
         password: str = "",
         save_credentials: bool = False,
+        login_error: str = "",
         actions: Sequence[SplashAction] | None = None,
     ) -> None:
         self.set_state(
@@ -397,6 +518,7 @@ class SplashView(VerticalScroll):
                 username=username,
                 password=password,
                 save_credentials=save_credentials,
+                login_error=login_error,
                 actions=actions or (self._default_actions() if stage == "ready" else ()),
             )
         )
@@ -410,6 +532,7 @@ class SplashView(VerticalScroll):
             username=self._state.username,
             password=self._state.password,
             save_credentials=self._state.save_credentials,
+            login_error=self._state.login_error,
             actions=actions or (self._default_actions() if self._state.stage == "ready" else ()),
         )
         if self.is_mounted:
@@ -447,15 +570,7 @@ class SplashView(VerticalScroll):
             return
 
         if button_id == "splash-login-submit":
-            self.post_message(
-                self.SubmitRequested(
-                    stage="login",
-                    host=self._host_panel.host,
-                    username=self._login_panel.username,
-                    password=self._login_panel.password,
-                    save_credentials=self._login_panel.save_credentials,
-                )
-            )
+            self._submit_login()
             return
 
         if button_id == "splash-status-retry":
@@ -479,13 +594,46 @@ class SplashView(VerticalScroll):
             )
             return
 
+        if event.input.id == "splash-login-username" and self._login_panel.username:
+            self._login_panel.focus_password()
+            return
+
         if event.input.id == "splash-login-password":
-            self.post_message(
-                self.SubmitRequested(
-                    stage="login",
-                    host=self._host_panel.host,
-                    username=self._login_panel.username,
-                    password=self._login_panel.password,
-                    save_credentials=self._login_panel.save_credentials,
-                )
+            self._submit_login()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id in {"splash-login-username", "splash-login-password"}:
+            if self._is_login_state_sync_event(event):
+                return
+            self._login_panel.clear_error()
+
+    def _is_login_state_sync_event(self, event: Input.Changed) -> bool:
+        if self._state.stage != "login":
+            return False
+
+        if event.input.id == "splash-login-username":
+            return event.value == self._state.username
+
+        if event.input.id == "splash-login-password":
+            return event.value == self._state.password
+
+        return False
+
+    def _submit_login(self) -> None:
+        username = self._login_panel.username
+        password = self._login_panel.password
+        if not username or not password:
+            self._login_panel.set_error("Username and password are required.")
+            self._login_panel.focus_missing_field()
+            return
+
+        self._login_panel.clear_error()
+        self.post_message(
+            self.SubmitRequested(
+                stage="login",
+                host=self._host_panel.host,
+                username=username,
+                password=password,
+                save_credentials=self._login_panel.save_credentials,
             )
+        )

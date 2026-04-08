@@ -130,6 +130,7 @@ class AgentZeroCLI(App):
         input_widget.disabled = True
         self.query_one("#model-switcher-bar", ModelSwitcherBar).clear()
         self.query_one("#splash-view", SplashView).set_state(self._splash_state)
+        self._sync_composer_visibility()
 
         log = self.query_one("#chat-log", ChatLog)
         self.set_interval(0.1, log.advance_shimmer)
@@ -255,6 +256,7 @@ class AgentZeroCLI(App):
             self.query_one("#splash-view", SplashView).set_state(self._splash_state)
         except Exception:
             pass
+        self._sync_composer_visibility()
 
     def _set_splash_stage(
         self,
@@ -266,6 +268,7 @@ class AgentZeroCLI(App):
         username: str | None = None,
         password: str | None = None,
         save_credentials: bool | None = None,
+        login_error: str | None = None,
         actions: tuple[SplashAction, ...] | None = None,
     ) -> None:
         updates: dict[str, Any] = {
@@ -281,6 +284,8 @@ class AgentZeroCLI(App):
             updates["password"] = password
         if save_credentials is not None:
             updates["save_credentials"] = save_credentials
+        if login_error is not None:
+            updates["login_error"] = login_error
         if actions is not None:
             updates["actions"] = actions
         self._set_splash_state(**updates)
@@ -304,6 +309,24 @@ class AgentZeroCLI(App):
         else:
             body.current = "splash-view"
             self._sync_ready_actions()
+        self._sync_composer_visibility()
+
+    def _sync_composer_visibility(self) -> None:
+        show_composer = self.connected and (self.current_context_has_messages or self._splash_state.stage == "ready")
+        try:
+            input_widget = self.query_one("#message-input", ChatInput)
+            input_widget.display = show_composer
+            if not show_composer:
+                input_widget.disabled = True
+                input_widget.set_idle()
+        except Exception:
+            pass
+
+        try:
+            footer = self.query_one(DynamicFooter)
+            footer.display = show_composer
+        except Exception:
+            pass
 
     def _set_activity(self, label: str, detail: str = "") -> None:
         self.query_one("#message-input", ChatInput).set_activity(label, detail)
@@ -691,12 +714,13 @@ class AgentZeroCLI(App):
                 self._sync_connection_status("disconnected", normalized_host)
                 self._set_splash_stage(
                     "login",
-                    message="Sign in to continue",
-                    detail="Invalid credentials. Try again.",
+                    message="",
+                    detail="",
                     host=normalized_host,
                     username=username,
                     password="",
                     save_credentials=save_credentials_flag,
+                    login_error="Wrong username or password: retry.",
                 )
                 self._focus_splash_primary()
                 return
@@ -711,12 +735,13 @@ class AgentZeroCLI(App):
             self._sync_connection_status("disconnected", normalized_host)
             self._set_splash_stage(
                 "login",
-                message="Sign in to continue",
-                detail=normalized_host,
+                message="",
+                detail="",
                 host=normalized_host,
                 username=username,
                 password="",
                 save_credentials=save_credentials_flag,
+                login_error="",
             )
             self._focus_splash_primary()
             return
@@ -751,12 +776,13 @@ class AgentZeroCLI(App):
                 if "login" in auth_modes:
                     self._set_splash_stage(
                         "login",
-                        message="Saved API key was rejected",
-                        detail="Sign in again to refresh the connector token.",
+                        message="",
+                        detail="",
                         host=normalized_host,
                         username=username,
                         password="",
                         save_credentials=save_credentials_flag,
+                        login_error="Saved API key was rejected. Sign in again to refresh the connector token.",
                     )
                     self._focus_splash_primary()
                 else:

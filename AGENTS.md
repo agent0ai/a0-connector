@@ -128,10 +128,9 @@ a0-connector/
 │   ├── config.py                # CLIConfig, load_config(), save_env()
 │   ├── __main__.py              # Entry point (python -m agent_zero_cli)
 │   ├── widgets/
-│   │   └── chat_input.py        # ChatInput — multi-line TextArea with spinner progress
+│   │   ├── chat_input.py        # ChatInput — multi-line TextArea with spinner progress
+│   │   └── splash_view.py       # SplashView — staged connect/login/welcome surface
 │   ├── screens/
-│   │   ├── host_input.py        # HostInputScreen — first-run host prompt
-│   │   ├── login.py             # LoginScreen — username/password + save checkbox
 │   │   └── chat_list.py         # ChatListScreen — switch between contexts
 │   └── styles/
 │       └── app.tcss             # All TUI CSS (colors, borders, layout, .progress-active)
@@ -216,14 +215,15 @@ Height auto-adjusts: `styles.height = min(line_count, 4) + 2` (the `+2` is for
 the rounded border). Avoid setting a hard `height` on `#message-input` in
 `.tcss` — it will fight the dynamic sizing and clip content.
 
-### Screens
+### Splash / modal flow
 
-Screens are pushed modally with `push_screen_wait()` and return a value:
+Connection and authentication now live in the staged `SplashView` instead of
+separate modal screens:
 
-| Screen | Returns | When shown |
+| Surface | Returns | When shown |
 |--------|---------|------------|
-| `HostInputScreen` | `str` (URL) or `""` | No host configured |
-| `LoginScreen` | `LoginResult` or `None` | Server advertises `"login"` auth |
+| `SplashView` host stage | Posts `SubmitRequested` with host | No host configured or reconnecting |
+| `SplashView` login stage | Posts `SubmitRequested` with credentials | Server advertises `"login"` auth |
 | `ChatListScreen` | `str` (context ID) or `None` | User presses F6 |
 
 ---
