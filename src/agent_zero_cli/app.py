@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
+from textual.command import CommandPalette
 from textual.reactive import reactive
 from textual.theme import Theme
 from textual.widgets import ContentSwitcher, Footer
@@ -23,12 +24,9 @@ from agent_zero_cli.rendering import (
 from agent_zero_cli.screens.chat_list import ChatListScreen
 from agent_zero_cli.screens.compact_modal import CompactResult, CompactScreen
 from agent_zero_cli.screens.settings_modal import SettingsResult, SettingsScreen
-from agent_zero_cli.screens.skills_modal import (
-    SkillsDeleteRequested,
-    SkillsFilters,
-    SkillsFiltersChanged,
-    SkillsRefreshRequested,
-    SkillsScreen,
+from agent_zero_cli.widgets.command_palette import (
+    AgentCommandPalette,
+    OrderedSystemCommandsProvider,
 )
 from agent_zero_cli.widgets import (
     ChatInput,
@@ -130,20 +128,45 @@ class AgentZeroCLI(App):
         self.run_worker(self._startup(), exclusive=True, name="startup")
 
     def get_system_commands(self, screen) -> Iterable[SystemCommand]:
-        yield from super().get_system_commands(screen)
-        for spec in self._command_registry:
-            availability = spec.availability(self)
-            if not availability.available:
-                continue
-            yield SystemCommand(
-                spec.canonical_name,
-                spec.description,
-                lambda name=spec.canonical_name: self.run_worker(
-                    self._dispatch_command(name),
-                    exclusive=True,
-                    name=f"palette-{name[1:]}",
-                ),
-            )
+        help_panel_visible = False
+        try:
+            help_panel_visible = bool(screen.query("HelpPanel"))
+        except Exception:
+            help_panel_visible = False
+
+        keys_help = (
+            "Hide the keys and widget help panel"
+            if help_panel_visible
+            else "Show help for the focused widget and a summary of available keys"
+        )
+        keys_callback = self.action_hide_help_panel if help_panel_visible else self.action_show_help_panel
+
+        yield SystemCommand(
+            "New Chat",
+            "Create a brand-new empty chat context.",
+            lambda: self.run_worker(self._dispatch_command("/new"), exclusive=True, name="palette-new-chat"),
+        )
+        yield SystemCommand(
+            "Chats",
+            "List previous chats and switch contexts.",
+            lambda: self.run_worker(self._dispatch_command("/chats"), exclusive=True, name="palette-chats"),
+        )
+        yield SystemCommand("Keys", keys_help, keys_callback)
+        yield SystemCommand(
+            "Help",
+            "Show the commands available in this shell.",
+            lambda: self.run_worker(self._dispatch_command("/help"), exclusive=True, name="palette-help"),
+        )
+        yield SystemCommand(
+            "Settings",
+            "Open the curated connector-backed settings editor.",
+            lambda: self.run_worker(self._dispatch_command("/settings"), exclusive=True, name="palette-settings"),
+        )
+        yield SystemCommand(
+            "Quit",
+            "Disconnect and exit the CLI.",
+            lambda: self.run_worker(self.action_quit(), exclusive=True, name="palette-quit"),
+        )
 
     def _build_command_registry(self) -> tuple[CommandSpec, ...]:
         return (
@@ -153,13 +176,6 @@ class AgentZeroCLI(App):
                 "Show the commands available in this shell.",
                 lambda app: CommandAvailability(True),
                 lambda app: app._cmd_help(),
-            ),
-            CommandSpec(
-                "/clear",
-                (),
-                "Clear the visible chat log without resetting the current context.",
-                lambda app: CommandAvailability(True),
-                lambda app: app._cmd_clear(),
             ),
             CommandSpec(
                 "/new",
@@ -183,13 +199,6 @@ class AgentZeroCLI(App):
                 lambda app: app._cmd_settings(),
             ),
             CommandSpec(
-                "/skills",
-                (),
-                "Browse connector-backed skills with filters and delete support.",
-                lambda app: app._require_features("skills_list", "agents_list"),
-                lambda app: app._cmd_skills(),
-            ),
-            CommandSpec(
                 "/compact",
                 (),
                 "Open the connector-backed compaction confirmation flow.",
@@ -210,14 +219,16 @@ class AgentZeroCLI(App):
                 lambda app: app._nudge_availability(),
                 lambda app: app._cmd_nudge(),
             ),
-            CommandSpec(
-                "/exit",
-                ("/q",),
-                "Disconnect and exit the CLI.",
-                lambda app: CommandAvailability(True),
-                lambda app: app._cmd_exit(),
-            ),
         )
+
+    def action_command_palette(self) -> None:
+        if self.use_command_palette and not CommandPalette.is_open(self):
+            self.push_screen(
+                AgentCommandPalette(
+                    providers=[OrderedSystemCommandsProvider],
+                    id="--command-palette",
+                )
+            )
 
     def _sync_connection_status(self, status: str, url: str | None = None) -> None:
         widget = self.query_one("#connection-status", ConnectionStatus)
@@ -521,7 +532,6 @@ class AgentZeroCLI(App):
         return (
             action("chats", "Chats", "Open chat history.", self._require_features("chats_list")),
             action("settings", "Settings", "Edit connector settings.", self._require_features("settings_get", "settings_set")),
-            action("skills", "Skills", "Browse loaded skills.", self._require_features("skills_list", "agents_list")),
             action("compact", "Compact", "Compact this chat.", self._compact_availability()),
             action("pause", "Pause", "Pause the active run.", self._pause_availability()),
             action("nudge", "Nudge", "Continue the current run.", self._nudge_availability()),
@@ -1126,7 +1136,6 @@ class AgentZeroCLI(App):
         command = {
             "chats": "/chats",
             "settings": "/settings",
-            "skills": "/skills",
             "compact": "/compact",
             "pause": "/pause",
             "nudge": "/nudge",
@@ -1224,47 +1233,6 @@ class AgentZeroCLI(App):
 
         self._show_notice("Settings saved.")
 
-    async def _load_skills_snapshot(
-        self,
-        filters: SkillsFilters,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-        projects_task = self.client.list_projects()
-        agents_task = self.client.list_agents()
-        skills_task = self.client.list_skills(
-            project_name=filters.project_name,
-            agent_profile=filters.agent_profile,
-        )
-        projects, agents, skills = await asyncio.gather(projects_task, agents_task, skills_task)
-        agent_options = [
-            {"value": item.get("key", ""), "label": item.get("label", item.get("key", ""))}
-            for item in agents
-            if isinstance(item, dict)
-        ]
-        return projects, agent_options, skills
-
-    async def _refresh_skills_screen(self, screen: SkillsScreen, filters: SkillsFilters) -> None:
-        screen.set_busy(True, "Refreshing skills...")
-        try:
-            projects, agent_options, skills = await self._load_skills_snapshot(filters)
-        except Exception as exc:
-            screen.set_busy(False)
-            screen.set_error(str(exc))
-            return
-
-        screen.set_filter_options(
-            project_options=projects,
-            agent_profile_options=agent_options,
-        )
-        screen.set_filters(filters)
-        screen.set_skills(skills)
-        screen.set_busy(False)
-
-    async def _cmd_skills(self) -> None:
-        filters = SkillsFilters()
-        screen = SkillsScreen(filters=filters)
-        await self._refresh_skills_screen(screen, filters)
-        await self.push_screen_wait(screen)
-
     async def _cmd_compact(self) -> None:
         availability = self._compact_availability()
         if not availability.available:
@@ -1339,31 +1307,12 @@ class AgentZeroCLI(App):
             self.agent_active = False
             self._sync_ready_actions()
 
-    async def _cmd_exit(self) -> None:
-        await self.client.disconnect()
-        self.exit()
-
-    async def on_skills_refresh_requested(self, event: SkillsRefreshRequested) -> None:
-        if isinstance(self.screen, SkillsScreen):
-            await self._refresh_skills_screen(self.screen, event.filters)
-
-    async def on_skills_filters_changed(self, event: SkillsFiltersChanged) -> None:
-        if isinstance(self.screen, SkillsScreen):
-            await self._refresh_skills_screen(self.screen, event.filters)
-
-    async def on_skills_delete_requested(self, event: SkillsDeleteRequested) -> None:
-        if not isinstance(self.screen, SkillsScreen):
-            return
-
-        self.screen.set_busy(True, f"Deleting {event.skill.name}...")
+    async def _disconnect_and_exit(self) -> None:
         try:
-            await self.client.delete_skill(event.skill.path)
-        except Exception as exc:
-            self.screen.set_busy(False)
-            self.screen.set_error(str(exc))
-            return
-
-        await self._refresh_skills_screen(self.screen, event.filters)
+            await self.client.disconnect()
+        except Exception:
+            pass
+        self.exit()
 
     async def action_clear_chat(self) -> None:
         await self._cmd_clear()
@@ -1376,3 +1325,6 @@ class AgentZeroCLI(App):
 
     async def action_pause_agent(self) -> None:
         await self._cmd_pause()
+
+    async def action_quit(self) -> None:
+        await self._disconnect_and_exit()

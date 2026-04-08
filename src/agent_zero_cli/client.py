@@ -498,39 +498,6 @@ class A0Client:
         response.raise_for_status()
         return self._json(response)
 
-    async def list_agents(self) -> list[dict[str, Any]]:
-        response = await self._post("agents_list")
-        response.raise_for_status()
-        data = self._json(response)
-        agents = data.get("agents", data.get("data", []))
-        return agents if isinstance(agents, list) else []
-
-    async def list_skills(
-        self,
-        *,
-        project_name: str | None = None,
-        agent_profile: str | None = None,
-    ) -> list[dict[str, Any]]:
-        payload: dict[str, Any] = {}
-        if project_name:
-            payload["project_name"] = project_name
-        if agent_profile:
-            payload["agent_profile"] = agent_profile
-
-        response = await self._post("skills_list", payload)
-        response.raise_for_status()
-        data = self._json(response)
-        skills = data.get("skills", data.get("data", []))
-        return skills if isinstance(skills, list) else []
-
-    async def delete_skill(self, skill_path: str) -> dict[str, Any]:
-        response = await self._post(
-            "skills_delete",
-            {"skill_path": skill_path},
-        )
-        response.raise_for_status()
-        return self._json(response)
-
     async def get_model_presets(self) -> list[dict[str, Any]]:
         response = await self._post("model_presets")
         response.raise_for_status()

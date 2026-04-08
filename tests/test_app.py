@@ -517,8 +517,6 @@ async def test_help_is_generated_from_registry_on_welcome(dummy_app: DummyAgentZ
         "chats_list",
         "settings_get",
         "settings_set",
-        "skills_list",
-        "agents_list",
         "compact_chat",
         "model_presets",
     }
@@ -528,8 +526,20 @@ async def test_help_is_generated_from_registry_on_welcome(dummy_app: DummyAgentZ
 
     splash = dummy_app._test_widgets["#splash-view"]
     assert "Available commands:" in splash.state.detail
+    assert "/help" in splash.state.detail
+    assert "/new" in splash.state.detail
     assert "/settings" in splash.state.detail
-    assert "/exit (/q)" in splash.state.detail
+    assert "/clear" not in splash.state.detail
+    assert "/skills" not in splash.state.detail
+    assert "/exit" not in splash.state.detail
+
+
+def test_system_commands_are_curated_and_ordered(dummy_app: DummyAgentZeroCLI) -> None:
+    screen = SimpleNamespace(query=lambda selector: [])
+
+    titles = [command.title for command in dummy_app.get_system_commands(screen)]
+
+    assert titles == ["New Chat", "Chats", "Keys", "Help", "Settings", "Quit"]
 
 
 def test_slash_menu_opens_and_closes_with_query_changes(dummy_app: DummyAgentZeroCLI) -> None:
@@ -567,3 +577,34 @@ async def test_unknown_command_fails_gracefully_on_welcome(dummy_app: DummyAgent
 
     splash = dummy_app._test_widgets["#splash-view"]
     assert "Unknown command" in splash.state.message or "Unknown command" in splash.state.detail
+
+
+async def test_removed_slash_commands_fail_gracefully(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = False
+    dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    for command in ("/clear", "/skills", "/exit"):
+        await dummy_app._dispatch_command(command)
+        assert f"Unknown command: {command}." in splash.state.detail
+
+
+async def test_quit_disconnects_before_exit(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disconnected: list[bool] = []
+    exited: list[bool] = []
+
+    async def fake_disconnect() -> None:
+        disconnected.append(True)
+
+    monkeypatch.setattr(dummy_app.client, "disconnect", fake_disconnect)
+    monkeypatch.setattr(dummy_app, "exit", lambda: exited.append(True))
+
+    await dummy_app.action_quit()
+
+    assert disconnected == [True]
+    assert exited == [True]

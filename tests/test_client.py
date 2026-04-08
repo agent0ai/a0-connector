@@ -532,59 +532,22 @@ async def test_get_chat_uses_context_id_payload() -> None:
     )
 
 
-async def test_list_agents_reads_data_array() -> None:
+async def test_list_projects_returns_project_array() -> None:
     client = A0Client("http://localhost:5080", api_key="secret")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
             status_code=200,
-            json_data={"ok": True, "data": [{"key": "default", "label": "Default"}]},
+            json_data={"projects": [{"name": "agent-zero"}]},
         )
     )
 
-    result = await client.list_agents()
+    result = await client.list_projects()
 
-    assert result == [{"key": "default", "label": "Default"}]
+    assert result == [{"name": "agent-zero"}]
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/agents_list",
+        "http://localhost:5080/api/plugins/a0_connector/v1/projects_list",
         json={},
-        headers={"X-API-KEY": "secret"},
-    )
-
-
-async def test_list_skills_uses_optional_filters() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
-    client.http = Mock()
-    client.http.post = AsyncMock(
-        return_value=FakeResponse(
-            status_code=200,
-            json_data={"ok": True, "data": [{"name": "playwright", "path": "/skills/playwright"}]},
-        )
-    )
-
-    result = await client.list_skills(project_name="proj-a", agent_profile="developer")
-
-    assert result == [{"name": "playwright", "path": "/skills/playwright"}]
-    client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/skills_list",
-        json={"project_name": "proj-a", "agent_profile": "developer"},
-        headers={"X-API-KEY": "secret"},
-    )
-
-
-async def test_delete_skill_posts_skill_path() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
-    client.http = Mock()
-    client.http.post = AsyncMock(
-        return_value=FakeResponse(status_code=200, json_data={"ok": True})
-    )
-
-    result = await client.delete_skill("/skills/playwright")
-
-    assert result == {"ok": True}
-    client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/skills_delete",
-        json={"skill_path": "/skills/playwright"},
         headers={"X-API-KEY": "secret"},
     )
 
