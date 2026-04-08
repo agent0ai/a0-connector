@@ -24,7 +24,7 @@ _STAGE_LABELS: dict[SplashStage, str] = {
     "error": "Connection issue",
 }
 _DEFAULT_HOST = "http://127.0.0.1:5080"
-_DEFAULT_ACTION_KEYS: tuple[str, ...] = ("chats", "settings", "compact", "pause", "nudge")
+_DEFAULT_ACTION_KEYS: tuple[str, ...] = ("chats", "compact", "pause", "nudge")
 
 
 @dataclass(frozen=True)
@@ -334,11 +334,6 @@ class SplashView(VerticalScroll):
                 key="chats",
                 title="Chats",
                 description="Open chat history.",
-            ),
-            SplashAction(
-                key="settings",
-                title="Settings",
-                description="Edit connector settings.",
             ),
             SplashAction(
                 key="compact",

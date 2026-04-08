@@ -51,7 +51,7 @@ Screen {
 #model-switcher-summary {
     width: 1fr;
     color: #9aa7b4;
-    content-align: left middle;
+    content-align: left top;
 }
 
 #model-switcher-preset {
@@ -68,6 +68,57 @@ Screen {
 
 #model-switcher-preset:focus > SelectCurrent {
     color: #d9e2ec;
+}
+
+ModelPresetsScreen {
+    align: center middle;
+}
+
+#model-presets-box {
+    width: 84%;
+    max-width: 108;
+    max-height: 88%;
+    border: round #0f6db8;
+    background: #101820;
+    padding: 1 2;
+}
+
+#model-presets-title {
+    text-style: bold;
+}
+
+#model-presets-description {
+    margin-bottom: 1;
+    color: #9aa7b4;
+}
+
+#model-presets-select {
+    width: 100%;
+}
+
+#model-presets-details {
+    margin-top: 1;
+    border: round #2a3a4a;
+    background: #111820;
+    padding: 1;
+    min-height: 5;
+}
+
+#model-presets-status {
+    margin-top: 1;
+    min-height: 1;
+    color: #9aa7b4;
+}
+
+#model-presets-actions {
+    margin-top: 1;
+    align: right middle;
+    height: auto;
+}
+
+#model-presets-actions Button {
+    min-width: 12;
+    margin-left: 1;
 }
 
 #connection-status {

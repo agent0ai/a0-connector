@@ -4,6 +4,7 @@ from typing import Any
 
 from rich.console import RenderableType
 from rich.text import Text
+from textual import events
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
@@ -15,6 +16,55 @@ _AGENT_ZERO_BANNER = """ █████╗   ██████╗ ████
 ██╔══██║ ██║   ██║██╔══╝  ██║╚██╗██║   ██║       ███╔╝  ██╔══╝  ██╔══██╗██║   ██║
 ██║  ██║ ╚██████╔╝███████╗██║ ╚████║   ██║      ███████╗███████╗██║  ██║╚██████╔╝
 ╚═╝  ╚═╝  ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝      ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝"""
+_AGENT_ZERO_BANNER_COMPACT = "Agent Zero"
+_AGENT_ZERO_BANNER_TINY = "A0"
+
+
+def _banner_width(banner: str) -> int:
+    return max(len(line) for line in banner.splitlines() if line)
+
+
+_BANNER_VARIANTS: tuple[str, ...] = (
+    _AGENT_ZERO_BANNER,
+    _AGENT_ZERO_BANNER_COMPACT,
+    _AGENT_ZERO_BANNER_TINY,
+)
+
+
+def _select_agent_zero_banner(available_width: int) -> str:
+    width = max(available_width, 0)
+    for banner in _BANNER_VARIANTS:
+        if width >= _banner_width(banner):
+            return banner
+    return _AGENT_ZERO_BANNER_TINY
+
+
+def _build_banner_text(banner: str) -> Text:
+    text = Text(banner, style="#00b4ff")
+    text.no_wrap = True
+    text.overflow = "ignore"
+    return text
+
+
+class AgentZeroBanner(Static):
+    """Responsive Agent Zero banner that keeps a readable shape while resizing."""
+
+    def __init__(self, *, id: str | None = None, classes: str = "agent-zero-banner") -> None:
+        super().__init__("", id=id, classes=classes)
+        self._current_banner = ""
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._sync_banner)
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._sync_banner()
+
+    def _sync_banner(self) -> None:
+        selected = _select_agent_zero_banner(self.size.width)
+        if selected == self._current_banner:
+            return
+        self._current_banner = selected
+        self.update(_build_banner_text(selected))
 
 
 class ChatLog(VerticalScroll):
@@ -133,8 +183,4 @@ class ChatLog(VerticalScroll):
 
 def build_agent_zero_banner_widget(*, id: str | None = None, classes: str = "agent-zero-banner") -> Static:
     """Build the shared Agent Zero banner used by splash and chat views."""
-    banner = Text(_AGENT_ZERO_BANNER, style="#00b4ff")
-    banner.no_wrap = True
-    banner.overflow = "ignore"
-    return Static(banner, id=id, classes=classes)
-
+    return AgentZeroBanner(id=id, classes=classes)

@@ -4,12 +4,28 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.message import Message
 from textual.widgets import Select, Static
 
 _CUSTOM_OVERRIDE_VALUE = "__custom_override__"
+_PRESET_MIN_VISIBLE_WIDTH = 82
+
+
+def _show_preset_for_width(width: int) -> bool:
+    return max(width, 0) >= _PRESET_MIN_VISIBLE_WIDTH
+
+
+def _should_stack_summary_rows(width: int, *, main_model_text: str, utility_model_text: str) -> bool:
+    """Return True when main + utility don't fit on one row."""
+    available = max(width, 0)
+    if available == 0:
+        return True
+    main_segment = len("Main ") + len(main_model_text)
+    utility_segment = len("Utility ") + len(utility_model_text)
+    return (main_segment + 3 + utility_segment) > available
 
 
 @dataclass(frozen=True)
@@ -123,6 +139,12 @@ class ModelSwitcherBar(Horizontal):
         yield self._summary
         yield self._preset
 
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._sync_layout)
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._sync_layout()
+
     def clear(self) -> None:
         self.display = False
         self._busy = False
@@ -173,15 +195,45 @@ class ModelSwitcherBar(Horizontal):
 
         self._switch_allowed = allowed
         self._option_count = len(options)
+        self._sync_layout()
         self._update_select_state()
 
     def _render_summary(self, main_model: object, utility_model: object) -> Text:
-        return Text.assemble(
+        main_text = _model_text(main_model)
+        utility_text = _model_text(utility_model)
+        available_width = max(self.size.width, 0)
+
+        main_line = Text.assemble(
             ("Main ", "dim"),
-            (_model_text(main_model), "#d9e2ec"),
-            ("   Utility ", "dim"),
-            (_model_text(utility_model), "#d9e2ec"),
+            (main_text, "#d9e2ec"),
         )
+        utility_line = Text.assemble(
+            ("Utility ", "dim"),
+            (utility_text, "#d9e2ec"),
+        )
+
+        if _should_stack_summary_rows(
+            available_width,
+            main_model_text=main_text,
+            utility_model_text=utility_text,
+        ):
+            if available_width > 0:
+                main_line.truncate(available_width, overflow="ellipsis")
+                utility_line.truncate(available_width, overflow="ellipsis")
+            summary = Text.assemble(main_line, "\n", utility_line)
+            summary.no_wrap = True
+            summary.overflow = "ellipsis"
+            return summary
+
+        summary = Text.assemble(main_line, "   ", utility_line)
+        if available_width > 0:
+            summary.truncate(available_width, overflow="ellipsis")
+        summary.no_wrap = True
+        summary.overflow = "ellipsis"
+        return summary
+
+    def _sync_layout(self) -> None:
+        self._preset.display = _show_preset_for_width(self.size.width)
 
     def _update_select_state(self) -> None:
         self._preset.disabled = self._busy or not self._switch_allowed or self._option_count <= 1

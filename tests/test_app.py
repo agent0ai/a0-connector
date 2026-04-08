@@ -7,6 +7,13 @@ from textual.widgets import Static
 
 from agent_zero_cli.app import AgentZeroCLI, _DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
+from agent_zero_cli.screens.model_presets import ModelPresetsResult
+from agent_zero_cli.widgets.chat_log import (
+    _AGENT_ZERO_BANNER,
+    _AGENT_ZERO_BANNER_COMPACT,
+    _AGENT_ZERO_BANNER_TINY,
+    _select_agent_zero_banner,
+)
 from agent_zero_cli.widgets import SplashState
 from agent_zero_cli.widgets.splash_view import SplashHostPanel, SplashStatusPanel, SplashView
 
@@ -248,6 +255,18 @@ def test_splash_view_uses_shared_agent_zero_banner_widget() -> None:
 
     assert isinstance(hero, Static)
     assert "agent-zero-banner" in hero.classes
+
+
+def test_agent_zero_banner_selects_full_variant_when_it_fits() -> None:
+    assert _select_agent_zero_banner(120) == _AGENT_ZERO_BANNER
+
+
+def test_agent_zero_banner_selects_compact_variant_on_narrow_width() -> None:
+    assert _select_agent_zero_banner(20) == _AGENT_ZERO_BANNER_COMPACT
+
+
+def test_agent_zero_banner_selects_tiny_variant_for_extreme_narrow_width() -> None:
+    assert _select_agent_zero_banner(1) == _AGENT_ZERO_BANNER_TINY
 
 
 def test_splash_status_panel_hides_duplicate_error_copy() -> None:
@@ -515,8 +534,6 @@ async def test_help_is_generated_from_registry_on_welcome(dummy_app: DummyAgentZ
     dummy_app.connector_features = {
         "chat_create",
         "chats_list",
-        "settings_get",
-        "settings_set",
         "compact_chat",
         "model_presets",
     }
@@ -528,7 +545,7 @@ async def test_help_is_generated_from_registry_on_welcome(dummy_app: DummyAgentZ
     assert "Available commands:" in splash.state.detail
     assert "/help" in splash.state.detail
     assert "/new" in splash.state.detail
-    assert "/settings" in splash.state.detail
+    assert "/settings" not in splash.state.detail
     assert "/clear" not in splash.state.detail
     assert "/skills" not in splash.state.detail
     assert "/exit" not in splash.state.detail
@@ -539,7 +556,97 @@ def test_system_commands_are_curated_and_ordered(dummy_app: DummyAgentZeroCLI) -
 
     titles = [command.title for command in dummy_app.get_system_commands(screen)]
 
-    assert titles == ["New Chat", "Chats", "Keys", "Help", "Settings", "Quit"]
+    assert titles == ["New Chat", "Chats", "Keys", "Help", "Quit"]
+
+
+def test_system_commands_include_model_presets_when_available(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"model_switcher"}
+    dummy_app._apply_model_switcher_state(
+        {
+            "ok": True,
+            "allowed": True,
+            "override": {"preset_name": "Balanced"},
+            "presets": [
+                {"name": "Balanced"},
+                {"name": "Fast", "label": "Fast lane"},
+            ],
+            "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+            "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+        }
+    )
+    screen = SimpleNamespace(query=lambda selector: [])
+
+    titles = [command.title for command in dummy_app.get_system_commands(screen)]
+
+    assert titles == [
+        "New Chat",
+        "Chats",
+        "Model Presets",
+        "Keys",
+        "Help",
+        "Quit",
+    ]
+
+
+async def test_model_presets_command_opens_picker_and_applies_selection(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"model_switcher"}
+    dummy_app._apply_model_switcher_state(
+        {
+            "ok": True,
+            "allowed": True,
+            "override": {"preset_name": "Balanced"},
+            "presets": [{"name": "Balanced"}, {"name": "Fast"}],
+            "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+            "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+        }
+    )
+
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_model_switcher",
+        lambda context_id: _async_return(
+            {
+                "ok": True,
+                "allowed": True,
+                "override": {"preset_name": "Balanced"},
+                "presets": [{"name": "Balanced"}, {"name": "Fast"}],
+                "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_model_presets",
+        lambda: _async_return([{"name": "Balanced"}, {"name": "Fast"}]),
+    )
+    monkeypatch.setattr(
+        dummy_app,
+        "push_screen_wait",
+        lambda screen: _async_return(ModelPresetsResult(preset_name="Fast")),
+    )
+
+    selected: list[str | None] = []
+
+    async def fake_set_model_preset(
+        preset_name: str | None,
+        *,
+        bar=None,
+    ) -> None:
+        selected.append(preset_name)
+
+    monkeypatch.setattr(dummy_app, "_set_model_preset", fake_set_model_preset)
+
+    await dummy_app._cmd_model_presets()
+
+    assert selected == ["Fast"]
 
 
 def test_slash_menu_opens_and_closes_with_query_changes(dummy_app: DummyAgentZeroCLI) -> None:

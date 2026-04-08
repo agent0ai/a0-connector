@@ -25,6 +25,7 @@ from agent_zero_cli.rendering import (
 )
 from agent_zero_cli.screens.chat_list import ChatListScreen
 from agent_zero_cli.screens.compact_modal import CompactResult, CompactScreen
+from agent_zero_cli.screens.model_presets import ModelPresetsResult, ModelPresetsScreen
 from agent_zero_cli.screens.settings_modal import SettingsResult, SettingsScreen
 from agent_zero_cli.widgets.command_palette import (
     AgentCommandPalette,
@@ -107,6 +108,7 @@ class AgentZeroCLI(App):
         self._python_tty = PythonTTYManager(cwd=self._remote_files.scan_root)
         self._remote_tree_task: asyncio.Task[None] | None = None
         self._last_remote_tree_hash = ""
+        self._model_switch_allowed = False
 
     def compose(self) -> ComposeResult:
         yield ConnectionStatus(id="connection-status")
@@ -157,6 +159,7 @@ class AgentZeroCLI(App):
             "List previous chats and switch contexts.",
             lambda: self.run_worker(self._dispatch_command("/chats"), exclusive=True, name="palette-chats"),
         )
+        yield from self._model_preset_system_commands()
         yield SystemCommand("Keys", keys_help, keys_callback)
         yield SystemCommand(
             "Help",
@@ -164,14 +167,25 @@ class AgentZeroCLI(App):
             lambda: self.run_worker(self._dispatch_command("/help"), exclusive=True, name="palette-help"),
         )
         yield SystemCommand(
-            "Settings",
-            "Open the curated connector-backed settings editor.",
-            lambda: self.run_worker(self._dispatch_command("/settings"), exclusive=True, name="palette-settings"),
-        )
-        yield SystemCommand(
             "Quit",
             "Disconnect and exit the CLI.",
             lambda: self.run_worker(self.action_quit(), exclusive=True, name="palette-quit"),
+        )
+
+    def _model_preset_system_commands(self) -> Iterable[SystemCommand]:
+        availability = self._model_presets_availability()
+        if not availability.available:
+            return ()
+        return (
+            SystemCommand(
+                "Model Presets",
+                "Open preset picker with Main/Utility model details.",
+                lambda: self.run_worker(
+                    self._cmd_model_presets(),
+                    exclusive=True,
+                    name="palette-model-presets",
+                ),
+            ),
         )
 
     def _build_command_registry(self) -> tuple[CommandSpec, ...]:
@@ -196,13 +210,6 @@ class AgentZeroCLI(App):
                 "List previous chats and switch contexts.",
                 lambda app: app._require_features("chats_list"),
                 lambda app: app._cmd_chats(),
-            ),
-            CommandSpec(
-                "/settings",
-                (),
-                "Open the curated connector-backed settings editor.",
-                lambda app: app._require_features("settings_get", "settings_set"),
-                lambda app: app._cmd_settings(),
             ),
             CommandSpec(
                 "/compact",
@@ -352,6 +359,7 @@ class AgentZeroCLI(App):
         self._chat_intro_pending = False
 
     def _clear_model_switcher(self) -> None:
+        self._model_switch_allowed = False
         try:
             self.query_one("#model-switcher-bar", ModelSwitcherBar).clear()
         except Exception:
@@ -373,6 +381,8 @@ class AgentZeroCLI(App):
             }
             if selected_preset not in preset_names:
                 override_label = f"Preset: {selected_preset}"
+
+        self._model_switch_allowed = bool(payload.get("allowed"))
 
         widget = self.query_one("#model-switcher-bar", ModelSwitcherBar)
         widget.set_state(
@@ -527,6 +537,16 @@ class AgentZeroCLI(App):
             return CommandAvailability(False, "Wait for the current run to finish before nudging.")
         return CommandAvailability(True)
 
+    def _model_presets_availability(self) -> CommandAvailability:
+        base = self._require_features("model_switcher")
+        if not base.available:
+            return base
+        if not self.current_context:
+            return CommandAvailability(False, "Open or create a chat context first.")
+        if not self._model_switch_allowed:
+            return CommandAvailability(False, "Model preset switching is unavailable for this chat.")
+        return CommandAvailability(True)
+
     def _welcome_actions(self) -> tuple[SplashAction, ...]:
         def action(key: str, title: str, description: str, availability: CommandAvailability) -> SplashAction:
             return SplashAction(
@@ -539,7 +559,6 @@ class AgentZeroCLI(App):
 
         return (
             action("chats", "Chats", "Open chat history.", self._require_features("chats_list")),
-            action("settings", "Settings", "Edit connector settings.", self._require_features("settings_get", "settings_set")),
             action("compact", "Compact", "Compact this chat.", self._compact_availability()),
             action("pause", "Pause", "Pause the active run.", self._pause_availability()),
             action("nudge", "Nudge", "Continue the current run.", self._nudge_availability()),
@@ -1061,21 +1080,43 @@ class AgentZeroCLI(App):
         self._insert_slash_command(event.command)
 
     async def on_model_switcher_bar_preset_changed(self, event: ModelSwitcherBar.PresetChanged) -> None:
-        if "model_switcher" not in self.connector_features or not self.current_context:
-            event.bar.set_busy(False)
+        await self._set_model_preset(event.value or None, bar=event.bar)
+
+    async def _set_model_preset(
+        self,
+        preset_name: str | None,
+        *,
+        bar: ModelSwitcherBar | None = None,
+    ) -> None:
+        if "model_switcher" not in self.connector_features:
+            self._show_notice("Model presets are unavailable on this connector build.", error=True)
+            return
+        if not self.current_context:
+            self._show_notice("Open or create a chat context before switching model presets.", error=True)
             return
 
-        event.bar.set_busy(True)
+        target_bar = bar
+        if target_bar is None:
+            try:
+                target_bar = self.query_one("#model-switcher-bar", ModelSwitcherBar)
+            except Exception:
+                target_bar = None
+
+        if target_bar is not None:
+            target_bar.set_busy(True)
+
         try:
-            payload = await self.client.set_model_preset(self.current_context, event.value or None)
+            payload = await self.client.set_model_preset(self.current_context, preset_name or None)
         except Exception as exc:
-            event.bar.set_busy(False)
+            if target_bar is not None:
+                target_bar.set_busy(False)
             await self._refresh_model_switcher()
             self._show_notice(f"Failed to update model preset: {exc}", error=True)
             return
 
         self._apply_model_switcher_state(payload)
-        event.bar.set_busy(False)
+        if target_bar is not None:
+            target_bar.set_busy(False)
 
     def on_splash_view_submit_requested(self, event: SplashView.SubmitRequested) -> None:
         self.run_worker(
@@ -1105,7 +1146,6 @@ class AgentZeroCLI(App):
 
         command = {
             "chats": "/chats",
-            "settings": "/settings",
             "compact": "/compact",
             "pause": "/pause",
             "nudge": "/nudge",
@@ -1176,6 +1216,54 @@ class AgentZeroCLI(App):
             actions=self._welcome_actions(),
         )
         self._focus_message_input()
+
+    async def _cmd_model_presets(self) -> None:
+        availability = self._model_presets_availability()
+        if not availability.available:
+            self._show_notice(availability.reason or "Model presets are unavailable.", error=True)
+            return
+
+        context_id = self.current_context or ""
+        try:
+            switcher_payload, presets = await asyncio.gather(
+                self.client.get_model_switcher(context_id),
+                self.client.get_model_presets(),
+            )
+        except Exception as exc:
+            self._show_notice(f"Failed to load model presets: {exc}", error=True)
+            return
+
+        self._apply_model_switcher_state(switcher_payload)
+        availability = self._model_presets_availability()
+        if not availability.available:
+            self._show_notice(availability.reason or "Model presets are unavailable.", error=True)
+            return
+
+        override = switcher_payload.get("override") if isinstance(switcher_payload.get("override"), dict) else {}
+        current_preset = str(override.get("preset_name") or "").strip()
+        custom_override_label = ""
+        if override and not current_preset:
+            custom_override_label = str(override.get("name") or override.get("provider") or "Custom override").strip()
+
+        result = await self.push_screen_wait(
+            ModelPresetsScreen(
+                presets=presets,
+                current_preset=current_preset,
+                switch_allowed=bool(switcher_payload.get("allowed")),
+                reason="Model preset switching is unavailable for this chat.",
+                current_override_label=custom_override_label,
+            )
+        )
+        if result is None:
+            return
+        if not isinstance(result, ModelPresetsResult):
+            raise TypeError(f"Unexpected model presets result: {result!r}")
+
+        selected = result.preset_name or ""
+        has_custom_override = bool(override) and not current_preset
+        if selected == current_preset and not has_custom_override:
+            return
+        await self._set_model_preset(selected or None)
 
     async def _cmd_settings(self) -> None:
         try:
