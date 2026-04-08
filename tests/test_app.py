@@ -12,6 +12,7 @@ from agent_zero_cli.app import AgentZeroCLI, _DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.rendering import render_connector_event
 from agent_zero_cli.screens.compact_modal import CompactResult
+from agent_zero_cli.screens.model_runtime import ModelRuntimeResult
 from agent_zero_cli.screens.model_presets import ModelPresetsResult
 from agent_zero_cli.widgets.command_palette import AgentCommandPalette
 from agent_zero_cli.widgets.chat_log import (
@@ -50,6 +51,8 @@ class FakeChatLog:
         self._active_label = ""
         self._active_detail = ""
         self._active_meta: dict[str, object] = {}
+        self.local_workspace = ""
+        self.remote_workspace = ""
 
     def write(self, message: object) -> None:
         self.writes.append(message)
@@ -125,6 +128,10 @@ class FakeChatLog:
         self.status_entries.clear()
         self._active_seq = None
 
+    def set_workspace(self, *, local_workspace: str = "", remote_workspace: str = "") -> None:
+        self.local_workspace = local_workspace
+        self.remote_workspace = remote_workspace
+
 
 class FakeInput:
     def __init__(self) -> None:
@@ -158,6 +165,16 @@ class FakeConnectionStatus:
     def __init__(self) -> None:
         self.status = "disconnected"
         self.url = ""
+        self.token_count = None
+        self.token_limit = None
+
+    def set_token_usage(self, token_count: object, token_limit: object = None) -> None:
+        self.token_count = token_count
+        self.token_limit = token_limit
+
+    def clear_token_usage(self) -> None:
+        self.token_count = None
+        self.token_limit = None
 
 
 class FakeFooter:
@@ -1117,7 +1134,7 @@ def test_system_commands_are_curated_and_ordered(dummy_app: DummyAgentZeroCLI) -
 def test_system_commands_include_model_presets_when_available(dummy_app: DummyAgentZeroCLI) -> None:
     dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"model_switcher"}
+    dummy_app.connector_features = {"model_switcher", "model_presets"}
     dummy_app._apply_model_switcher_state(
         {
             "ok": True,
@@ -1140,6 +1157,7 @@ def test_system_commands_include_model_presets_when_available(dummy_app: DummyAg
         "/chats",
         "/compact",
         "/presets",
+        "/models",
         "/keys",
         "/help",
         "/quit",
@@ -1162,7 +1180,7 @@ async def test_model_presets_command_opens_picker_and_applies_selection(
 ) -> None:
     dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"model_switcher"}
+    dummy_app.connector_features = {"model_switcher", "model_presets"}
     dummy_app._apply_model_switcher_state(
         {
             "ok": True,
@@ -1213,6 +1231,103 @@ async def test_model_presets_command_opens_picker_and_applies_selection(
     await dummy_app._cmd_model_presets()
 
     assert selected == ["Fast"]
+
+
+async def test_models_command_updates_chat_model_override_without_preset_write(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"model_switcher"}
+    dummy_app._apply_model_switcher_state(
+        {
+            "ok": True,
+            "allowed": True,
+            "override": None,
+            "presets": [{"name": "Balanced"}],
+            "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+            "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+        }
+    )
+
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_model_switcher",
+        lambda context_id: _async_return(
+            {
+                "ok": True,
+                "allowed": True,
+                "override": None,
+                "presets": [{"name": "Balanced"}],
+                "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        dummy_app,
+        "push_screen_wait",
+        lambda screen: _async_return(
+            ModelRuntimeResult(
+                main_model={
+                    "provider": "openai",
+                    "name": "gpt-4o",
+                    "api_key": "key-main",
+                    "api_base": "https://api.main.example",
+                },
+                utility_model={
+                    "provider": "openai",
+                    "name": "gpt-4o-mini",
+                    "api_key": "key-utility",
+                    "api_base": "https://api.utility.example",
+                },
+            )
+        ),
+    )
+
+    override_calls: list[tuple[str, dict[str, object], dict[str, object]]] = []
+
+    async def fake_set_model_override(
+        context_id: str,
+        *,
+        main_model: dict[str, object] | None = None,
+        utility_model: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        override_calls.append((context_id, dict(main_model or {}), dict(utility_model or {})))
+        return {
+            "ok": True,
+            "allowed": True,
+            "override": {
+                "chat": dict(main_model or {}),
+                "utility": dict(utility_model or {}),
+            },
+            "presets": [{"name": "Balanced"}],
+            "main_model": {"provider": "openai", "name": "gpt-4o"},
+            "utility_model": {"provider": "openai", "name": "gpt-4o-mini"},
+        }
+
+    monkeypatch.setattr(dummy_app.client, "set_model_override", fake_set_model_override)
+
+    await dummy_app._cmd_models()
+
+    assert override_calls == [
+        (
+            "ctx-1",
+            {
+                "provider": "openai",
+                "name": "gpt-4o",
+                "api_key": "key-main",
+                "api_base": "https://api.main.example",
+            },
+            {
+                "provider": "openai",
+                "name": "gpt-4o-mini",
+                "api_key": "key-utility",
+                "api_base": "https://api.utility.example",
+            },
+        )
+    ]
 
 
 async def test_compact_command_works_without_model_presets_feature(

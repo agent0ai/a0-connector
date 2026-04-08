@@ -3,12 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
-from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.message import Message
-from textual.widgets import Select, Static
+from textual.widgets import Button, Select
 
 _CUSTOM_OVERRIDE_VALUE = "__custom_override__"
 _PRESET_MIN_VISIBLE_WIDTH = 82
@@ -117,9 +116,17 @@ class ModelSwitcherBar(Horizontal):
             self.value = value
             self.bar = bar
 
+    class ModelConfigRequested(Message):
+        def __init__(self, target: str, bar: ModelSwitcherBar) -> None:
+            super().__init__()
+            self.target = target
+            self.bar = bar
+
     def __init__(self, *, id: str | None = None) -> None:
         super().__init__(id=id)
-        self._summary = Static("", id="model-switcher-summary")
+        self._summary = Horizontal(id="model-switcher-summary")
+        self._main_button = Button("", id="model-switcher-main", classes="model-switcher-chip")
+        self._utility_button = Button("", id="model-switcher-utility", classes="model-switcher-chip")
         self._preset = Select(
             [("Default LLM", "")],
             prompt="Preset",
@@ -133,10 +140,14 @@ class ModelSwitcherBar(Horizontal):
         self._option_count = 1
         self._suppress_events = False
         self._selected_value = ""
+        self._main_model_text = "—"
+        self._utility_model_text = "—"
         self.display = False
 
     def compose(self) -> ComposeResult:
-        yield self._summary
+        with self._summary:
+            yield self._main_button
+            yield self._utility_button
         yield self._preset
 
     def on_mount(self) -> None:
@@ -153,7 +164,10 @@ class ModelSwitcherBar(Horizontal):
         self._selected_value = ""
         self._suppress_events = True
         try:
-            self._summary.update("")
+            self._main_model_text = "—"
+            self._utility_model_text = "—"
+            self._main_button.label = "Main —"
+            self._utility_button.label = "Utility —"
             self._preset.set_options([("Default LLM", "")])
             self._preset.value = ""
         finally:
@@ -175,7 +189,10 @@ class ModelSwitcherBar(Horizontal):
         override_label: str = "",
     ) -> None:
         self.display = True
-        self._summary.update(self._render_summary(main_model, utility_model))
+        self._main_model_text = _model_text(main_model)
+        self._utility_model_text = _model_text(utility_model)
+        self._main_button.label = f"Main {self._main_model_text}"
+        self._utility_button.label = f"Utility {self._utility_model_text}"
 
         options = _preset_options(presets, override_label=override_label)
         option_values = {value for _, value in options}
@@ -198,45 +215,41 @@ class ModelSwitcherBar(Horizontal):
         self._sync_layout()
         self._update_select_state()
 
-    def _render_summary(self, main_model: object, utility_model: object) -> Text:
-        main_text = _model_text(main_model)
-        utility_text = _model_text(utility_model)
-        available_width = max(self.size.width, 0)
-
-        main_line = Text.assemble(
-            ("Main ", "dim"),
-            (main_text, "#d9e2ec"),
-        )
-        utility_line = Text.assemble(
-            ("Utility ", "dim"),
-            (utility_text, "#d9e2ec"),
-        )
-
-        if _should_stack_summary_rows(
-            available_width,
-            main_model_text=main_text,
-            utility_model_text=utility_text,
-        ):
-            if available_width > 0:
-                main_line.truncate(available_width, overflow="ellipsis")
-                utility_line.truncate(available_width, overflow="ellipsis")
-            summary = Text.assemble(main_line, "\n", utility_line)
-            summary.no_wrap = True
-            summary.overflow = "ellipsis"
-            return summary
-
-        summary = Text.assemble(main_line, "   ", utility_line)
-        if available_width > 0:
-            summary.truncate(available_width, overflow="ellipsis")
-        summary.no_wrap = True
-        summary.overflow = "ellipsis"
-        return summary
-
     def _sync_layout(self) -> None:
         self._preset.display = _show_preset_for_width(self.size.width)
+        available_width = max(self.size.width, 0)
+        if self._preset.display:
+            # Preserve space for the selector so model labels can adapt cleanly.
+            available_width = max(available_width - 34, 0)
+
+        stack_rows = _should_stack_summary_rows(
+            available_width,
+            main_model_text=self._main_model_text,
+            utility_model_text=self._utility_model_text,
+        )
+        if stack_rows:
+            self._summary.add_class("stacked")
+        else:
+            self._summary.remove_class("stacked")
 
     def _update_select_state(self) -> None:
         self._preset.disabled = self._busy or not self._switch_allowed or self._option_count <= 1
+
+    def _request_model_config(self, target: str) -> None:
+        if target not in {"main", "utility"}:
+            return
+        if self._busy:
+            return
+        self.post_message(self.ModelConfigRequested(target=target, bar=self))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id == "model-switcher-main":
+            self._request_model_config("main")
+            return
+        if button_id == "model-switcher-utility":
+            self._request_model_config("utility")
+            return
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if self._suppress_events or event.select.id != "model-switcher-preset":

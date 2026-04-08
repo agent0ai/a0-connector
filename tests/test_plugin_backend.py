@@ -226,6 +226,13 @@ def _install_fake_helpers(
         None,
     )
     model_config_mod.is_chat_override_allowed = lambda agent=None: bool(model_config_state["allowed"])
+    model_config_mod.get_chat_providers = lambda: [
+        {"value": "anthropic", "label": "Anthropic"},
+        {"value": "openai", "label": "OpenAI"},
+    ]
+    model_config_mod.has_provider_api_key = (
+        lambda provider, configured_api_key="": provider == "anthropic" or bool(str(configured_api_key or "").strip())
+    )
 
     def _override(agent):
         context = getattr(agent, "_context", None) if agent is not None else None
@@ -654,8 +661,14 @@ def test_model_switcher_returns_effective_models_and_updates_override() -> None:
 
     initial = asyncio.run(handler.process({"action": "get", "context_id": "ctx-1"}, object()))
     assert initial["allowed"] is True
+    assert initial["chat_providers"] == [
+        {"value": "anthropic", "label": "Anthropic", "has_api_key": True},
+        {"value": "openai", "label": "OpenAI", "has_api_key": False},
+    ]
     assert initial["main_model"]["label"] == "anthropic/chat-model"
+    assert initial["main_model"]["has_api_key"] is True
     assert initial["utility_model"]["label"] == "anthropic/utility-model"
+    assert initial["utility_model"]["has_api_key"] is True
     assert initial["override"] is None
 
     updated = asyncio.run(
@@ -664,6 +677,40 @@ def test_model_switcher_returns_effective_models_and_updates_override() -> None:
     assert updated["override"] == {"preset_name": "fast"}
     assert updated["main_model"]["label"] == "x/y"
     assert updated["utility_model"]["label"] == "anthropic/utility-model"
+
+    custom = asyncio.run(
+        handler.process(
+            {
+                "action": "set_override",
+                "context_id": "ctx-1",
+                "main_model": {
+                    "provider": "openai",
+                    "name": "gpt-4o",
+                    "api_base": "https://api.example.main",
+                },
+                "utility_model": {
+                    "provider": "openai",
+                    "name": "gpt-4o-mini",
+                },
+            },
+            object(),
+        )
+    )
+    assert custom["override"] == {
+        "chat": {
+            "provider": "openai",
+            "name": "gpt-4o",
+            "api_base": "https://api.example.main",
+        },
+        "utility": {
+            "provider": "openai",
+            "name": "gpt-4o-mini",
+        },
+    }
+    assert custom["main_model"]["label"] == "openai/gpt-4o"
+    assert custom["main_model"]["has_api_key"] is False
+    assert custom["utility_model"]["label"] == "openai/gpt-4o-mini"
+    assert custom["utility_model"]["has_api_key"] is False
 
     cleared = asyncio.run(handler.process({"action": "clear", "context_id": "ctx-1"}, object()))
     assert cleared["override"] is None

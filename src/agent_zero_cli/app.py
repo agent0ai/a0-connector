@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import replace
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
@@ -25,6 +25,7 @@ from agent_zero_cli.rendering import (
 )
 from agent_zero_cli.screens.chat_list import ChatListScreen
 from agent_zero_cli.screens.compact_modal import CompactResult, CompactScreen
+from agent_zero_cli.screens.model_runtime import ModelRuntimeResult, ModelRuntimeScreen
 from agent_zero_cli.screens.model_presets import ModelPresetsResult, ModelPresetsScreen
 from agent_zero_cli.screens.settings_modal import SettingsResult, SettingsScreen
 from agent_zero_cli.widgets.command_palette import (
@@ -49,6 +50,51 @@ _WS_NAMESPACE = "/ws"
 _WS_HANDLER = "plugins/a0_connector/ws_connector"
 _COMPACTION_POLL_INTERVAL_SECONDS = 0.75
 _COMPACTION_POLL_TIMEOUT_SECONDS = 180.0
+_TOKEN_REFRESH_INTERVAL_SECONDS = 8.0
+
+def _format_provider_label(provider: str) -> str:
+    value = provider.strip().lower()
+    if not value:
+        return ""
+    return value.replace("_", " ").title()
+
+
+def _coerce_positive_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        if value.is_integer():
+            integer = int(value)
+            return integer if integer >= 0 else None
+        return None
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        integer = int(text)
+    except ValueError:
+        return None
+    return integer if integer >= 0 else None
+
+
+def _extract_token_limit(stats: Mapping[str, object] | None) -> int | None:
+    if not isinstance(stats, Mapping):
+        return None
+    for key in (
+        "context_window",
+        "context_limit",
+        "max_context_tokens",
+        "max_tokens",
+        "token_limit",
+    ):
+        value = _coerce_positive_int(stats.get(key))
+        if value is not None and value > 0:
+            return value
+    return None
 
 
 class AgentZeroCLI(App):
@@ -99,15 +145,23 @@ class AgentZeroCLI(App):
         self._response_delivered = False
         self._context_run_complete = False
         self._chat_intro_pending = True
-        self._splash_state = SplashState(stage="host", host=self.config.instance_url or _DEFAULT_HOST)
+        self._remote_files = RemoteFileUtility(scan_root=os.getcwd())
+        self._python_tty = PythonTTYManager(cwd=self._remote_files.scan_root)
+        self._local_workspace = self._remote_files.scan_root
+        self._remote_workspace = ""
+        self._token_refresh_task: asyncio.Task[None] | None = None
+        self._splash_state = SplashState(
+            stage="host",
+            host=self.config.instance_url or _DEFAULT_HOST,
+            local_workspace=self._local_workspace,
+            remote_workspace=self._remote_workspace,
+        )
         self._command_registry = self._build_command_registry()
         self._command_lookup = {
             name: spec
             for spec in self._command_registry
             for name in spec.names()
         }
-        self._remote_files = RemoteFileUtility(scan_root=os.getcwd())
-        self._python_tty = PythonTTYManager(cwd=self._remote_files.scan_root)
         self._remote_tree_task: asyncio.Task[None] | None = None
         self._last_remote_tree_hash = ""
         self._model_switch_allowed = False
@@ -130,6 +184,8 @@ class AgentZeroCLI(App):
         input_widget.disabled = True
         self.query_one("#model-switcher-bar", ModelSwitcherBar).clear()
         self.query_one("#splash-view", SplashView).set_state(self._splash_state)
+        self._sync_workspace_widgets()
+        self.query_one("#connection-status", ConnectionStatus).clear_token_usage()
         self._sync_composer_visibility()
 
         log = self.query_one("#chat-log", ChatLog)
@@ -185,6 +241,13 @@ class AgentZeroCLI(App):
                 lambda app: app._cmd_model_presets(),
             ),
             CommandSpec(
+                "/models",
+                (),
+                "Open Main/Utility model runtime editor.",
+                lambda app: app._model_runtime_availability(),
+                lambda app: app._cmd_models(),
+            ),
+            CommandSpec(
                 "/keys",
                 (),
                 "Show or hide key and widget help.",
@@ -233,7 +296,7 @@ class AgentZeroCLI(App):
         rows: list[tuple[CommandSpec, CommandAvailability]] = []
         for spec in self._command_registry:
             availability = spec.availability(self)
-            if spec.canonical_name == "/presets" and not availability.available:
+            if spec.canonical_name in {"/presets", "/models"} and not availability.available:
                 continue
             rows.append((spec, availability))
         return tuple(rows)
@@ -243,6 +306,87 @@ class AgentZeroCLI(App):
         widget.status = status
         if url is not None:
             widget.url = url
+
+    def _set_token_usage(self, token_count: object, token_limit: object = None) -> None:
+        self.query_one("#connection-status", ConnectionStatus).set_token_usage(token_count, token_limit)
+
+    def _clear_token_usage(self) -> None:
+        self.query_one("#connection-status", ConnectionStatus).clear_token_usage()
+
+    def _stop_token_refresh(self) -> None:
+        task = self._token_refresh_task
+        self._token_refresh_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _start_token_refresh(self) -> None:
+        self._stop_token_refresh()
+        if not self.connected or not self.current_context:
+            return
+        if "compact_chat" not in self.connector_features:
+            self._clear_token_usage()
+            return
+        context_id = self.current_context
+        self._token_refresh_task = asyncio.create_task(self._token_refresh_loop(context_id))
+
+    async def _token_refresh_loop(self, context_id: str) -> None:
+        try:
+            while self.connected and self.current_context == context_id:
+                await self._refresh_token_usage(context_id=context_id, silent=True)
+                await asyncio.sleep(_TOKEN_REFRESH_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            return
+
+    async def _refresh_token_usage(self, *, context_id: str | None = None, silent: bool = True) -> None:
+        if "compact_chat" not in self.connector_features:
+            self._clear_token_usage()
+            return
+        target_context = context_id or self.current_context
+        if not target_context:
+            self._clear_token_usage()
+            return
+
+        try:
+            payload = await self.client.get_compaction_stats(target_context)
+        except Exception:
+            if not silent:
+                self._show_notice("Failed to refresh token usage.", error=True)
+            return
+
+        if not isinstance(payload, dict):
+            return
+        if not payload.get("ok"):
+            status_code = int(payload.get("status_code") or 0)
+            if status_code == 409:
+                return
+            if not silent:
+                self._show_notice(str(payload.get("message") or "Token usage unavailable."), error=True)
+            return
+
+        stats = payload.get("stats")
+        if not isinstance(stats, Mapping):
+            return
+
+        token_count = _coerce_positive_int(stats.get("token_count"))
+        if token_count is None:
+            return
+
+        token_limit = _extract_token_limit(stats)
+        self._set_token_usage(token_count, token_limit)
+
+    async def _refresh_workspace_from_settings(self) -> None:
+        if "settings_get" not in self.connector_features:
+            self._set_workspace_context(remote_workspace="")
+            return
+        try:
+            payload = await self.client.get_settings()
+        except Exception:
+            return
+        settings = payload.get("settings", payload) if isinstance(payload, Mapping) else {}
+        remote_workspace = ""
+        if isinstance(settings, Mapping):
+            remote_workspace = str(settings.get("workdir_path") or "").strip()
+        self._set_workspace_context(remote_workspace=remote_workspace)
 
     def _splash_host(self) -> str:
         return self._splash_state.host or self.config.instance_url or _DEFAULT_HOST
@@ -257,6 +401,32 @@ class AgentZeroCLI(App):
         except Exception:
             pass
         self._sync_composer_visibility()
+
+    def _sync_workspace_widgets(self) -> None:
+        try:
+            self.query_one("#chat-log", ChatLog).set_workspace(
+                local_workspace=self._local_workspace,
+                remote_workspace=self._remote_workspace,
+            )
+        except Exception:
+            pass
+
+        self._set_splash_state(
+            local_workspace=self._local_workspace,
+            remote_workspace=self._remote_workspace,
+        )
+
+    def _set_workspace_context(
+        self,
+        *,
+        local_workspace: str | None = None,
+        remote_workspace: str | None = None,
+    ) -> None:
+        if local_workspace is not None:
+            self._local_workspace = local_workspace.strip()
+        if remote_workspace is not None:
+            self._remote_workspace = remote_workspace.strip()
+        self._sync_workspace_widgets()
 
     def _set_splash_stage(
         self,
@@ -399,6 +569,7 @@ class AgentZeroCLI(App):
         override = payload.get("override") if isinstance(payload.get("override"), dict) else {}
         selected_preset = str(override.get("preset_name") or "").strip()
         override_label = ""
+        main_model = payload.get("main_model") if isinstance(payload.get("main_model"), Mapping) else {}
 
         if override and not selected_preset:
             override_label = str(override.get("name") or override.get("provider") or "Custom override").strip()
@@ -415,7 +586,7 @@ class AgentZeroCLI(App):
 
         widget = self.query_one("#model-switcher-bar", ModelSwitcherBar)
         widget.set_state(
-            main_model=payload.get("main_model"),
+            main_model=main_model,
             utility_model=payload.get("utility_model"),
             presets=presets,
             allowed=bool(payload.get("allowed")),
@@ -501,6 +672,9 @@ class AgentZeroCLI(App):
             self._cancel_compaction_refresh()
             self._set_pause_latched(False)
             self._stop_remote_tree_publisher()
+            self._stop_token_refresh()
+            self._clear_token_usage()
+            self._set_workspace_context(remote_workspace="")
             asyncio.create_task(self._python_tty.close())
             self._clear_model_switcher()
             self._set_splash_stage(
@@ -578,13 +752,23 @@ class AgentZeroCLI(App):
         return CommandAvailability(True)
 
     def _model_presets_availability(self) -> CommandAvailability:
-        base = self._require_features("model_switcher")
+        base = self._require_features("model_switcher", "model_presets")
         if not base.available:
             return base
         if not self.current_context:
             return CommandAvailability(False, "Open or create a chat context first.")
         if not self._model_switch_allowed:
             return CommandAvailability(False, "Model preset switching is unavailable for this chat.")
+        return CommandAvailability(True)
+
+    def _model_runtime_availability(self) -> CommandAvailability:
+        base = self._require_features("model_switcher")
+        if not base.available:
+            return base
+        if not self.current_context:
+            return CommandAvailability(False, "Open or create a chat context first.")
+        if not self._model_switch_allowed:
+            return CommandAvailability(False, "Model runtime editing is unavailable for this chat.")
         return CommandAvailability(True)
 
     def _welcome_actions(self) -> tuple[SplashAction, ...]:
@@ -646,6 +830,8 @@ class AgentZeroCLI(App):
         save_credentials_flag: bool = False,
     ) -> None:
         self._stop_remote_tree_publisher()
+        self._stop_token_refresh()
+        self._clear_token_usage()
         self._last_remote_tree_hash = ""
         normalized_host = self._normalize_host(host)
         self.config.instance_url = normalized_host
@@ -861,6 +1047,9 @@ class AgentZeroCLI(App):
             actions=self._welcome_actions(),
         )
         await self._refresh_model_switcher()
+        await self._refresh_workspace_from_settings()
+        await self._refresh_token_usage(context_id=context_id)
+        self._start_token_refresh()
         self._sync_body_mode()
         self._focus_message_input()
 
@@ -966,6 +1155,7 @@ class AgentZeroCLI(App):
         input_widget.disabled = False
         self._focus_message_input()
         self._set_idle()
+        asyncio.create_task(self._refresh_token_usage(context_id=context_id))
 
     def _handle_connector_error(self, data: dict[str, Any]) -> None:
         code = data.get("code", "ERROR")
@@ -1044,7 +1234,13 @@ class AgentZeroCLI(App):
             return
 
         if text.startswith("/"):
-            await self._dispatch_command(text)
+            token = text.split(maxsplit=1)[0].strip().lower().lstrip("/") or "command"
+            worker_name = f"slash-{token.replace('/', '-')}"
+            self.run_worker(
+                self._dispatch_command(text),
+                exclusive=True,
+                name=worker_name,
+            )
             return
 
         if not self.current_context:
@@ -1091,6 +1287,17 @@ class AgentZeroCLI(App):
     async def on_model_switcher_bar_preset_changed(self, event: ModelSwitcherBar.PresetChanged) -> None:
         await self._set_model_preset(event.value or None, bar=event.bar)
 
+    def on_model_switcher_bar_model_config_requested(
+        self,
+        event: ModelSwitcherBar.ModelConfigRequested,
+    ) -> None:
+        worker_name = f"cmd-models-{event.target}"
+        self.run_worker(
+            self._cmd_models(focus_target=event.target),
+            exclusive=True,
+            name=worker_name,
+        )
+
     async def _set_model_preset(
         self,
         preset_name: str | None,
@@ -1126,6 +1333,7 @@ class AgentZeroCLI(App):
         self._apply_model_switcher_state(payload)
         if target_bar is not None:
             target_bar.set_busy(False)
+        await self._refresh_token_usage()
 
     def on_splash_view_submit_requested(self, event: SplashView.SubmitRequested) -> None:
         self.run_worker(
@@ -1198,6 +1406,7 @@ class AgentZeroCLI(App):
     async def _switch_context(self, context_id: str, *, has_messages_hint: bool) -> None:
         if self._compaction_refresh_context and self._compaction_refresh_context != context_id:
             self._cancel_compaction_refresh()
+        self._stop_token_refresh()
 
         if self.current_context:
             await self.client.unsubscribe_context(self.current_context)
@@ -1213,6 +1422,8 @@ class AgentZeroCLI(App):
         self._sync_body_mode()
         await self.client.subscribe_context(context_id, from_seq=0)
         await self._refresh_model_switcher()
+        await self._refresh_token_usage(context_id=context_id)
+        self._start_token_refresh()
 
     def _cancel_compaction_refresh(self) -> None:
         task = self._compaction_refresh_task
@@ -1372,6 +1583,152 @@ class AgentZeroCLI(App):
             return
         await self._set_model_preset(selected or None)
 
+    def _coerce_model_config(self, value: object) -> dict[str, str]:
+        if not isinstance(value, Mapping):
+            return {}
+        payload: dict[str, str] = {}
+        for key in ("provider", "name", "api_key"):
+            text = str(value.get(key) or "").strip()
+            if text:
+                payload[key] = text
+        base_url = str(value.get("api_base") or value.get("base_url") or "").strip()
+        if base_url:
+            payload["api_base"] = base_url
+
+        return payload
+
+    def _collect_provider_options(self, switcher_payload: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+        ordered: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def _add(provider: object, label: object = "") -> None:
+            value = str(provider or "").strip().lower()
+            if not value:
+                return
+            if value in seen:
+                return
+            seen.add(value)
+            label_text = str(label or "").strip() or _format_provider_label(value)
+            ordered.append((label_text or value, value))
+
+        chat_providers = switcher_payload.get("chat_providers")
+        if isinstance(chat_providers, list):
+            for provider in chat_providers:
+                if not isinstance(provider, Mapping):
+                    continue
+                _add(
+                    provider.get("value") or provider.get("id"),
+                    provider.get("label") or provider.get("name"),
+                )
+
+        _add(self._coerce_model_config(switcher_payload.get("main_model")).get("provider"))
+        _add(self._coerce_model_config(switcher_payload.get("utility_model")).get("provider"))
+
+        override = switcher_payload.get("override")
+        if isinstance(override, Mapping):
+            _add(self._coerce_model_config(override.get("chat")).get("provider"))
+            _add(self._coerce_model_config(override.get("utility")).get("provider"))
+
+        presets = switcher_payload.get("presets")
+        if isinstance(presets, list):
+            for item in presets:
+                if not isinstance(item, Mapping):
+                    continue
+                _add(self._coerce_model_config(item.get("chat") or item.get("main")).get("provider"))
+                _add(self._coerce_model_config(item.get("utility")).get("provider"))
+
+        return tuple(ordered)
+
+    def _collect_provider_api_key_status(self, switcher_payload: Mapping[str, Any]) -> dict[str, bool]:
+        status: dict[str, bool] = {}
+
+        chat_providers = switcher_payload.get("chat_providers")
+        if isinstance(chat_providers, list):
+            for provider in chat_providers:
+                if not isinstance(provider, Mapping):
+                    continue
+                value = str(provider.get("value") or provider.get("id") or "").strip().lower()
+                if not value:
+                    continue
+                status[value] = bool(provider.get("has_api_key"))
+
+        for key in ("main_model", "utility_model"):
+            model_payload = switcher_payload.get(key)
+            if not isinstance(model_payload, Mapping):
+                continue
+            provider = str(model_payload.get("provider") or "").strip().lower()
+            if not provider:
+                continue
+            if provider not in status:
+                status[provider] = bool(model_payload.get("has_api_key"))
+
+        return status
+
+    async def _cmd_models(self, *, focus_target: str = "main") -> None:
+        availability = self._model_runtime_availability()
+        if not availability.available:
+            self._show_notice(availability.reason or "Model runtime editing is unavailable.", error=True)
+            return
+
+        context_id = self.current_context or ""
+        try:
+            switcher_payload = await self.client.get_model_switcher(context_id)
+        except Exception as exc:
+            self._show_notice(f"Failed to load model runtime settings: {exc}", error=True)
+            return
+
+        self._apply_model_switcher_state(switcher_payload)
+        availability = self._model_runtime_availability()
+        if not availability.available:
+            self._show_notice(availability.reason or "Model runtime editing is unavailable.", error=True)
+            return
+
+        override = switcher_payload.get("override") if isinstance(switcher_payload.get("override"), Mapping) else {}
+        main_payload = switcher_payload.get("main_model") if isinstance(switcher_payload.get("main_model"), Mapping) else {}
+        utility_payload = (
+            switcher_payload.get("utility_model")
+            if isinstance(switcher_payload.get("utility_model"), Mapping)
+            else {}
+        )
+        main_model = self._coerce_model_config(override.get("chat") if isinstance(override, Mapping) else None)
+        utility_model = self._coerce_model_config(override.get("utility") if isinstance(override, Mapping) else None)
+        if not main_model:
+            main_model = self._coerce_model_config(main_payload)
+        if not utility_model:
+            utility_model = self._coerce_model_config(utility_payload)
+
+        result = await self.push_screen_wait(
+            ModelRuntimeScreen(
+                main_model=main_model,
+                utility_model=utility_model,
+                focus_target=focus_target,
+                provider_options=self._collect_provider_options(switcher_payload),
+                provider_api_key_status=self._collect_provider_api_key_status(switcher_payload),
+                main_has_api_key=bool(main_payload.get("has_api_key")),
+                utility_has_api_key=bool(utility_payload.get("has_api_key")),
+            )
+        )
+        if result is None:
+            return
+        if not isinstance(result, ModelRuntimeResult):
+            raise TypeError(f"Unexpected model runtime result: {result!r}")
+
+        try:
+            payload = await self.client.set_model_override(
+                context_id,
+                main_model=result.main_model,
+                utility_model=result.utility_model,
+            )
+        except Exception as exc:
+            self._show_notice(f"Failed to update model runtime override: {exc}", error=True)
+            return
+        if not payload.get("ok"):
+            self._show_notice(str(payload.get("message") or "Failed to update model runtime override."), error=True)
+            return
+
+        self._apply_model_switcher_state(payload)
+        await self._refresh_token_usage(context_id=context_id)
+
     async def _cmd_settings(self) -> None:
         try:
             payload = await self.client.get_settings()
@@ -1396,6 +1753,7 @@ class AgentZeroCLI(App):
             self._show_notice(f"Failed to save settings: {exc}", error=True)
             return
 
+        await self._refresh_workspace_from_settings()
         self._show_notice("Settings saved.")
 
     async def _cmd_compact(self) -> None:
@@ -1540,6 +1898,7 @@ class AgentZeroCLI(App):
 
     async def _disconnect_and_exit(self) -> None:
         self._stop_remote_tree_publisher()
+        self._stop_token_refresh()
         await self._python_tty.close()
         try:
             await self.client.disconnect()

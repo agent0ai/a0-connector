@@ -591,6 +591,16 @@ class A0Client:
         presets = data.get("presets", data.get("data", []))
         return presets if isinstance(presets, list) else []
 
+    async def set_model_presets(self, presets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        response = await self._post(
+            "model_presets",
+            {"action": "set", "presets": presets},
+        )
+        response.raise_for_status()
+        data = self._json(response)
+        items = data.get("presets", data.get("data", presets))
+        return items if isinstance(items, list) else list(presets)
+
     async def get_model_switcher(self, context_id: str) -> dict[str, Any]:
         response = await self._post(
             "model_switcher",
@@ -609,6 +619,32 @@ class A0Client:
         response = await self._post("model_switcher", payload)
         response.raise_for_status()
         return self._json(response)
+
+    async def set_model_override(
+        self,
+        context_id: str,
+        *,
+        main_model: dict[str, Any] | None = None,
+        utility_model: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "action": "set_override",
+            "context_id": context_id,
+            "main_model": main_model or {},
+            "utility_model": utility_model or {},
+        }
+        response = await self._post("model_switcher", payload)
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "message": self._response_message(response),
+                "status_code": response.status_code,
+            }
+
+        data = self._json(response)
+        if "ok" not in data:
+            data["ok"] = True
+        return data
 
     async def get_compaction_stats(self, context_id: str) -> dict[str, Any]:
         response = await self._post(

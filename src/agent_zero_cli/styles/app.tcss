@@ -31,6 +31,11 @@ Screen {
     margin-top: 0;
 }
 
+.workspace-context {
+    margin-top: 1;
+    color: #7f8c98;
+}
+
 #message-input {
     margin-top: 0;
     margin-bottom: 0;
@@ -59,8 +64,40 @@ Screen {
 
 #model-switcher-summary {
     width: 1fr;
+    height: auto;
+    min-height: 1;
+    layout: horizontal;
+    align: left middle;
+}
+
+#model-switcher-summary.stacked {
+    layout: vertical;
+    align: left top;
+}
+
+.model-switcher-chip {
+    width: auto;
+    min-width: 10;
+    max-width: 100%;
+    height: 1;
+    min-height: 1;
+    margin-right: 1;
+    padding: 0 1;
+    background: transparent;
+    border: none;
     color: #9aa7b4;
-    content-align: left top;
+    text-style: bold;
+}
+
+.model-switcher-chip:focus {
+    background: #172533;
+    color: #d9e2ec;
+    border: none;
+}
+
+#model-switcher-summary.stacked .model-switcher-chip {
+    margin-right: 0;
+    margin-bottom: 1;
 }
 
 #model-switcher-preset {
@@ -127,6 +164,94 @@ ModelPresetsScreen {
 }
 
 #model-presets-actions Button {
+    min-width: 12;
+    margin-left: 1;
+}
+
+ModelRuntimeScreen {
+    align: left top;
+}
+
+#model-runtime-box {
+    width: 100%;
+    height: 1fr;
+    border: none;
+    background: transparent;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#model-runtime-title {
+    text-style: bold;
+}
+
+#model-runtime-description {
+    margin-bottom: 1;
+    color: #9aa7b4;
+}
+
+.model-runtime-section {
+    width: 100%;
+    height: auto;
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin-bottom: 1;
+}
+
+.model-runtime-section-title {
+    text-style: bold;
+    color: #d9e2ec;
+    margin-top: 0;
+}
+
+.model-runtime-current {
+    color: #7f8c98;
+}
+
+.model-runtime-label {
+    margin-top: 1;
+    color: #9aa7b4;
+}
+
+#model-runtime-box Input {
+    width: 100%;
+    background: #17181a;
+    border: round #2a3a4a;
+    color: #f5f7fa;
+}
+
+#model-runtime-box Input:focus {
+    border: round #00b4ff;
+}
+
+#model-runtime-box Select {
+    width: 100%;
+}
+
+#model-runtime-box Select > SelectCurrent {
+    color: #d9e2ec;
+    background: #17181a;
+    border: round #2a3a4a;
+}
+
+#model-runtime-box Select:focus > SelectCurrent {
+    border: round #00b4ff;
+}
+
+#model-runtime-status {
+    margin-top: 1;
+    min-height: 1;
+    color: #9aa7b4;
+}
+
+#model-runtime-actions {
+    margin-top: 1;
+    align: right middle;
+    height: auto;
+}
+
+#model-runtime-actions Button {
     min-width: 12;
     margin-left: 1;
 }
@@ -349,6 +474,11 @@ SplashView {
 
 #splash-hero {
     margin-bottom: 0;
+}
+
+#splash-workspace {
+    margin-top: 1;
+    color: #7f8c98;
 }
 
 #splash-stage-label {

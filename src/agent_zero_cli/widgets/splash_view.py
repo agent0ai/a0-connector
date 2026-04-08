@@ -106,6 +106,8 @@ class SplashState:
     save_credentials: bool = False
     login_error: str = ""
     actions: Sequence[SplashAction] = ()
+    local_workspace: str = ""
+    remote_workspace: str = ""
 
 
 class SplashHostPanel(Vertical):
@@ -483,6 +485,7 @@ class SplashView(VerticalScroll):
     def __init__(self) -> None:
         super().__init__(id="splash-view")
         self._hero = build_agent_zero_banner_widget(id="splash-hero")
+        self._workspace = Static("", id="splash-workspace")
         self._stage_label = Static("", id="splash-stage-label")
         self._message = Static("", id="splash-message")
         self._detail = Static("", id="splash-detail")
@@ -494,6 +497,7 @@ class SplashView(VerticalScroll):
 
     def compose(self) -> ComposeResult:
         yield self._hero
+        yield self._workspace
         yield self._stage_label
         yield self._message
         yield self._detail
@@ -525,6 +529,21 @@ class SplashView(VerticalScroll):
         stage_label_text = _STAGE_LABELS.get(self._state.stage, self._state.stage.title())
         self._stage_label.update(Text(stage_label_text, style="bold"))
         self._stage_label.display = show_header_copy and bool(stage_label_text.strip())
+
+        local_workspace = self._state.local_workspace.strip()
+        remote_workspace = self._state.remote_workspace.strip()
+        if local_workspace or remote_workspace:
+            fragments: list[str] = []
+            if local_workspace:
+                fragments.append(f"Local {local_workspace}")
+            if remote_workspace:
+                fragments.append(f"Remote {remote_workspace}")
+            self._workspace.update(Text("  |  ".join(fragments), style="#7f8c98"))
+            self._workspace.display = True
+        else:
+            self._workspace.update("")
+            self._workspace.display = False
+
         self._message.update(self._state.message)
         self._message.display = show_header_copy and bool(self._state.message.strip())
         self._detail.update(self._state.detail)
@@ -584,6 +603,8 @@ class SplashView(VerticalScroll):
                 save_credentials=save_credentials,
                 login_error=login_error,
                 actions=actions or (self._default_actions() if stage == "ready" else ()),
+                local_workspace=self._state.local_workspace,
+                remote_workspace=self._state.remote_workspace,
             )
         )
 
@@ -598,6 +619,8 @@ class SplashView(VerticalScroll):
             save_credentials=self._state.save_credentials,
             login_error=self._state.login_error,
             actions=actions or (self._default_actions() if self._state.stage == "ready" else ()),
+            local_workspace=self._state.local_workspace,
+            remote_workspace=self._state.remote_workspace,
         )
         if self.is_mounted:
             self._sync_state()

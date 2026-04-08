@@ -324,6 +324,9 @@ class ChatLog(VerticalScroll):
         self._seq_to_widget: dict[int, Static] = {}
         self._sys_seq: int = -100
         self._intro_widget: Static | None = None
+        self._workspace_widget: Static | None = None
+        self._local_workspace = ""
+        self._remote_workspace = ""
         self._auto_follow = True
 
         # Shimmer state
@@ -396,11 +399,48 @@ class ChatLog(VerticalScroll):
     def ensure_intro_banner(self) -> None:
         """Mount the Agent Zero intro banner above the first rendered message."""
         if self._intro_widget is not None:
+            self._sync_workspace_widget()
             return
 
         self._intro_widget = build_agent_zero_banner_widget(classes="agent-zero-banner")
         before = self.children[0] if self.children else None
         self.mount(self._intro_widget, before=before)
+        self._sync_workspace_widget()
+
+    def set_workspace(self, *, local_workspace: str = "", remote_workspace: str = "") -> None:
+        self._local_workspace = local_workspace.strip()
+        self._remote_workspace = remote_workspace.strip()
+        self._sync_workspace_widget()
+
+    def _workspace_line(self) -> str:
+        parts: list[str] = []
+        if self._local_workspace:
+            parts.append(f"Local {self._local_workspace}")
+        if self._remote_workspace:
+            parts.append(f"Remote {self._remote_workspace}")
+        return "  |  ".join(parts)
+
+    def _sync_workspace_widget(self) -> None:
+        line = self._workspace_line()
+        if not line:
+            if self._workspace_widget is not None:
+                self._workspace_widget.remove()
+                self._workspace_widget = None
+            return
+
+        if self._workspace_widget is None:
+            self._workspace_widget = Static(
+                Text(line, style="#7f8c98"),
+                classes="workspace-context",
+            )
+            if self._intro_widget is not None:
+                before = self.children[1] if len(self.children) > 1 else None
+            else:
+                before = self.children[0] if self.children else None
+            self.mount(self._workspace_widget, before=before)
+            return
+
+        self._workspace_widget.update(Text(line, style="#7f8c98"))
 
     def write(self, renderable: RenderableType) -> None:
         """Write a new un-updatable message using an internal sequence ID."""
@@ -532,6 +572,7 @@ class ChatLog(VerticalScroll):
         """Clear the timeline and reset the tracking map."""
         self._seq_to_widget.clear()
         self._intro_widget = None
+        self._workspace_widget = None
         self._active_seq = None
         self._active_meta = {}
         self._auto_follow = True

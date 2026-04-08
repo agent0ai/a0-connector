@@ -664,6 +664,43 @@ async def test_get_model_presets_returns_preset_list() -> None:
     )
 
 
+async def test_set_model_presets_posts_full_preset_payload() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={"ok": True, "presets": [{"name": "CLI Custom"}]},
+        )
+    )
+
+    result = await client.set_model_presets(
+        [
+            {
+                "name": "CLI Custom",
+                "chat": {"provider": "openai", "name": "gpt-4o"},
+                "utility": {"provider": "openai", "name": "gpt-4o-mini"},
+            }
+        ]
+    )
+
+    assert result == [{"name": "CLI Custom"}]
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/model_presets",
+        json={
+            "action": "set",
+            "presets": [
+                {
+                    "name": "CLI Custom",
+                    "chat": {"provider": "openai", "name": "gpt-4o"},
+                    "utility": {"provider": "openai", "name": "gpt-4o-mini"},
+                }
+            ],
+        },
+        headers={"X-API-KEY": "secret"},
+    )
+
+
 async def test_get_model_switcher_returns_current_models_and_override() -> None:
     client = A0Client("http://localhost:5080", api_key="secret")
     client.http = Mock()
@@ -721,6 +758,41 @@ async def test_set_model_preset_can_clear_override() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
         json={"context_id": "ctx-1", "action": "clear"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_set_model_override_posts_direct_chat_override_payload() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={
+                "ok": True,
+                "override": {
+                    "chat": {"provider": "openai", "name": "gpt-4o"},
+                    "utility": {"provider": "openai", "name": "gpt-4o-mini"},
+                },
+            },
+        )
+    )
+
+    result = await client.set_model_override(
+        "ctx-1",
+        main_model={"provider": "openai", "name": "gpt-4o"},
+        utility_model={"provider": "openai", "name": "gpt-4o-mini"},
+    )
+
+    assert result["override"]["chat"]["name"] == "gpt-4o"
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
+        json={
+            "action": "set_override",
+            "context_id": "ctx-1",
+            "main_model": {"provider": "openai", "name": "gpt-4o"},
+            "utility_model": {"provider": "openai", "name": "gpt-4o-mini"},
+        },
         headers={"X-API-KEY": "secret"},
     )
 

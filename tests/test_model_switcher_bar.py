@@ -73,3 +73,14 @@ def test_summary_rows_stack_when_inline_layout_does_not_fit() -> None:
         main_model_text="anthropic/claude-haiku-4-5",
         utility_model_text="anthropic/claude-haiku-4-5",
     ) is True
+
+
+def test_main_button_emits_model_config_request() -> None:
+    bar = ModelSwitcherBar(id="model-switcher-bar")
+    posted: list[object] = []
+    bar.post_message = lambda message: posted.append(message)  # type: ignore[method-assign]
+
+    bar.on_button_pressed(SimpleNamespace(button=SimpleNamespace(id="model-switcher-main")))
+
+    assert len(posted) == 1
+    assert posted[0].target == "main"
