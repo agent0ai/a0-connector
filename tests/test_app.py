@@ -548,6 +548,59 @@ def test_context_event_keeps_status_messages_in_activity_lane(dummy_app: DummyAg
     assert dummy_app.rendered_events == []
 
 
+def test_context_event_status_after_first_response_is_not_skipped(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app._response_delivered = True
+
+    dummy_app._handle_context_event(
+        {
+            "context_id": "ctx-1",
+            "event": "status",
+            "sequence": 12,
+            "data": {"meta": {"step": "Calling subordinate A1"}},
+        }
+    )
+
+    input_widget = dummy_app._test_widgets["#message-input"]
+    log = dummy_app._test_widgets["#chat-log"]
+    assert input_widget.disabled is True
+    assert input_widget.activity_label == "Thinking"
+    assert input_widget.activity_detail == "Calling subordinate A1"
+    assert log._active_seq == 12
+    assert log._active_meta == {"step": "Calling subordinate A1"}
+    assert dummy_app.rendered_events == []
+
+
+def test_context_event_after_complete_does_not_reactivate_input_lock(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app._response_delivered = True
+    dummy_app._context_run_complete = True
+    dummy_app.agent_active = False
+
+    input_widget = dummy_app._test_widgets["#message-input"]
+    input_widget.disabled = False
+
+    dummy_app._handle_context_event(
+        {
+            "context_id": "ctx-1",
+            "event": "status",
+            "sequence": 13,
+            "data": {"meta": {"step": "Memorizing results"}},
+        }
+    )
+
+    log = dummy_app._test_widgets["#chat-log"]
+    assert input_widget.disabled is False
+    assert dummy_app.agent_active is False
+    assert input_widget.activity_idle is True
+    assert log.status_entries[13]["active"] is False
+    assert log.status_entries[13]["detail"] == "Memorizing results"
+
+
 def test_context_snapshot_preserves_status_meta_for_history(dummy_app: DummyAgentZeroCLI) -> None:
     dummy_app.connected = True
     dummy_app.current_context = "ctx-1"

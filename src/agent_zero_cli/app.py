@@ -97,6 +97,7 @@ class AgentZeroCLI(App):
         self.current_context: str | None = None
         self.current_context_has_messages = False
         self._response_delivered = False
+        self._context_run_complete = False
         self._chat_intro_pending = True
         self._splash_state = SplashState(stage="host", host=self.config.instance_url or _DEFAULT_HOST)
         self._command_registry = self._build_command_registry()
@@ -822,6 +823,7 @@ class AgentZeroCLI(App):
         self.current_context = context_id
         self.current_context_has_messages = False
         self._response_delivered = False
+        self._context_run_complete = False
         self._chat_intro_pending = True
         self.query_one("#chat-log", ChatLog).clear()
         self._set_idle()
@@ -899,14 +901,12 @@ class AgentZeroCLI(App):
 
         category = _EVENT_CATEGORY.get(event_type, "info")
         log = self.query_one("#chat-log", ChatLog)
+        sequence = data.get("sequence", -1)
 
-        if self._response_delivered and category != "response":
-            if category in ("error", "warning", "info"):
-                render_connector_event(log, data)
-            return
+        post_complete = self._context_run_complete
 
         input_widget = self.query_one("#message-input", ChatInput)
-        if not self._pause_latched:
+        if not self._pause_latched and not post_complete:
             self.agent_active = True
             self._sync_ready_actions()
             input_widget.disabled = True
@@ -924,8 +924,17 @@ class AgentZeroCLI(App):
         if label:
             event_data = data.get("data", {})
             detail = extract_detail(event_type, event_data)
-            self._set_activity(label, detail)
-            log.set_active_status(data.get("sequence", -1), label, detail, event_data.get("meta"))
+            if post_complete:
+                log.append_or_update_status(
+                    sequence,
+                    label,
+                    detail,
+                    event_data.get("meta"),
+                    active=False,
+                )
+            else:
+                self._set_activity(label, detail)
+                log.set_active_status(data.get("sequence", -1), label, detail, event_data.get("meta"))
 
         if category in ("warning", "error", "user", "code", "info"):
             self._show_chat_intro(log, category)
@@ -940,6 +949,7 @@ class AgentZeroCLI(App):
 
         self._set_pause_latched(False)
         self.agent_active = False
+        self._context_run_complete = True
         self._sync_ready_actions()
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = False
@@ -1070,6 +1080,7 @@ class AgentZeroCLI(App):
         self._set_pause_latched(False)
         self._mark_context_has_messages()
         self._response_delivered = False
+        self._context_run_complete = False
         event.input.disabled = True
         self.agent_active = True
         self._sync_ready_actions()
@@ -1209,6 +1220,7 @@ class AgentZeroCLI(App):
         self._set_pause_latched(False)
         self.current_context_has_messages = has_messages_hint
         self._response_delivered = False
+        self._context_run_complete = False
         log = self.query_one("#chat-log", ChatLog)
         log.clear()
         self._set_idle()
@@ -1430,6 +1442,7 @@ class AgentZeroCLI(App):
         input_widget.disabled = True
         self.agent_active = True
         self._response_delivered = False
+        self._context_run_complete = False
         self._sync_ready_actions()
         try:
             response = await self.client.nudge_agent(self.current_context)
