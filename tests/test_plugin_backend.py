@@ -357,6 +357,7 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert payload["websocket_namespace"] == "/ws"
     assert payload["websocket_handlers"] == ["plugins/a0_connector/ws_connector"]
     assert "connector_login" in payload["features"]
+    assert "token_status" in payload["features"]
     assert "remote_file_tree" in payload["features"]
     assert "code_execution_remote" in payload["features"]
     assert "pause" in payload["features"]
@@ -417,6 +418,7 @@ def test_protected_handlers_require_api_key_only() -> None:
         "usr.plugins.a0_connector.api.v1.log_tail",
         "usr.plugins.a0_connector.api.v1.message_send",
         "usr.plugins.a0_connector.api.v1.projects_list",
+        "usr.plugins.a0_connector.api.v1.token_status",
     ]
     class_names = [
         "ChatCreate",
@@ -437,6 +439,7 @@ def test_protected_handlers_require_api_key_only() -> None:
         "LogTail",
         "MessageSend",
         "ProjectsList",
+        "TokenStatus",
     ]
 
     for module_name, class_name in zip(modules, class_names, strict=True):
@@ -514,6 +517,49 @@ def test_settings_round_trip_uses_connector_helpers() -> None:
         set_handler.process({"settings": {"agent_profile": "researcher"}}, object())
     )
     assert updated["settings"]["agent_profile"] == "researcher"
+
+
+def test_token_status_returns_ctx_window_and_context_limit() -> None:
+    _install_fake_helpers()
+
+    token_status_mod = _reload("usr.plugins.a0_connector.api.v1.token_status")
+    model_config_mod = sys.modules["plugins._model_config.helpers.model_config"]
+    model_config_mod.get_chat_model_config = lambda agent=None: {
+        "provider": "anthropic",
+        "name": "chat-model",
+        "ctx_length": 128000,
+    }
+
+    class _FakeAgent:
+        DATA_NAME_CTX_WINDOW = "ctx_window"
+
+        def __init__(self) -> None:
+            self.data = {"ctx_window": {"text": "prompt", "tokens": 12400}}
+
+        def get_data(self, key: str):
+            return self.data.get(key)
+
+    class _FakeContext:
+        def __init__(self) -> None:
+            self.streaming_agent = None
+            self.agent0 = _FakeAgent()
+
+    fake_context = _FakeContext()
+    agent_mod = types.ModuleType("agent")
+    agent_mod.Agent = _FakeAgent
+    agent_mod.AgentContext = types.SimpleNamespace(get=lambda context_id: fake_context if context_id == "ctx-1" else None)
+    sys.modules["agent"] = agent_mod
+
+    result = asyncio.run(
+        token_status_mod.TokenStatus(None, None).process({"context_id": "ctx-1"}, object())
+    )
+
+    assert result == {
+        "ok": True,
+        "context_id": "ctx-1",
+        "token_count": 12400,
+        "context_window": 128000,
+    }
 
 
 def test_pause_handler_marks_running_context_paused() -> None:

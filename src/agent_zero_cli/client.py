@@ -12,10 +12,17 @@ import socketio
 
 
 _PLUGIN_API = "/api/plugins/a0_connector/v1"
-_PROTOCOL_VERSION = "a0-connector.v1"
+DEFAULT_HOST = "http://127.0.0.1:5080"
+PROTOCOL_VERSION = "a0-connector.v1"
 _SOCKET_IO_PATH = "/socket.io"
-_WS_NAMESPACE = "/ws"
-_WS_HANDLER = "plugins/a0_connector/ws_connector"
+WS_NAMESPACE = "/ws"
+WS_HANDLER = "plugins/a0_connector/ws_connector"
+
+# Backward-compatible aliases for legacy imports.
+_DEFAULT_HOST = DEFAULT_HOST
+_PROTOCOL_VERSION = PROTOCOL_VERSION
+_WS_NAMESPACE = WS_NAMESPACE
+_WS_HANDLER = WS_HANDLER
 
 _EVENT_HELLO = "connector_hello"
 _EVENT_SUBSCRIBE = "connector_subscribe_context"
@@ -650,6 +657,23 @@ class A0Client:
         response = await self._post(
             "compact_chat",
             {"context_id": context_id, "action": "stats"},
+        )
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "message": self._response_message(response),
+                "status_code": response.status_code,
+            }
+
+        data = self._json(response)
+        if "ok" not in data:
+            data["ok"] = True
+        return data
+
+    async def get_token_status(self, context_id: str) -> dict[str, Any]:
+        response = await self._post(
+            "token_status",
+            {"context_id": context_id},
         )
         if response.status_code >= 400:
             return {

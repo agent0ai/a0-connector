@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import replace
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable
 
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
@@ -12,22 +11,19 @@ from textual.reactive import reactive
 from textual.theme import Theme
 from textual.widgets import ContentSwitcher
 
-from agent_zero_cli.client import A0Client, A0ConnectorPluginMissingError
+from agent_zero_cli import (
+    availability,
+    chat_commands,
+    compaction,
+    connection,
+    event_handlers,
+    splash_helpers,
+)
+from agent_zero_cli.client import A0Client, DEFAULT_HOST
 from agent_zero_cli.commands import CommandAvailability, CommandSpec
-from agent_zero_cli.config import CLIConfig, load_config, save_env
+from agent_zero_cli.config import CLIConfig, load_config
 from agent_zero_cli.remote_exec import PythonTTYManager
 from agent_zero_cli.remote_files import RemoteFileUtility
-from agent_zero_cli.rendering import (
-    _EVENT_CATEGORY,
-    _STATUS_LABEL,
-    extract_detail,
-    render_connector_event,
-)
-from agent_zero_cli.screens.chat_list import ChatListScreen
-from agent_zero_cli.screens.compact_modal import CompactResult, CompactScreen
-from agent_zero_cli.screens.model_runtime import ModelRuntimeResult, ModelRuntimeScreen
-from agent_zero_cli.screens.model_presets import ModelPresetsResult, ModelPresetsScreen
-from agent_zero_cli.screens.settings_modal import SettingsResult, SettingsScreen
 from agent_zero_cli.widgets.command_palette import (
     AgentCommandPalette,
     OrderedSystemCommandsProvider,
@@ -42,59 +38,20 @@ from agent_zero_cli.widgets import (
     SplashView,
 )
 from agent_zero_cli.widgets.chat_log import ChatLog
+from agent_zero_cli.model_commands import (
+    cmd_model_presets,
+    cmd_models,
+    set_model_preset,
+    refresh_model_switcher,
+    clear_model_switcher,
+)
+from agent_zero_cli.token_usage import (
+    start_token_refresh,
+    stop_token_refresh,
+    refresh_token_usage,
+)
 
-
-_DEFAULT_HOST = "http://127.0.0.1:5080"
-_PROTOCOL_VERSION = "a0-connector.v1"
-_WS_NAMESPACE = "/ws"
-_WS_HANDLER = "plugins/a0_connector/ws_connector"
-_COMPACTION_POLL_INTERVAL_SECONDS = 0.75
-_COMPACTION_POLL_TIMEOUT_SECONDS = 180.0
-_TOKEN_REFRESH_INTERVAL_SECONDS = 8.0
-
-def _format_provider_label(provider: str) -> str:
-    value = provider.strip().lower()
-    if not value:
-        return ""
-    return value.replace("_", " ").title()
-
-
-def _coerce_positive_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    if isinstance(value, float):
-        if value.is_integer():
-            integer = int(value)
-            return integer if integer >= 0 else None
-        return None
-    text = str(value).strip().replace(",", "")
-    if not text:
-        return None
-    try:
-        integer = int(text)
-    except ValueError:
-        return None
-    return integer if integer >= 0 else None
-
-
-def _extract_token_limit(stats: Mapping[str, object] | None) -> int | None:
-    if not isinstance(stats, Mapping):
-        return None
-    for key in (
-        "context_window",
-        "context_limit",
-        "max_context_tokens",
-        "max_tokens",
-        "token_limit",
-    ):
-        value = _coerce_positive_int(stats.get(key))
-        if value is not None and value > 0:
-            return value
-    return None
+_DEFAULT_HOST = DEFAULT_HOST
 
 
 class AgentZeroCLI(App):
@@ -168,7 +125,6 @@ class AgentZeroCLI(App):
         self._pause_latched = False
         self._slash_palette_query: str | None = None
         self._compaction_refresh_context: str | None = None
-        self._compaction_refresh_task: asyncio.Task[None] | None = None
 
     def compose(self) -> ComposeResult:
         yield ConnectionStatus(id="connection-status")
@@ -216,35 +172,35 @@ class AgentZeroCLI(App):
                 "/new",
                 (),
                 "Create a brand-new empty chat context.",
-                lambda app: app._require_features("chat_create"),
-                lambda app: app._cmd_new(),
+                lambda app: availability.require_features(app, "chat_create"),
+                lambda app: chat_commands.cmd_new(app),
             ),
             CommandSpec(
                 "/chats",
                 (),
                 "List previous chats and switch contexts.",
-                lambda app: app._require_features("chats_list"),
-                lambda app: app._cmd_chats(),
+                lambda app: availability.require_features(app, "chats_list"),
+                lambda app: chat_commands.cmd_chats(app),
             ),
             CommandSpec(
                 "/compact",
                 (),
                 "Open the connector-backed compaction confirmation flow.",
-                lambda app: app._compact_availability(),
-                lambda app: app._cmd_compact(),
+                lambda app: availability.compact_availability(app),
+                lambda app: compaction.cmd_compact(app),
             ),
             CommandSpec(
                 "/presets",
                 (),
                 "Open preset picker with Main/Utility model details.",
-                lambda app: app._model_presets_availability(),
+                lambda app: availability.model_presets_availability(app),
                 lambda app: app._cmd_model_presets(),
             ),
             CommandSpec(
                 "/models",
                 (),
                 "Open Main/Utility model runtime editor.",
-                lambda app: app._model_runtime_availability(),
+                lambda app: availability.model_runtime_availability(app),
                 lambda app: app._cmd_models(),
             ),
             CommandSpec(
@@ -252,21 +208,21 @@ class AgentZeroCLI(App):
                 (),
                 "Show or hide key and widget help.",
                 lambda app: CommandAvailability(True),
-                lambda app: app._cmd_keys(),
+                lambda app: chat_commands.cmd_keys(app),
             ),
             CommandSpec(
                 "/help",
                 (),
                 "Show the commands available in this shell.",
                 lambda app: CommandAvailability(True),
-                lambda app: app._cmd_help(),
+                lambda app: chat_commands.cmd_help(app),
             ),
             CommandSpec(
                 "/quit",
                 (),
                 "Disconnect and exit the CLI.",
                 lambda app: CommandAvailability(True),
-                lambda app: app._cmd_quit(),
+                lambda app: chat_commands.cmd_quit(app),
             ),
         )
 
@@ -314,107 +270,28 @@ class AgentZeroCLI(App):
         self.query_one("#connection-status", ConnectionStatus).clear_token_usage()
 
     def _stop_token_refresh(self) -> None:
-        task = self._token_refresh_task
-        self._token_refresh_task = None
-        if task is not None and not task.done():
-            task.cancel()
+        stop_token_refresh(self)
 
     def _start_token_refresh(self) -> None:
-        self._stop_token_refresh()
-        if not self.connected or not self.current_context:
-            return
-        if "compact_chat" not in self.connector_features:
-            self._clear_token_usage()
-            return
-        context_id = self.current_context
-        self._token_refresh_task = asyncio.create_task(self._token_refresh_loop(context_id))
-
-    async def _token_refresh_loop(self, context_id: str) -> None:
-        try:
-            while self.connected and self.current_context == context_id:
-                await self._refresh_token_usage(context_id=context_id, silent=True)
-                await asyncio.sleep(_TOKEN_REFRESH_INTERVAL_SECONDS)
-        except asyncio.CancelledError:
-            return
+        start_token_refresh(self)
 
     async def _refresh_token_usage(self, *, context_id: str | None = None, silent: bool = True) -> None:
-        if "compact_chat" not in self.connector_features:
-            self._clear_token_usage()
-            return
-        target_context = context_id or self.current_context
-        if not target_context:
-            self._clear_token_usage()
-            return
-
-        try:
-            payload = await self.client.get_compaction_stats(target_context)
-        except Exception:
-            if not silent:
-                self._show_notice("Failed to refresh token usage.", error=True)
-            return
-
-        if not isinstance(payload, dict):
-            return
-        if not payload.get("ok"):
-            status_code = int(payload.get("status_code") or 0)
-            if status_code == 409:
-                return
-            if not silent:
-                self._show_notice(str(payload.get("message") or "Token usage unavailable."), error=True)
-            return
-
-        stats = payload.get("stats")
-        if not isinstance(stats, Mapping):
-            return
-
-        token_count = _coerce_positive_int(stats.get("token_count"))
-        if token_count is None:
-            return
-
-        token_limit = _extract_token_limit(stats)
-        self._set_token_usage(token_count, token_limit)
+        await refresh_token_usage(self, context_id=context_id, silent=silent)
 
     async def _refresh_workspace_from_settings(self) -> None:
-        if "settings_get" not in self.connector_features:
-            self._set_workspace_context(remote_workspace="")
-            return
-        try:
-            payload = await self.client.get_settings()
-        except Exception:
-            return
-        settings = payload.get("settings", payload) if isinstance(payload, Mapping) else {}
-        remote_workspace = ""
-        if isinstance(settings, Mapping):
-            remote_workspace = str(settings.get("workdir_path") or "").strip()
-        self._set_workspace_context(remote_workspace=remote_workspace)
+        await splash_helpers.refresh_workspace_from_settings(self)
 
     def _splash_host(self) -> str:
-        return self._splash_state.host or self.config.instance_url or _DEFAULT_HOST
+        return splash_helpers.splash_host(self)
 
     def _normalize_host(self, host: str) -> str:
-        return host.strip() or _DEFAULT_HOST
+        return splash_helpers.normalize_host(host)
 
     def _set_splash_state(self, **changes: Any) -> None:
-        self._splash_state = replace(self._splash_state, **changes)
-        try:
-            self.query_one("#splash-view", SplashView).set_state(self._splash_state)
-        except Exception:
-            pass
-        self._sync_composer_visibility()
+        splash_helpers.set_splash_state(self, **changes)
 
     def _sync_workspace_widgets(self) -> None:
-        try:
-            self.query_one("#chat-log", ChatLog).set_workspace(
-                local_workspace=self._local_workspace,
-                remote_workspace=self._remote_workspace,
-            )
-        except Exception:
-            pass
-
-        self._set_splash_state(
-            local_workspace=self._local_workspace,
-            remote_workspace=self._remote_workspace,
-        )
+        splash_helpers.sync_workspace_widgets(self)
 
     def _set_workspace_context(
         self,
@@ -422,11 +299,11 @@ class AgentZeroCLI(App):
         local_workspace: str | None = None,
         remote_workspace: str | None = None,
     ) -> None:
-        if local_workspace is not None:
-            self._local_workspace = local_workspace.strip()
-        if remote_workspace is not None:
-            self._remote_workspace = remote_workspace.strip()
-        self._sync_workspace_widgets()
+        splash_helpers.set_workspace_context(
+            self,
+            local_workspace=local_workspace,
+            remote_workspace=remote_workspace,
+        )
 
     def _set_splash_stage(
         self,
@@ -441,29 +318,21 @@ class AgentZeroCLI(App):
         login_error: str | None = None,
         actions: tuple[SplashAction, ...] | None = None,
     ) -> None:
-        updates: dict[str, Any] = {
-            "stage": stage,
-            "message": message,
-            "detail": detail,
-        }
-        if host is not None:
-            updates["host"] = host
-        if username is not None:
-            updates["username"] = username
-        if password is not None:
-            updates["password"] = password
-        if save_credentials is not None:
-            updates["save_credentials"] = save_credentials
-        if login_error is not None:
-            updates["login_error"] = login_error
-        if actions is not None:
-            updates["actions"] = actions
-        self._set_splash_state(**updates)
+        splash_helpers.set_splash_stage(
+            self,
+            stage,
+            message=message,
+            detail=detail,
+            host=host,
+            username=username,
+            password=password,
+            save_credentials=save_credentials,
+            login_error=login_error,
+            actions=actions,
+        )
 
     def _sync_ready_actions(self) -> None:
-        if self._splash_state.stage != "ready":
-            return
-        self._set_splash_state(actions=self._welcome_actions())
+        splash_helpers.sync_ready_actions(self)
 
     def _set_pause_latched(self, value: bool) -> None:
         if self._pause_latched == value:
@@ -473,30 +342,10 @@ class AgentZeroCLI(App):
         self._sync_ready_actions()
 
     def _sync_body_mode(self) -> None:
-        body = self.query_one("#body-switcher", ContentSwitcher)
-        if self.connected and self.current_context_has_messages:
-            body.current = "chat-log"
-        else:
-            body.current = "splash-view"
-            self._sync_ready_actions()
-        self._sync_composer_visibility()
+        splash_helpers.sync_body_mode(self)
 
     def _sync_composer_visibility(self) -> None:
-        show_composer = self.connected and (self.current_context_has_messages or self._splash_state.stage == "ready")
-        try:
-            input_widget = self.query_one("#message-input", ChatInput)
-            input_widget.display = show_composer
-            if not show_composer:
-                input_widget.disabled = True
-                input_widget.set_idle()
-        except Exception:
-            pass
-
-        try:
-            footer = self.query_one(DynamicFooter)
-            footer.display = show_composer
-        except Exception:
-            pass
+        splash_helpers.sync_composer_visibility(self)
 
     def _set_activity(self, label: str, detail: str = "") -> None:
         self.query_one("#message-input", ChatInput).set_activity(label, detail)
@@ -509,33 +358,13 @@ class AgentZeroCLI(App):
             pass
 
     def _focus_splash_primary(self) -> None:
-        callback = lambda: self.query_one("#splash-view", SplashView).focus_primary()
-        if self.is_running:
-            self.call_after_refresh(callback)
-        else:
-            callback()
+        splash_helpers.focus_splash_primary(self)
 
     def _focus_message_input(self) -> None:
-        callback = lambda: self.query_one("#message-input", ChatInput).focus()
-        if self.is_running:
-            self.call_after_refresh(callback)
-        else:
-            callback()
+        splash_helpers.focus_message_input(self)
 
     def _show_notice(self, message: str, *, error: bool = False) -> None:
-        if self.connected and not self.current_context_has_messages:
-            splash_message = self._splash_state.message
-            if self._splash_state.stage == "ready":
-                splash_message = message if error else "Ready when you are."
-            self._set_splash_state(
-                message=splash_message,
-                detail=message,
-                actions=self._welcome_actions() if self._splash_state.stage == "ready" else self._splash_state.actions,
-            )
-            return
-
-        log = self.query_one("#chat-log", ChatLog)
-        log.write(f"[red]{message}[/red]" if error else message)
+        splash_helpers.show_notice(self, message, error=error)
 
     def get_binding_description(self, binding: Binding) -> str:
         if binding.action == "pause_agent":
@@ -558,59 +387,20 @@ class AgentZeroCLI(App):
         self._chat_intro_pending = False
 
     def _clear_model_switcher(self) -> None:
-        self._model_switch_allowed = False
+        clear_model_switcher(self)
+
+    def _apply_model_switcher_state(self, payload: dict[str, Any]) -> None:
+        from agent_zero_cli.model_config import apply_model_switcher_state
+        allowed, state_kwargs = apply_model_switcher_state(payload)
+        self._model_switch_allowed = allowed
         try:
-            self.query_one("#model-switcher-bar", ModelSwitcherBar).clear()
+            widget = self.query_one("#model-switcher-bar", ModelSwitcherBar)
+            widget.set_state(**state_kwargs)
         except Exception:
             pass
 
-    def _apply_model_switcher_state(self, payload: dict[str, Any]) -> None:
-        presets = payload.get("presets") if isinstance(payload.get("presets"), list) else []
-        override = payload.get("override") if isinstance(payload.get("override"), dict) else {}
-        selected_preset = str(override.get("preset_name") or "").strip()
-        override_label = ""
-        main_model = payload.get("main_model") if isinstance(payload.get("main_model"), Mapping) else {}
-
-        if override and not selected_preset:
-            override_label = str(override.get("name") or override.get("provider") or "Custom override").strip()
-        elif selected_preset:
-            preset_names = {
-                str(item.get("name") or item.get("value") or "").strip()
-                for item in presets
-                if isinstance(item, dict)
-            }
-            if selected_preset not in preset_names:
-                override_label = f"Preset: {selected_preset}"
-
-        self._model_switch_allowed = bool(payload.get("allowed"))
-
-        widget = self.query_one("#model-switcher-bar", ModelSwitcherBar)
-        widget.set_state(
-            main_model=main_model,
-            utility_model=payload.get("utility_model"),
-            presets=presets,
-            allowed=bool(payload.get("allowed")),
-            selected_preset=selected_preset,
-            override_label=override_label,
-        )
-
     async def _refresh_model_switcher(self, *, silent: bool = True) -> None:
-        if "model_switcher" not in self.connector_features or not self.current_context:
-            self._clear_model_switcher()
-            return
-
-        widget = self.query_one("#model-switcher-bar", ModelSwitcherBar)
-        widget.set_busy(True)
-        try:
-            payload = await self.client.get_model_switcher(self.current_context)
-        except Exception as exc:
-            self._clear_model_switcher()
-            if not silent:
-                self._show_notice(f"Failed to load model switcher: {exc}", error=True)
-            return
-
-        self._apply_model_switcher_state(payload)
-        widget.set_busy(False)
+        await refresh_model_switcher(self, silent=silent)
 
     def _command_display(self, spec: CommandSpec) -> str:
         if not spec.aliases:
@@ -619,42 +409,10 @@ class AgentZeroCLI(App):
         return f"{spec.canonical_name} ({aliases})"
 
     def _available_help_lines(self) -> tuple[list[str], list[str]]:
-        available: list[str] = []
-        unavailable: list[str] = []
-        for spec in self._command_registry:
-            availability = spec.availability(self)
-            line = f"{self._command_display(spec)} - {spec.description}"
-            if availability.available:
-                available.append(line)
-            else:
-                reason = availability.reason or "Unavailable right now."
-                unavailable.append(f"{line} [{reason}]")
-        return available, unavailable
+        return splash_helpers.available_help_lines(self)
 
     def _surface_help(self) -> None:
-        available, unavailable = self._available_help_lines()
-        if self.connected and not self.current_context_has_messages:
-            lines = ["Available commands:"]
-            lines.extend(f"- {line}" for line in available)
-            if unavailable:
-                lines.append("")
-                lines.append("Unavailable right now:")
-                lines.extend(f"- {line}" for line in unavailable)
-            self._set_splash_state(
-                message="Available commands",
-                detail="\n".join(lines),
-                actions=self._welcome_actions(),
-            )
-            return
-
-        log = self.query_one("#chat-log", ChatLog)
-        log.write("[bold]Available commands:[/bold]")
-        for line in available:
-            log.write(line)
-        if unavailable:
-            log.write("[dim]Unavailable right now:[/dim]")
-            for line in unavailable:
-                log.write(line)
+        splash_helpers.surface_help(self)
 
     def _run_on_ui(self, func: Any, *args: Any) -> None:
         app_loop = getattr(self, "loop", None)
@@ -664,162 +422,49 @@ class AgentZeroCLI(App):
             app_loop.call_soon_threadsafe(func, *args)
 
     def _set_connected(self, value: bool) -> None:
-        self.connected = value
-        self._sync_connection_status("connected" if value else "disconnected")
-        input_widget = self.query_one("#message-input", ChatInput)
-        input_widget.disabled = not value
-        if not value:
-            self._cancel_compaction_refresh()
-            self._set_pause_latched(False)
-            self._stop_remote_tree_publisher()
-            self._stop_token_refresh()
-            self._clear_token_usage()
-            self._set_workspace_context(remote_workspace="")
-            asyncio.create_task(self._python_tty.close())
-            self._clear_model_switcher()
-            self._set_splash_stage(
-                "error",
-                message="Connection lost",
-                detail=self.config.instance_url or self._splash_host(),
-                host=self._splash_host(),
-            )
-            self._sync_body_mode()
+        connection.set_connected(self, value)
 
     def _require_connection(self) -> CommandAvailability:
-        if not self.connected:
-            return CommandAvailability(False, "Connect to an Agent Zero instance first.")
-        return CommandAvailability(True)
+        return availability.require_connection(self)
 
     def _require_context(self) -> CommandAvailability:
-        base = self._require_connection()
-        if not base.available:
-            return base
-        if not self.current_context:
-            return CommandAvailability(False, "Create or open a chat context first.")
-        return CommandAvailability(True)
+        return availability.require_context(self)
 
     def _require_features(self, *features: str) -> CommandAvailability:
-        base = self._require_connection()
-        if not base.available:
-            return base
-        missing = [feature for feature in features if feature not in self.connector_features]
-        if missing:
-            joined = ", ".join(missing)
-            return CommandAvailability(False, f"This connector build does not advertise: {joined}.")
-        return CommandAvailability(True)
+        return availability.require_features(self, *features)
 
     def _compact_availability(self) -> CommandAvailability:
-        base = self._require_features("compact_chat")
-        if not base.available:
-            return base
-        if not self.current_context:
-            return CommandAvailability(False, "Open or create a chat before compacting it.")
-        if not self.current_context_has_messages:
-            return CommandAvailability(False, "Start a conversation before compacting it.")
-        if self.agent_active:
-            return CommandAvailability(False, "Wait for the current run to finish before compacting.")
-        return CommandAvailability(True)
+        return availability.compact_availability(self)
 
     def _pause_availability(self) -> CommandAvailability:
-        base = self._require_features("pause")
-        if not base.available:
-            return base
-        if not self.current_context:
-            return CommandAvailability(False, "Open or create a chat context first.")
-        if not self.agent_active:
-            return CommandAvailability(False, "Pause becomes available while the agent is running.")
-        return CommandAvailability(True)
+        return availability.pause_availability(self)
 
     def _resume_availability(self) -> CommandAvailability:
-        base = self._require_features("pause")
-        if not base.available:
-            return base
-        if not self.current_context:
-            return CommandAvailability(False, "Open or create a chat context first.")
-        if not self._pause_latched:
-            return CommandAvailability(False, "Resume becomes available after pausing the active run.")
-        return CommandAvailability(True)
+        return availability.resume_availability(self)
 
     def _pause_toggle_availability(self) -> CommandAvailability:
-        return self._resume_availability() if self._pause_latched else self._pause_availability()
+        return availability.pause_toggle_availability(self)
 
     def _nudge_availability(self) -> CommandAvailability:
-        base = self._require_features("nudge")
-        if not base.available:
-            return base
-        if not self.current_context:
-            return CommandAvailability(False, "Open or create a chat context first.")
-        return CommandAvailability(True)
+        return availability.nudge_availability(self)
 
     def _model_presets_availability(self) -> CommandAvailability:
-        base = self._require_features("model_switcher", "model_presets")
-        if not base.available:
-            return base
-        if not self.current_context:
-            return CommandAvailability(False, "Open or create a chat context first.")
-        if not self._model_switch_allowed:
-            return CommandAvailability(False, "Model preset switching is unavailable for this chat.")
-        return CommandAvailability(True)
+        return availability.model_presets_availability(self)
 
     def _model_runtime_availability(self) -> CommandAvailability:
-        base = self._require_features("model_switcher")
-        if not base.available:
-            return base
-        if not self.current_context:
-            return CommandAvailability(False, "Open or create a chat context first.")
-        if not self._model_switch_allowed:
-            return CommandAvailability(False, "Model runtime editing is unavailable for this chat.")
-        return CommandAvailability(True)
+        return availability.model_runtime_availability(self)
 
     def _welcome_actions(self) -> tuple[SplashAction, ...]:
-        return tuple(
-            SplashAction(
-                key=spec.canonical_name,
-                title=spec.canonical_name,
-                description=spec.description,
-                enabled=availability.available,
-                disabled_reason="" if availability.available else (availability.reason or ""),
-            )
-            for spec, availability in self._iter_ui_commands()
-        )
+        return splash_helpers.welcome_actions(self)
 
     async def _startup(self) -> None:
-        host = self.config.instance_url.strip()
-        if not host:
-            self._set_splash_stage(
-                "host",
-                message="Enter the Agent Zero WebUI URL and port.",
-                detail="",
-                host=_DEFAULT_HOST,
-            )
-            self._sync_connection_status("disconnected", "")
-            self._focus_splash_primary()
-            return
-
-        await self._begin_connection(host)
+        await connection.startup(self)
 
     async def _fetch_capabilities(self) -> tuple[dict[str, Any] | None, bool, str]:
-        try:
-            return await self.client.fetch_capabilities(), False, ""
-        except A0ConnectorPluginMissingError as exc:
-            return None, True, str(exc)
-        except Exception as exc:
-            return None, False, str(exc)
+        return await connection.fetch_capabilities(self)
 
     def _validate_capabilities(self, capabilities: dict[str, Any]) -> None:
-        protocol = capabilities.get("protocol")
-        namespace = capabilities.get("websocket_namespace")
-        handlers = capabilities.get("websocket_handlers") or []
-        auth_modes = capabilities.get("auth") or []
-
-        if protocol != _PROTOCOL_VERSION:
-            raise ValueError(f"Unsupported connector protocol: expected {_PROTOCOL_VERSION}, got {protocol!r}")
-        if namespace != _WS_NAMESPACE:
-            raise ValueError(f"Unsupported WebSocket namespace: expected {_WS_NAMESPACE}, got {namespace!r}")
-        if not isinstance(handlers, list) or _WS_HANDLER not in handlers:
-            raise ValueError(f"Connector handler activation is missing {_WS_HANDLER!r} in capabilities")
-        if "api_key" not in auth_modes:
-            raise ValueError("Connector capabilities do not advertise API-key auth")
+        connection.validate_capabilities(capabilities)
 
     async def _begin_connection(
         self,
@@ -829,378 +474,43 @@ class AgentZeroCLI(App):
         password: str = "",
         save_credentials_flag: bool = False,
     ) -> None:
-        self._stop_remote_tree_publisher()
-        self._stop_token_refresh()
-        self._clear_token_usage()
-        self._last_remote_tree_hash = ""
-        normalized_host = self._normalize_host(host)
-        self.config.instance_url = normalized_host
-        self.client.base_url = normalized_host.rstrip("/")
-        self.client.api_key = self.config.api_key
-        self._sync_connection_status("connecting", normalized_host)
-        self.query_one("#message-input", ChatInput).disabled = True
-        self._slash_palette_query = None
-        self._set_splash_stage(
-            "connecting",
-            message="Probing connector capabilities...",
-            detail=normalized_host,
-            host=normalized_host,
+        await connection.begin_connection(
+            self,
+            host,
             username=username,
             password=password,
-            save_credentials=save_credentials_flag,
+            save_credentials_flag=save_credentials_flag,
         )
-
-        capabilities, plugin_missing, capability_error = await self._fetch_capabilities()
-        if capabilities is None:
-            message = "Connector unavailable" if not plugin_missing else "Connector plugin missing"
-            self._sync_connection_status("disconnected", normalized_host)
-            self._set_splash_stage(
-                "error",
-                message=message,
-                detail=capability_error or normalized_host,
-                host=normalized_host,
-                username=username,
-                password="",
-                save_credentials=save_credentials_flag,
-            )
-            self._focus_splash_primary()
-            return
-
-        try:
-            self._validate_capabilities(capabilities)
-        except ValueError as exc:
-            self._sync_connection_status("disconnected", normalized_host)
-            self._set_splash_stage(
-                "error",
-                message="Connector contract mismatch",
-                detail=str(exc),
-                host=normalized_host,
-                username=username,
-                password="",
-                save_credentials=save_credentials_flag,
-            )
-            return
-
-        self.capabilities = capabilities
-        self.connector_features = set(capabilities.get("features") or [])
-        auth_modes = capabilities.get("auth") or []
-
-        if not self.config.api_key and "login" in auth_modes and username and password:
-            self._set_splash_stage(
-                "connecting",
-                message="Signing in...",
-                detail=normalized_host,
-                host=normalized_host,
-                username=username,
-                password=password,
-                save_credentials=save_credentials_flag,
-            )
-            api_key = await self.client.login(username, password)
-            if not api_key:
-                self._sync_connection_status("disconnected", normalized_host)
-                self._set_splash_stage(
-                    "login",
-                    message="",
-                    detail="",
-                    host=normalized_host,
-                    username=username,
-                    password="",
-                    save_credentials=save_credentials_flag,
-                    login_error="Wrong username or password: retry.",
-                )
-                self._focus_splash_primary()
-                return
-
-            self.config.api_key = api_key
-            self.client.api_key = api_key
-            if save_credentials_flag:
-                save_env("AGENT_ZERO_HOST", normalized_host)
-                save_env("AGENT_ZERO_API_KEY", api_key)
-
-        elif not self.config.api_key and "login" in auth_modes:
-            self._sync_connection_status("disconnected", normalized_host)
-            self._set_splash_stage(
-                "login",
-                message="",
-                detail="",
-                host=normalized_host,
-                username=username,
-                password="",
-                save_credentials=save_credentials_flag,
-                login_error="",
-            )
-            self._focus_splash_primary()
-            return
-
-        elif not self.config.api_key and "api_key" in auth_modes:
-            self._sync_connection_status("disconnected", normalized_host)
-            self._set_splash_stage(
-                "error",
-                message="No API key available",
-                detail="Set AGENT_ZERO_API_KEY or connect to a server that supports login auth.",
-                host=normalized_host,
-            )
-            return
-
-        if self.config.api_key:
-            try:
-                api_key_ok = await self.client.verify_api_key()
-            except Exception as exc:
-                self._sync_connection_status("disconnected", normalized_host)
-                self._set_splash_stage(
-                    "error",
-                    message="API-key verification failed",
-                    detail=str(exc),
-                    host=normalized_host,
-                )
-                return
-
-            if not api_key_ok:
-                self.config.api_key = ""
-                self.client.api_key = ""
-                self._sync_connection_status("disconnected", normalized_host)
-                if "login" in auth_modes:
-                    self._set_splash_stage(
-                        "login",
-                        message="",
-                        detail="",
-                        host=normalized_host,
-                        username=username,
-                        password="",
-                        save_credentials=save_credentials_flag,
-                        login_error="Saved API key was rejected. Sign in again to refresh the connector token.",
-                    )
-                    self._focus_splash_primary()
-                else:
-                    self._set_splash_stage(
-                        "error",
-                        message="API key rejected",
-                        detail="The connector rejected the configured API key.",
-                        host=normalized_host,
-                    )
-                return
-
-        self.client.on_connect = lambda: self._run_on_ui(self._set_connected, True)
-        self.client.on_disconnect = lambda: self._run_on_ui(self._set_connected, False)
-        self.client.on_context_snapshot = lambda data: self._run_on_ui(self._handle_context_snapshot, data)
-        self.client.on_context_event = lambda data: self._run_on_ui(self._handle_context_event, data)
-        self.client.on_context_complete = lambda data: self._run_on_ui(self._handle_context_complete, data)
-        self.client.on_error = lambda data: self._run_on_ui(self._handle_connector_error, data)
-        self.client.on_file_op = self._handle_file_op
-        self.client.on_exec_op = self._handle_exec_op
-
-        try:
-            await self.client.connect_websocket()
-            await self.client.send_hello()
-        except Exception as exc:
-            self._sync_connection_status("disconnected", normalized_host)
-            self._set_splash_stage(
-                "error",
-                message="WebSocket connection failed",
-                detail=str(exc),
-                host=normalized_host,
-            )
-            return
-
-        try:
-            context_id = await self.client.create_chat()
-        except Exception as exc:
-            self._sync_connection_status("disconnected", normalized_host)
-            self._set_splash_stage(
-                "error",
-                message="Failed to create the initial chat",
-                detail=str(exc),
-                host=normalized_host,
-            )
-            return
-
-        self.current_context = context_id
-        self.current_context_has_messages = False
-        self._response_delivered = False
-        self._context_run_complete = False
-        self._chat_intro_pending = True
-        self.query_one("#chat-log", ChatLog).clear()
-        self._set_idle()
-
-        try:
-            await self.client.subscribe_context(context_id)
-        except Exception as exc:
-            self._sync_connection_status("disconnected", normalized_host)
-            self._set_splash_stage(
-                "error",
-                message="Failed to subscribe to the initial chat",
-                detail=str(exc),
-                host=normalized_host,
-            )
-            return
-
-        self.connected = True
-        self._sync_connection_status("connected", normalized_host)
-        input_widget = self.query_one("#message-input", ChatInput)
-        input_widget.disabled = False
-        self._start_remote_tree_publisher()
-        self._set_splash_stage(
-            "ready",
-            message="Ready when you are.",
-            detail=normalized_host,
-            host=normalized_host,
-            actions=self._welcome_actions(),
-        )
-        await self._refresh_model_switcher()
-        await self._refresh_workspace_from_settings()
-        await self._refresh_token_usage(context_id=context_id)
-        self._start_token_refresh()
-        self._sync_body_mode()
-        self._focus_message_input()
 
     def _handle_context_snapshot(self, data: dict[str, Any]) -> None:
-        context_id = data.get("context_id", "")
-        if context_id != self.current_context:
-            return
-
-        log = self.query_one("#chat-log", ChatLog)
-        events = data.get("events", [])
-
-        for event in events:
-            event_type = event.get("event", "")
-            category = _EVENT_CATEGORY.get(event_type, "info")
-
-            if self._message_flag_for_event(event_type):
-                self._mark_context_has_messages()
-
-            if category in ("user", "response", "warning", "error", "code", "info"):
-                self._show_chat_intro(log, category)
-                render_connector_event(log, event)
-            else:
-                label = _STATUS_LABEL.get(event_type)
-                if label:
-                    event_data = event.get("data", {})
-                    detail = extract_detail(event_type, event_data)
-                    seq = event.get("sequence", -1)
-                    log.append_or_update_status(
-                        seq,
-                        label,
-                        detail,
-                        event_data.get("meta"),
-                        active=False,
-                    )
-
-        self._sync_body_mode()
+        event_handlers.handle_context_snapshot(self, data)
 
     def _handle_context_event(self, data: dict[str, Any]) -> None:
-        context_id = data.get("context_id", "")
-        if context_id != self.current_context:
-            return
-
-        event_type = data.get("event", "")
-        if self._compaction_refresh_context == context_id and event_type != "error":
-            return
-
-        if self._message_flag_for_event(event_type):
-            self._mark_context_has_messages()
-
-        category = _EVENT_CATEGORY.get(event_type, "info")
-        log = self.query_one("#chat-log", ChatLog)
-        sequence = data.get("sequence", -1)
-
-        post_complete = self._context_run_complete
-
-        input_widget = self.query_one("#message-input", ChatInput)
-        if not self._pause_latched and not post_complete:
-            self.agent_active = True
-            self._sync_ready_actions()
-            input_widget.disabled = True
-
-        if category == "response":
-            self._response_delivered = True
-            input_widget.disabled = False
-            self._focus_message_input()
-            self._set_idle()
-            self._show_chat_intro(log, category)
-            render_connector_event(log, data)
-            return
-
-        label = _STATUS_LABEL.get(event_type)
-        if label:
-            event_data = data.get("data", {})
-            detail = extract_detail(event_type, event_data)
-            if post_complete:
-                log.append_or_update_status(
-                    sequence,
-                    label,
-                    detail,
-                    event_data.get("meta"),
-                    active=False,
-                )
-            else:
-                self._set_activity(label, detail)
-                log.set_active_status(data.get("sequence", -1), label, detail, event_data.get("meta"))
-
-        if category in ("warning", "error", "user", "code", "info"):
-            self._show_chat_intro(log, category)
-            if render_connector_event(log, data):
-                if log._active_seq == data.get("sequence"):
-                    log.stop_active_status()
+        event_handlers.handle_context_event(self, data)
 
     def _handle_context_complete(self, data: dict[str, Any]) -> None:
-        context_id = data.get("context_id", "")
-        if context_id != self.current_context:
-            return
-
-        self._set_pause_latched(False)
-        self.agent_active = False
-        self._context_run_complete = True
-        self._sync_ready_actions()
-        input_widget = self.query_one("#message-input", ChatInput)
-        input_widget.disabled = False
-        self._focus_message_input()
-        self._set_idle()
-        asyncio.create_task(self._refresh_token_usage(context_id=context_id))
+        event_handlers.handle_context_complete(self, data)
 
     def _handle_connector_error(self, data: dict[str, Any]) -> None:
-        code = data.get("code", "ERROR")
-        message = data.get("message", "Unknown error")
-        self._show_notice(f"{code}: {message}", error=True)
+        event_handlers.handle_connector_error(self, data)
 
     def _handle_file_op(self, data: dict[str, Any]) -> dict[str, Any]:
-        return self._remote_files.handle_file_op(data)
+        return event_handlers.handle_file_op(self, data)
 
     async def _handle_exec_op(self, data: dict[str, Any]) -> dict[str, Any]:
-        return await self._python_tty.handle_exec_op(data)
+        return await event_handlers.handle_exec_op(self, data)
 
     def _start_remote_tree_publisher(self) -> None:
-        self._stop_remote_tree_publisher()
-        self._remote_tree_task = asyncio.create_task(self._remote_tree_publish_loop())
+        event_handlers.start_remote_tree_publisher(self)
 
     def _stop_remote_tree_publisher(self) -> None:
-        task = self._remote_tree_task
-        self._remote_tree_task = None
-        if task is not None and not task.done():
-            task.cancel()
+        event_handlers.stop_remote_tree_publisher(self)
 
     async def _remote_tree_publish_loop(self) -> None:
-        try:
-            await self._publish_remote_tree_snapshot()
-            while self.connected:
-                await asyncio.sleep(30.0)
-                await self._publish_remote_tree_snapshot()
-        except asyncio.CancelledError:
-            return
+        await event_handlers.remote_tree_publish_loop(self)
 
     async def _publish_remote_tree_snapshot(self) -> None:
-        if not self.connected:
-            return
-
-        snapshot = self._remote_files.build_tree_snapshot()
-        if snapshot.tree_hash == self._last_remote_tree_hash:
-            return
-
-        try:
-            await self.client.send_remote_tree_update(snapshot.as_payload())
-        except Exception:
-            return
-
-        self._last_remote_tree_hash = snapshot.tree_hash
+        await event_handlers.publish_remote_tree_snapshot(self)
 
     def _slash_query(self, text: str) -> str | None:
         if not text:
@@ -1304,36 +614,7 @@ class AgentZeroCLI(App):
         *,
         bar: ModelSwitcherBar | None = None,
     ) -> None:
-        if "model_switcher" not in self.connector_features:
-            self._show_notice("Model presets are unavailable on this connector build.", error=True)
-            return
-        if not self.current_context:
-            self._show_notice("Open or create a chat context before switching model presets.", error=True)
-            return
-
-        target_bar = bar
-        if target_bar is None:
-            try:
-                target_bar = self.query_one("#model-switcher-bar", ModelSwitcherBar)
-            except Exception:
-                target_bar = None
-
-        if target_bar is not None:
-            target_bar.set_busy(True)
-
-        try:
-            payload = await self.client.set_model_preset(self.current_context, preset_name or None)
-        except Exception as exc:
-            if target_bar is not None:
-                target_bar.set_busy(False)
-            await self._refresh_model_switcher()
-            self._show_notice(f"Failed to update model preset: {exc}", error=True)
-            return
-
-        self._apply_model_switcher_state(payload)
-        if target_bar is not None:
-            target_bar.set_busy(False)
-        await self._refresh_token_usage()
+        await set_model_preset(self, preset_name, bar=bar)
 
     def on_splash_view_submit_requested(self, event: SplashView.SubmitRequested) -> None:
         self.run_worker(
@@ -1382,529 +663,61 @@ class AgentZeroCLI(App):
         self.run_worker(self._dispatch_command(event.action), exclusive=True, name=worker_name)
 
     async def _cmd_help(self) -> None:
-        self._surface_help()
+        await chat_commands.cmd_help(self)
 
     async def _cmd_keys(self) -> None:
-        help_panel_visible = False
-        try:
-            help_panel_visible = bool(self.screen.query("HelpPanel"))
-        except Exception:
-            help_panel_visible = False
-
-        if help_panel_visible:
-            self.action_hide_help_panel()
-        else:
-            self.action_show_help_panel()
+        await chat_commands.cmd_keys(self)
 
     async def _cmd_quit(self) -> None:
-        await self.action_quit()
+        await chat_commands.cmd_quit(self)
 
     async def _cmd_clear(self) -> None:
-        self.query_one("#chat-log", ChatLog).clear()
-        self._set_idle()
+        await chat_commands.cmd_clear(self)
 
     async def _switch_context(self, context_id: str, *, has_messages_hint: bool) -> None:
-        if self._compaction_refresh_context and self._compaction_refresh_context != context_id:
-            self._cancel_compaction_refresh()
-        self._stop_token_refresh()
-
-        if self.current_context:
-            await self.client.unsubscribe_context(self.current_context)
-
-        self.current_context = context_id
-        self._set_pause_latched(False)
-        self.current_context_has_messages = has_messages_hint
-        self._response_delivered = False
-        self._context_run_complete = False
-        log = self.query_one("#chat-log", ChatLog)
-        log.clear()
-        self._set_idle()
-        self._sync_body_mode()
-        await self.client.subscribe_context(context_id, from_seq=0)
-        await self._refresh_model_switcher()
-        await self._refresh_token_usage(context_id=context_id)
-        self._start_token_refresh()
+        await chat_commands.switch_context(self, context_id, has_messages_hint=has_messages_hint)
 
     def _cancel_compaction_refresh(self) -> None:
-        task = self._compaction_refresh_task
-        self._compaction_refresh_task = None
-        self._compaction_refresh_context = None
-        if task is not None and not task.done():
-            task.cancel()
+        compaction.cancel_compaction_refresh(self)
 
     def _finalize_compaction_refresh(self, context_id: str) -> None:
-        if self._compaction_refresh_context == context_id:
-            self._compaction_refresh_context = None
-
-        if self._compaction_refresh_task is asyncio.current_task():
-            self._compaction_refresh_task = None
-
-        if self.current_context != context_id:
-            return
-
-        self.agent_active = False
-        self._sync_ready_actions()
-        input_widget = self.query_one("#message-input", ChatInput)
-        input_widget.disabled = False
-        self._focus_message_input()
-        self._set_idle()
+        compaction.finalize_compaction_refresh(self, context_id)
 
     def _begin_compaction_refresh(self, context_id: str) -> None:
-        self._cancel_compaction_refresh()
-        self._compaction_refresh_context = context_id
-        self._set_pause_latched(False)
-        self.agent_active = True
-        self._sync_ready_actions()
-        input_widget = self.query_one("#message-input", ChatInput)
-        input_widget.disabled = True
-        self._set_activity("Compacting chat history", "Updating context")
-        self._compaction_refresh_task = asyncio.create_task(
-            self._wait_for_compaction_and_reload(context_id)
-        )
+        compaction.begin_compaction_refresh(self, context_id)
 
     async def _wait_for_compaction_and_reload(self, context_id: str) -> None:
-        deadline = asyncio.get_running_loop().time() + _COMPACTION_POLL_TIMEOUT_SECONDS
-        try:
-            while asyncio.get_running_loop().time() < deadline:
-                if self._compaction_refresh_context != context_id:
-                    return
-                if not self.connected or self.current_context != context_id:
-                    return
-
-                try:
-                    stats = await self.client.get_compaction_stats(context_id)
-                except Exception:
-                    await asyncio.sleep(_COMPACTION_POLL_INTERVAL_SECONDS)
-                    continue
-
-                status_code = int(stats.get("status_code") or 0)
-                if status_code == 409:
-                    await asyncio.sleep(_COMPACTION_POLL_INTERVAL_SECONDS)
-                    continue
-
-                await self._switch_context(context_id, has_messages_hint=True)
-                return
-
-            self._show_notice(
-                "Compaction is taking longer than expected. Reopen this chat from /chats to refresh it.",
-                error=True,
-            )
-        finally:
-            self._finalize_compaction_refresh(context_id)
+        await compaction.wait_for_compaction_and_reload(self, context_id)
 
     async def _cmd_chats(self) -> None:
-        try:
-            contexts = await self.client.list_chats()
-        except Exception as exc:
-            self._show_notice(f"Error listing chats: {exc}", error=True)
-            return
-
-        if not contexts:
-            self._show_notice("No previous chats found.")
-            return
-
-        result = await self.push_screen_wait(ChatListScreen(contexts))
-        if not result:
-            return
-
-        selected = next((context for context in contexts if str(context.get("id")) == result), {})
-        has_messages_hint = bool(selected.get("last_message"))
-        if not has_messages_hint and "chat_get" in self.connector_features:
-            try:
-                metadata = await self.client.get_chat(result)
-            except Exception:
-                metadata = {}
-            has_messages_hint = bool(metadata.get("last_message") or metadata.get("log_entries"))
-
-        await self._switch_context(result, has_messages_hint=has_messages_hint)
+        await chat_commands.cmd_chats(self)
 
     async def _cmd_new(self) -> None:
-        try:
-            context_id = await self.client.create_chat()
-        except Exception as exc:
-            self._show_notice(f"Failed to create a new chat: {exc}", error=True)
-            return
-
-        await self._switch_context(context_id, has_messages_hint=False)
-        self._set_splash_stage(
-            "ready",
-            message="Ready when you are.",
-            detail=self.config.instance_url or self._splash_host(),
-            host=self._splash_host(),
-            actions=self._welcome_actions(),
-        )
-        self._focus_message_input()
+        await chat_commands.cmd_new(self)
 
     async def _cmd_model_presets(self) -> None:
-        availability = self._model_presets_availability()
-        if not availability.available:
-            self._show_notice(availability.reason or "Model presets are unavailable.", error=True)
-            return
-
-        context_id = self.current_context or ""
-        try:
-            switcher_payload, presets = await asyncio.gather(
-                self.client.get_model_switcher(context_id),
-                self.client.get_model_presets(),
-            )
-        except Exception as exc:
-            self._show_notice(f"Failed to load model presets: {exc}", error=True)
-            return
-
-        self._apply_model_switcher_state(switcher_payload)
-        availability = self._model_presets_availability()
-        if not availability.available:
-            self._show_notice(availability.reason or "Model presets are unavailable.", error=True)
-            return
-
-        override = switcher_payload.get("override") if isinstance(switcher_payload.get("override"), dict) else {}
-        current_preset = str(override.get("preset_name") or "").strip()
-        custom_override_label = ""
-        if override and not current_preset:
-            custom_override_label = str(override.get("name") or override.get("provider") or "Custom override").strip()
-
-        result = await self.push_screen_wait(
-            ModelPresetsScreen(
-                presets=presets,
-                current_preset=current_preset,
-                switch_allowed=bool(switcher_payload.get("allowed")),
-                reason="Model preset switching is unavailable for this chat.",
-                current_override_label=custom_override_label,
-            )
-        )
-        if result is None:
-            return
-        if not isinstance(result, ModelPresetsResult):
-            raise TypeError(f"Unexpected model presets result: {result!r}")
-
-        selected = result.preset_name or ""
-        has_custom_override = bool(override) and not current_preset
-        if selected == current_preset and not has_custom_override:
-            return
-        await self._set_model_preset(selected or None)
-
-    def _coerce_model_config(self, value: object) -> dict[str, str]:
-        if not isinstance(value, Mapping):
-            return {}
-        payload: dict[str, str] = {}
-        for key in ("provider", "name", "api_key"):
-            text = str(value.get(key) or "").strip()
-            if text:
-                payload[key] = text
-        base_url = str(value.get("api_base") or value.get("base_url") or "").strip()
-        if base_url:
-            payload["api_base"] = base_url
-
-        return payload
-
-    def _collect_provider_options(self, switcher_payload: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
-        ordered: list[tuple[str, str]] = []
-        seen: set[str] = set()
-
-        def _add(provider: object, label: object = "") -> None:
-            value = str(provider or "").strip().lower()
-            if not value:
-                return
-            if value in seen:
-                return
-            seen.add(value)
-            label_text = str(label or "").strip() or _format_provider_label(value)
-            ordered.append((label_text or value, value))
-
-        chat_providers = switcher_payload.get("chat_providers")
-        if isinstance(chat_providers, list):
-            for provider in chat_providers:
-                if not isinstance(provider, Mapping):
-                    continue
-                _add(
-                    provider.get("value") or provider.get("id"),
-                    provider.get("label") or provider.get("name"),
-                )
-
-        _add(self._coerce_model_config(switcher_payload.get("main_model")).get("provider"))
-        _add(self._coerce_model_config(switcher_payload.get("utility_model")).get("provider"))
-
-        override = switcher_payload.get("override")
-        if isinstance(override, Mapping):
-            _add(self._coerce_model_config(override.get("chat")).get("provider"))
-            _add(self._coerce_model_config(override.get("utility")).get("provider"))
-
-        presets = switcher_payload.get("presets")
-        if isinstance(presets, list):
-            for item in presets:
-                if not isinstance(item, Mapping):
-                    continue
-                _add(self._coerce_model_config(item.get("chat") or item.get("main")).get("provider"))
-                _add(self._coerce_model_config(item.get("utility")).get("provider"))
-
-        return tuple(ordered)
-
-    def _collect_provider_api_key_status(self, switcher_payload: Mapping[str, Any]) -> dict[str, bool]:
-        status: dict[str, bool] = {}
-
-        chat_providers = switcher_payload.get("chat_providers")
-        if isinstance(chat_providers, list):
-            for provider in chat_providers:
-                if not isinstance(provider, Mapping):
-                    continue
-                value = str(provider.get("value") or provider.get("id") or "").strip().lower()
-                if not value:
-                    continue
-                status[value] = bool(provider.get("has_api_key"))
-
-        for key in ("main_model", "utility_model"):
-            model_payload = switcher_payload.get(key)
-            if not isinstance(model_payload, Mapping):
-                continue
-            provider = str(model_payload.get("provider") or "").strip().lower()
-            if not provider:
-                continue
-            if provider not in status:
-                status[provider] = bool(model_payload.get("has_api_key"))
-
-        return status
+        await cmd_model_presets(self)
 
     async def _cmd_models(self, *, focus_target: str = "main") -> None:
-        availability = self._model_runtime_availability()
-        if not availability.available:
-            self._show_notice(availability.reason or "Model runtime editing is unavailable.", error=True)
-            return
-
-        context_id = self.current_context or ""
-        try:
-            switcher_payload = await self.client.get_model_switcher(context_id)
-        except Exception as exc:
-            self._show_notice(f"Failed to load model runtime settings: {exc}", error=True)
-            return
-
-        self._apply_model_switcher_state(switcher_payload)
-        availability = self._model_runtime_availability()
-        if not availability.available:
-            self._show_notice(availability.reason or "Model runtime editing is unavailable.", error=True)
-            return
-
-        override = switcher_payload.get("override") if isinstance(switcher_payload.get("override"), Mapping) else {}
-        main_payload = switcher_payload.get("main_model") if isinstance(switcher_payload.get("main_model"), Mapping) else {}
-        utility_payload = (
-            switcher_payload.get("utility_model")
-            if isinstance(switcher_payload.get("utility_model"), Mapping)
-            else {}
-        )
-        main_model = self._coerce_model_config(override.get("chat") if isinstance(override, Mapping) else None)
-        utility_model = self._coerce_model_config(override.get("utility") if isinstance(override, Mapping) else None)
-        if not main_model:
-            main_model = self._coerce_model_config(main_payload)
-        if not utility_model:
-            utility_model = self._coerce_model_config(utility_payload)
-
-        result = await self.push_screen_wait(
-            ModelRuntimeScreen(
-                main_model=main_model,
-                utility_model=utility_model,
-                focus_target=focus_target,
-                provider_options=self._collect_provider_options(switcher_payload),
-                provider_api_key_status=self._collect_provider_api_key_status(switcher_payload),
-                main_has_api_key=bool(main_payload.get("has_api_key")),
-                utility_has_api_key=bool(utility_payload.get("has_api_key")),
-            )
-        )
-        if result is None:
-            return
-        if not isinstance(result, ModelRuntimeResult):
-            raise TypeError(f"Unexpected model runtime result: {result!r}")
-
-        try:
-            payload = await self.client.set_model_override(
-                context_id,
-                main_model=result.main_model,
-                utility_model=result.utility_model,
-            )
-        except Exception as exc:
-            self._show_notice(f"Failed to update model runtime override: {exc}", error=True)
-            return
-        if not payload.get("ok"):
-            self._show_notice(str(payload.get("message") or "Failed to update model runtime override."), error=True)
-            return
-
-        self._apply_model_switcher_state(payload)
-        await self._refresh_token_usage(context_id=context_id)
+        await cmd_models(self, focus_target=focus_target)
 
     async def _cmd_settings(self) -> None:
-        try:
-            payload = await self.client.get_settings()
-        except Exception as exc:
-            self._show_notice(f"Failed to load settings: {exc}", error=True)
-            return
-
-        settings = payload.get("settings", payload)
-        result = await self.push_screen_wait(SettingsScreen(settings))
-        if result is None:
-            return
-
-        if not isinstance(result, SettingsResult):
-            raise TypeError(f"Unexpected settings result: {result!r}")
-
-        if not result.changed_keys:
-            return
-
-        try:
-            await self.client.set_settings(result.settings)
-        except Exception as exc:
-            self._show_notice(f"Failed to save settings: {exc}", error=True)
-            return
-
-        await self._refresh_workspace_from_settings()
-        self._show_notice("Settings saved.")
+        await chat_commands.cmd_settings(self)
 
     async def _cmd_compact(self) -> None:
-        availability = self._compact_availability()
-        if not availability.available:
-            self._show_notice(availability.reason or "Compaction is unavailable.", error=True)
-            return
-
-        context_id = self.current_context or ""
-        screen = CompactScreen(
-            stats=None,
-            available=False,
-            reason="Loading compaction data...",
-        )
-        result_task = asyncio.create_task(self.push_screen_wait(screen))
-
-        stats_payload: dict[str, Any]
-        try:
-            stats_result = await self.client.get_compaction_stats(context_id)
-        except Exception as exc:
-            stats_payload = {
-                "ok": False,
-                "message": f"Failed to load compaction stats: {exc}",
-            }
-        else:
-            if isinstance(stats_result, dict):
-                stats_payload = stats_result
-            else:
-                stats_payload = {
-                    "ok": False,
-                    "message": "Compaction stats returned an unexpected response.",
-                }
-
-        available = bool(stats_payload.get("ok"))
-        reason = "" if available else str(stats_payload.get("message") or "Compaction is unavailable.")
-
-        if not result_task.done():
-            try:
-                screen.set_compaction_data(
-                    stats=stats_payload.get("stats"),
-                    available=available,
-                    reason=reason,
-                )
-            except Exception:
-                pass
-
-        result = await result_task
-        if result is None:
-            return
-
-        if not isinstance(result, CompactResult):
-            self._show_notice(f"Unexpected compaction result: {result!r}", error=True)
-            return
-
-        try:
-            response = await self.client.compact_chat(
-                context_id,
-                use_chat_model=result.use_chat_model,
-                preset_name=result.preset_name,
-            )
-        except Exception as exc:
-            self._show_notice(f"Failed to start compaction: {exc}", error=True)
-            return
-        if not response.get("ok"):
-            self._show_notice(str(response.get("message") or "Compaction failed."), error=True)
-            return
-
-        self._begin_compaction_refresh(context_id)
+        await compaction.cmd_compact(self)
 
     async def _cmd_pause(self) -> None:
-        availability = self._pause_availability()
-        if not availability.available:
-            self._show_notice(availability.reason or "Pause is unavailable.", error=True)
-            return
-
-        try:
-            response = await self.client.pause_agent(self.current_context)
-        except Exception as exc:
-            self._show_notice(f"Pause failed: {exc}", error=True)
-            return
-
-        if not response.get("ok"):
-            self._show_notice(str(response.get("message") or "Pause failed."), error=True)
-            return
-
-        self._set_pause_latched(True)
-        self.agent_active = False
-        input_widget = self.query_one("#message-input", ChatInput)
-        input_widget.disabled = False
-        self._focus_message_input()
-        self._set_idle()
+        await chat_commands.cmd_pause(self)
 
     async def _cmd_resume(self) -> None:
-        availability = self._resume_availability()
-        if not availability.available:
-            self._show_notice(availability.reason or "Resume is unavailable.", error=True)
-            return
-
-        try:
-            response = await self.client.pause_agent(self.current_context, paused=False)
-        except Exception as exc:
-            self._show_notice(f"Resume failed: {exc}", error=True)
-            return
-
-        if not response.get("ok"):
-            self._show_notice(str(response.get("message") or "Resume failed."), error=True)
-            return
-
-        self._set_pause_latched(False)
-        self.agent_active = True
-        input_widget = self.query_one("#message-input", ChatInput)
-        input_widget.disabled = True
-        self._set_activity("Resuming")
+        await chat_commands.cmd_resume(self)
 
     async def _cmd_nudge(self) -> None:
-        availability = self._nudge_availability()
-        if not availability.available:
-            self._show_notice(availability.reason or "Nudge is unavailable.", error=True)
-            return
-
-        input_widget = self.query_one("#message-input", ChatInput)
-        self._set_pause_latched(False)
-        input_widget.disabled = True
-        self.agent_active = True
-        self._response_delivered = False
-        self._context_run_complete = False
-        self._sync_ready_actions()
-        try:
-            response = await self.client.nudge_agent(self.current_context)
-        except Exception as exc:
-            self._show_notice(f"Nudge failed: {exc}", error=True)
-            input_widget.disabled = False
-            self.agent_active = False
-            self._sync_ready_actions()
-            return
-
-        if not response.get("ok"):
-            self._show_notice(str(response.get("message") or "Nudge failed."), error=True)
-            input_widget.disabled = False
-            self.agent_active = False
-            self._sync_ready_actions()
+        await chat_commands.cmd_nudge(self)
 
     async def _disconnect_and_exit(self) -> None:
-        self._stop_remote_tree_publisher()
-        self._stop_token_refresh()
-        await self._python_tty.close()
-        try:
-            await self.client.disconnect()
-        except Exception:
-            pass
-        self.exit()
+        await connection.disconnect_and_exit(self)
 
     async def action_clear_chat(self) -> None:
         await self._cmd_clear()

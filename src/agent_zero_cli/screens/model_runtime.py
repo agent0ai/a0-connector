@@ -15,6 +15,8 @@ _DEFAULT_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Openai", "openai"),
 )
 
+from agent_zero_cli.model_config import coerce_model_config
+
 
 @dataclass(frozen=True)
 class ModelRuntimeResult:
@@ -28,22 +30,8 @@ def _clean_text(value: Any) -> str:
     return str(value).strip()
 
 
-def _coerce_model_config(value: object) -> dict[str, str]:
-    if not isinstance(value, Mapping):
-        return {}
-    config: dict[str, str] = {}
-    for key in ("provider", "name", "api_key"):
-        text = _clean_text(value.get(key))
-        if text:
-            config[key] = text
-    base_url = _clean_text(value.get("base_url") or value.get("api_base"))
-    if base_url:
-        config["base_url"] = base_url
-    return config
-
-
 def _model_label(value: Mapping[str, Any] | None) -> str:
-    payload = _coerce_model_config(value)
+    payload = coerce_model_config(value)
     provider = payload.get("provider", "")
     name = payload.get("name", "")
     if provider and name:
@@ -80,8 +68,8 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
         utility_has_api_key: bool = False,
     ) -> None:
         super().__init__()
-        self._main_model = _coerce_model_config(main_model)
-        self._utility_model = _coerce_model_config(utility_model)
+        self._main_model = coerce_model_config(main_model)
+        self._utility_model = coerce_model_config(utility_model)
         self._main_has_api_key = bool(main_has_api_key)
         self._utility_has_api_key = bool(utility_has_api_key)
         self._focus_target = "utility" if focus_target == "utility" else "main"
@@ -145,7 +133,7 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
         if explicit_key:
             return "Custom key override for this chat"
         if self._provider_api_key_status.get(provider.strip().lower(), False):
-            return "Already configured in Agent Zero (leave empty to keep it)"
+            return "Already set in Agent Zero (leave empty to keep it)"
         return "Set your API key for this provider"
 
     def compose(self) -> ComposeResult:
@@ -208,7 +196,7 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
             )
             yield Static("Base URL", classes="model-runtime-label")
             yield Input(
-                value=_clean_text(values.get("base_url")),
+                value=_clean_text(values.get("api_base")),
                 placeholder="Optional: custom provider base URL",
                 id=f"model-runtime-{key}-base-url",
             )

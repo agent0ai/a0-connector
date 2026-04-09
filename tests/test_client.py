@@ -818,6 +818,57 @@ async def test_get_compaction_stats_normalizes_http_failure() -> None:
     )
 
 
+async def test_get_token_status_returns_connector_payload() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={
+                "ok": True,
+                "context_id": "ctx-1",
+                "token_count": 12400,
+                "context_window": 128000,
+            },
+        )
+    )
+
+    result = await client.get_token_status("ctx-1")
+
+    assert result == {
+        "ok": True,
+        "context_id": "ctx-1",
+        "token_count": 12400,
+        "context_window": 128000,
+    }
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/token_status",
+        json={"context_id": "ctx-1"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_get_token_status_normalizes_http_failure() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=404, text="Context not found")
+    )
+
+    result = await client.get_token_status("ctx-1")
+
+    assert result == {
+        "ok": False,
+        "message": "Context not found",
+        "status_code": 404,
+    }
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/token_status",
+        json={"context_id": "ctx-1"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
 async def test_compact_chat_posts_selected_model_and_preset() -> None:
     client = A0Client("http://localhost:5080", api_key="secret")
     client.http = Mock()

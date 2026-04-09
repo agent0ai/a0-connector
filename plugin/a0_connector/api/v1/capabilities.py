@@ -23,6 +23,7 @@ _BASE_FEATURES = [
     "code_execution_remote",
     "remote_file_tree",
     "connector_login",
+    "token_status",
 ]
 
 _OPTIONAL_FEATURES: dict[str, tuple[str, ...]] = {
