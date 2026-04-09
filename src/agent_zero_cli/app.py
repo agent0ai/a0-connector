@@ -59,10 +59,12 @@ class AgentZeroCLI(App):
     TITLE = "Agent Zero CLI"
     BINDINGS = [
         Binding("Ctrl+C", "Quit", "Exit", show=True),
-        Binding("F5", "clear_chat", "Clear", show=True, priority=True),
-        Binding("F6", "list_chats", "Chats", show=True, priority=True),
-        Binding("F7", "nudge_agent", "Nudge", show=True, priority=True),
-        Binding("F8", "pause_agent", "Pause", show=True, priority=True),
+        Binding("f3", "toggle_remote_file_mode", "Read&Write", show=True, priority=True),
+        Binding("f4", "toggle_remote_exec", "exec on", show=True, priority=True),
+        Binding("f5", "clear_chat", "Clear", show=True, priority=True),
+        Binding("f6", "list_chats", "Chats", show=True, priority=True),
+        Binding("f7", "nudge_agent", "Nudge", show=True, priority=True),
+        Binding("f8", "pause_agent", "Pause", show=True, priority=True),
         Binding(
             "ctrl+p",
             "command_palette",
@@ -100,8 +102,16 @@ class AgentZeroCLI(App):
         self._response_delivered = False
         self._context_run_complete = False
         self._chat_intro_pending = True
-        self._remote_files = RemoteFileUtility(scan_root=os.getcwd())
-        self._python_tty = PythonTTYManager(cwd=self._remote_files.scan_root)
+        self._remote_file_write_enabled = False
+        self._remote_exec_enabled = False
+        self._remote_files = RemoteFileUtility(
+            scan_root=os.getcwd(),
+            allow_writes=self._remote_file_write_enabled,
+        )
+        self._python_tty = PythonTTYManager(
+            cwd=self._remote_files.scan_root,
+            enabled=self._remote_exec_enabled,
+        )
         self._local_workspace = self._remote_files.scan_root
         self._remote_workspace = ""
         self._token_refresh_task: asyncio.Task[None] | None = None
@@ -339,6 +349,20 @@ class AgentZeroCLI(App):
         self.refresh_bindings()
         self._sync_ready_actions()
 
+    def _set_remote_file_write_enabled(self, value: bool) -> None:
+        if self._remote_file_write_enabled == value:
+            return
+        self._remote_file_write_enabled = value
+        self._remote_files.set_write_enabled(value)
+        self.refresh_bindings()
+
+    def _set_remote_exec_enabled(self, value: bool) -> None:
+        if self._remote_exec_enabled == value:
+            return
+        self._remote_exec_enabled = value
+        self._python_tty.set_enabled(value)
+        self.refresh_bindings()
+
     def _sync_body_mode(self) -> None:
         splash_helpers.sync_body_mode(self)
 
@@ -365,6 +389,10 @@ class AgentZeroCLI(App):
         splash_helpers.show_notice(self, message, error=error)
 
     def get_binding_description(self, binding: Binding) -> str:
+        if binding.action == "toggle_remote_file_mode":
+            return "Read" if self._remote_file_write_enabled else "Read&Write"
+        if binding.action == "toggle_remote_exec":
+            return "exec off" if self._remote_exec_enabled else "exec on"
         if binding.action == "pause_agent":
             return "Resume" if self._pause_latched else "Pause"
         return binding.description
@@ -701,6 +729,16 @@ class AgentZeroCLI(App):
 
     async def action_clear_chat(self) -> None:
         await self._cmd_clear()
+
+    async def action_toggle_remote_file_mode(self) -> None:
+        self._set_remote_file_write_enabled(not self._remote_file_write_enabled)
+        mode = "Read&Write" if self._remote_file_write_enabled else "Read only"
+        self._show_notice(f"Local access: {mode}.")
+
+    async def action_toggle_remote_exec(self) -> None:
+        self._set_remote_exec_enabled(not self._remote_exec_enabled)
+        mode = "enabled" if self._remote_exec_enabled else "disabled"
+        self._show_notice(f"Remote execution {mode} for this CLI session.")
 
     async def action_list_chats(self) -> None:
         self.run_worker(self._cmd_chats(), exclusive=True, name="cmd-chats")

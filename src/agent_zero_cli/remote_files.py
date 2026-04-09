@@ -46,16 +46,21 @@ class RemoteFileUtility:
         self,
         *,
         scan_root: str,
+        allow_writes: bool = True,
         max_depth: int = 5,
         max_files: int = 20,
         max_folders: int = 20,
         max_lines: int = 250,
     ) -> None:
         self.scan_root = os.path.abspath(scan_root or os.getcwd())
+        self.allow_writes = allow_writes
         self.max_depth = max_depth
         self.max_files = max_files
         self.max_folders = max_folders
         self.max_lines = max_lines
+
+    def set_write_enabled(self, enabled: bool) -> None:
+        self.allow_writes = enabled
 
     def handle_file_op(self, data: dict[str, Any]) -> dict[str, Any]:
         op_id = data.get("op_id", "")
@@ -65,6 +70,15 @@ class RemoteFileUtility:
         try:
             if op == "read":
                 return self._file_op_read(op_id, path, data)
+            if op in {"write", "patch"} and not self.allow_writes:
+                return {
+                    "op_id": op_id,
+                    "ok": False,
+                    "error": (
+                        "Frontend file writes are disabled in this CLI session. "
+                        "Press F3 to switch to Read&Write."
+                    ),
+                }
             if op == "write":
                 return self._file_op_write(op_id, path, data)
             if op == "patch":

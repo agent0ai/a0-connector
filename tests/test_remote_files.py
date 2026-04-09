@@ -43,6 +43,22 @@ def test_remote_file_utility_read_write_patch_roundtrip(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "line-1\nline-2-updated\n"
 
 
+def test_remote_file_utility_blocks_writes_when_disabled(tmp_path: Path) -> None:
+    utility = RemoteFileUtility(scan_root=str(tmp_path), allow_writes=False)
+
+    result = utility.handle_file_op(
+        {
+            "op_id": "op-write-disabled",
+            "op": "write",
+            "path": str(tmp_path / "blocked.txt"),
+            "content": "hello\n",
+        }
+    )
+
+    assert result["ok"] is False
+    assert "Press F3" in result["error"]
+
+
 def test_remote_file_tree_snapshot_is_bounded_and_hashed(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.py").write_text("a\n", encoding="utf-8")

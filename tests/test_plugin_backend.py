@@ -46,6 +46,7 @@ def _install_fake_helpers(
     security_mod = types.ModuleType("helpers.security")
     dotenv_mod = types.ModuleType("helpers.dotenv")
     extension_mod = types.ModuleType("helpers.extension")
+    tool_mod = types.ModuleType("helpers.tool")
     ws_mod = types.ModuleType("helpers.ws")
     ws_manager_mod = types.ModuleType("helpers.ws_manager")
     settings_mod = types.ModuleType("helpers.settings")
@@ -103,6 +104,22 @@ def _install_fake_helpers(
         def __init__(self, *args, **kwargs) -> None:
             self.agent = None
 
+    class ToolResponse:
+        def __init__(
+            self,
+            message: str = "",
+            break_loop: bool = False,
+            additional: dict | None = None,
+        ) -> None:
+            self.message = message
+            self.break_loop = break_loop
+            self.additional = additional or {}
+
+    class Tool:
+        def __init__(self, agent=None, args: dict | None = None, *args_, **kwargs_) -> None:
+            self.agent = agent
+            self.args = args or {}
+
     class WsResult(dict):
         @classmethod
         def error(
@@ -150,6 +167,8 @@ def _install_fake_helpers(
     api_mod.Response = Response
     print_style_mod.PrintStyle = PrintStyle
     extension_mod.Extension = Extension
+    tool_mod.Response = ToolResponse
+    tool_mod.Tool = Tool
     ws_mod.WsHandler = WsHandler
     ws_mod.NAMESPACE = "/ws"
     ws_manager_mod.WsResult = WsResult
@@ -299,6 +318,7 @@ def _install_fake_helpers(
     sys.modules["helpers.api"] = api_mod
     sys.modules["helpers.print_style"] = print_style_mod
     sys.modules["helpers.extension"] = extension_mod
+    sys.modules["helpers.tool"] = tool_mod
     sys.modules["helpers.ws"] = ws_mod
     sys.modules["helpers.ws_manager"] = ws_manager_mod
     sys.modules["helpers.security"] = security_mod
@@ -1322,6 +1342,48 @@ def test_ws_connector_hello_advertises_remote_exec_and_tree_features() -> None:
     assert payload["protocol"] == "a0-connector.v1"
     assert "remote_file_tree" in payload["features"]
     assert "code_execution_remote" in payload["features"]
+
+
+def test_code_execution_remote_accepts_shell_backed_runtimes() -> None:
+    _install_fake_helpers()
+
+    tool_mod = _reload("usr.plugins.a0_connector.tools.code_execution_remote")
+    tool = tool_mod.CodeExecutionRemote(
+        agent=types.SimpleNamespace(context=types.SimpleNamespace(id="ctx-1")),
+        args={"runtime": "terminal", "session": 0, "code": "echo hi"},
+    )
+
+    response = asyncio.run(tool.execute())
+
+    assert "no CLI client connected" in response.message
+
+
+def test_code_execution_remote_rejects_unknown_runtime_with_expanded_list() -> None:
+    _install_fake_helpers()
+
+    tool_mod = _reload("usr.plugins.a0_connector.tools.code_execution_remote")
+    tool = tool_mod.CodeExecutionRemote(
+        agent=types.SimpleNamespace(context=types.SimpleNamespace(id="ctx-1")),
+        args={"runtime": "ruby", "session": 0},
+    )
+
+    response = asyncio.run(tool.execute())
+
+    assert "terminal" in response.message
+    assert "python" in response.message
+    assert "nodejs" in response.message
+    assert "input" in response.message
+
+
+def test_code_execution_remote_prompt_describes_shell_backed_execution() -> None:
+    prompt_path = PLUGIN_ROOT / "a0_connector" / "prompts" / "agent.system.tool.code_execution_remote.md"
+    prompt_text = prompt_path.read_text(encoding="utf-8")
+
+    assert "shell-backed" in prompt_text
+    assert "`terminal`" in prompt_text
+    assert "`python`" in prompt_text
+    assert "`nodejs`" in prompt_text
+    assert "Python TTY" not in prompt_text
 
 
 def test_ws_connector_remote_tree_update_stores_latest_snapshot() -> None:

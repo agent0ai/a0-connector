@@ -1048,6 +1048,74 @@ def test_binding_description_switches_to_resume_when_paused(dummy_app: DummyAgen
     assert dummy_app.get_binding_description(binding) == "Resume"
 
 
+def test_remote_safety_bindings_appear_before_clear(dummy_app: DummyAgentZeroCLI) -> None:
+    visible_actions = [binding.action for binding in dummy_app.BINDINGS if binding.show]
+
+    assert visible_actions[:4] == [
+        "Quit",
+        "toggle_remote_file_mode",
+        "toggle_remote_exec",
+        "clear_chat",
+    ]
+
+
+def test_binding_descriptions_reflect_remote_safety_mode(dummy_app: DummyAgentZeroCLI) -> None:
+    read_binding = next(
+        binding for binding in dummy_app.BINDINGS if binding.action == "toggle_remote_file_mode"
+    )
+    exec_binding = next(
+        binding for binding in dummy_app.BINDINGS if binding.action == "toggle_remote_exec"
+    )
+
+    assert dummy_app.get_binding_description(read_binding) == "Read&Write"
+    assert dummy_app.get_binding_description(exec_binding) == "exec on"
+
+    dummy_app._set_remote_file_write_enabled(True)
+    dummy_app._set_remote_exec_enabled(True)
+
+    assert dummy_app.get_binding_description(read_binding) == "Read"
+    assert dummy_app.get_binding_description(exec_binding) == "exec off"
+
+
+async def test_remote_safety_toggle_actions_update_local_permissions(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    assert dummy_app._remote_file_write_enabled is False
+    assert dummy_app._remote_exec_enabled is False
+    assert dummy_app._remote_files.allow_writes is False
+    assert dummy_app._python_tty.enabled is False
+
+    await dummy_app.action_toggle_remote_file_mode()
+    await dummy_app.action_toggle_remote_exec()
+
+    assert dummy_app._remote_file_write_enabled is True
+    assert dummy_app._remote_exec_enabled is True
+    assert dummy_app._remote_files.allow_writes is True
+    assert dummy_app._python_tty.enabled is True
+
+
+async def test_remote_safety_function_keys_toggle_permissions() -> None:
+    app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        assert app._remote_file_write_enabled is False
+        assert app._remote_exec_enabled is False
+
+        await pilot.press("f3")
+        await pilot.pause()
+
+        assert app._remote_file_write_enabled is True
+        assert app._remote_files.allow_writes is True
+
+        await pilot.press("f4")
+        await pilot.pause()
+
+        assert app._remote_exec_enabled is True
+        assert app._python_tty.enabled is True
+
+
 async def test_pause_action_resumes_when_paused(
     dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,

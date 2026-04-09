@@ -6,15 +6,23 @@
 |----------|---------|---------|
 | `AGENT_ZERO_HOST` | Agent Zero base URL | `http://127.0.0.1:5080` (TUI default) |
 | `AGENT_ZERO_API_KEY` | API key (= Agent Zero's `mcp_server_token`) | *(none)* |
+| `AGENT_ZERO_CORE_ROOT` | Override path used to runtime-import the local Agent Zero Core `_code_execution` helpers for frontend remote exec | Tried first, then `/home/eclypso/agentdocker`, then `/a0` |
 
 ## Resolution order
 
-For both variables:
+For `AGENT_ZERO_HOST` and `AGENT_ZERO_API_KEY`:
 
 1. **Process environment** — wins if set
 2. **`~/.agent-zero/.env`** — `KEY=VALUE` lines (supports `#` comments)
 
 No JSON config. `.cli-config.json` is legacy and unused.
+
+For `AGENT_ZERO_CORE_ROOT`:
+
+1. **Process environment** — if set, tried first as the local Agent Zero Core root for runtime imports
+2. **Fallback paths** — `/home/eclypso/agentdocker`, then `/a0`
+
+If none of those paths contains a valid Core `_code_execution` tree, the CLI still starts normally for chat and remote-file features, but `code_execution_remote` returns an unavailable error instead of using a connector-local fallback runtime.
 
 ## First-run behavior
 

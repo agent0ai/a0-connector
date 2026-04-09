@@ -4,7 +4,7 @@ This note lists files that define the **Textual** terminal UI (layout, widgets, 
 
 ## IDE embedded terminal
 
-When you run the CLI inside Cursor or VS Code, it appears in the **integrated terminal** at the bottom of the window. You get the same full-screen TUI as in an external terminal: chat log, multiline input (placeholder shows normal help when idle; while the agent works it shows in-input progress text like the core WebUI), and a footer with shortcuts (for example `F6` Chats, `F7` Nudge, `F5` Clear, `F8` Pause, `^P` Commands).
+When you run the CLI inside Cursor or VS Code, it appears in the **integrated terminal** at the bottom of the window. You get the same full-screen TUI as in an external terminal: chat log, multiline input (placeholder shows normal help when idle; while the agent works it shows in-input progress text like the core WebUI), and a footer with shortcuts (for example `F3` read-mode toggle, `F4` remote-exec toggle, `F5` Clear, `F6` Chats, `F7` Nudge, `F8` Pause, `^P` Commands).
 
 ## Files that are mainly “frontend”
 

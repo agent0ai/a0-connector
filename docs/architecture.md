@@ -63,7 +63,7 @@ All events are `connector_`-prefixed to avoid collisions on the shared `/ws` nam
 | `connector_send_message` | Send user message (async; returns `accepted`) |
 | `connector_file_op_result` | Return result of a local file operation |
 | `connector_remote_tree_update` | Publish frontend workspace tree snapshots |
-| `connector_exec_op_result` | Return result of a frontend Python TTY execution operation |
+| `connector_exec_op_result` | Return result of a shell-backed frontend execution operation |
 
 ### Server → Client
 
@@ -74,7 +74,7 @@ All events are `connector_`-prefixed to avoid collisions on the shared `/ws` nam
 | `connector_context_complete` | Agent finished responding |
 | `connector_error` | Application-level error for a context |
 | `connector_file_op` | Request a local file operation (read/write/patch) |
-| `connector_exec_op` | Request a frontend Python TTY execution operation |
+| `connector_exec_op` | Request a shell-backed frontend execution operation |
 
 ### Event bridge
 
@@ -101,13 +101,17 @@ The `text_editor_remote` tool (agent-side) emits `connector_file_op` to the subs
 
 ## Remote execution operations
 
-The `code_execution_remote` tool emits `connector_exec_op` to the subscribed CLI client, which runs a Python TTY session on the frontend machine and returns `connector_exec_op_result`.
+The `code_execution_remote` tool emits `connector_exec_op` to the subscribed CLI client, which runs a shell-backed persistent frontend session and returns `connector_exec_op_result`.
 
 Supported runtimes:
-- `python` (execute code)
-- `input` (send follow-up stdin)
+- `terminal` (execute a shell command)
+- `python` (execute `ipython -c <code>` through the shell session)
+- `nodejs` (execute `node /exe/node_eval.js <code>` through the shell session)
 - `output` (poll more output for long-running jobs)
-- `reset` (discard a session)
+- `reset` (reset and recreate a session)
+- `input` (temporary deprecated compatibility alias for sending one line into a running shell session)
+
+The CLI resolves the local Agent Zero Core tree in this order: `AGENT_ZERO_CORE_ROOT`, then `/home/eclypso/agentdocker`, then `/a0`. If no valid Core tree is available, chat and remote-file features still work, but remote exec returns a structured `{ok: false}` unavailable error and does not fall back to a connector-local implementation.
 
 Each operation is correlated by `op_id` and scoped to a numeric `session` id.
 

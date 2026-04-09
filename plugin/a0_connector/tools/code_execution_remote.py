@@ -1,4 +1,4 @@
-"""code_execution_remote tool — run Python TTY operations on the CLI machine via `/ws`."""
+"""code_execution_remote tool — run shell-backed frontend operations on the CLI machine via `/ws`."""
 from __future__ import annotations
 
 import asyncio
@@ -21,14 +21,15 @@ EXEC_OP_EVENT = "connector_exec_op"
 
 
 class CodeExecutionRemote(Tool):
-    """Send Python TTY operations to the connected CLI machine."""
+    """Send shell-backed frontend execution operations to the connected CLI machine."""
 
     async def execute(self, **kwargs: Any) -> Response:
         runtime = str(self.args.get("runtime", "")).strip().lower()
-        if runtime not in {"python", "output", "input", "reset"}:
+        if runtime not in {"terminal", "python", "nodejs", "output", "input", "reset"}:
             return Response(
                 message=(
-                    "runtime is required (python, output, input, or reset)"
+                    "runtime is required (terminal, python, nodejs, output, reset, "
+                    "or input [deprecated compatibility alias])"
                 ),
                 break_loop=False,
             )
@@ -60,11 +61,11 @@ class CodeExecutionRemote(Tool):
             "context_id": context_id,
         }
 
-        if runtime == "python":
+        if runtime in {"terminal", "python", "nodejs"}:
             code = self.args.get("code")
             if code is None or not str(code).strip():
                 return Response(
-                    message="code is required for runtime=python",
+                    message=f"code is required for runtime={runtime}",
                     break_loop=False,
                 )
             payload["code"] = str(code)
