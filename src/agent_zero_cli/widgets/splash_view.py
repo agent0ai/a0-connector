@@ -11,6 +11,7 @@ from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.widgets import Button, Checkbox, Input, LoadingIndicator, Static
 
+from agent_zero_cli.client import DEFAULT_HOST
 from agent_zero_cli.widgets.chat_log import build_agent_zero_banner_widget
 
 
@@ -24,11 +25,8 @@ _STAGE_LABELS: dict[SplashStage, str] = {
     "ready": "Ready",
     "error": "Connection issue",
 }
-_DEFAULT_HOST = "http://127.0.0.1:5080"
-
-
 def _connection_target_summary(host: str) -> tuple[str, str, bool]:
-    normalized_host = host.strip() or _DEFAULT_HOST
+    normalized_host = host.strip() or DEFAULT_HOST
     try:
         parsed = urlparse(normalized_host)
     except ValueError:
@@ -127,7 +125,7 @@ class SplashHostPanel(Vertical):
             classes="splash-panel-copy",
         )
         self._host_valid = True
-        self._host = Input(placeholder=_DEFAULT_HOST, id="splash-host-input")
+        self._host = Input(placeholder=DEFAULT_HOST, id="splash-host-input")
         self._validation = Static("", id="splash-host-validation")
         self._button = Button("Connect", id="splash-host-submit", variant="primary")
         self._hint = Static(
@@ -149,11 +147,11 @@ class SplashHostPanel(Vertical):
     def set_host(self, host: str) -> None:
         host_text = host.strip()
         if self._host.has_focus and self._host.value.strip():
-            self._host.placeholder = _DEFAULT_HOST
+            self._host.placeholder = DEFAULT_HOST
             self.refresh_validation()
             return
-        self._host.value = "" if host_text == _DEFAULT_HOST else host_text
-        self._host.placeholder = _DEFAULT_HOST
+        self._host.value = "" if host_text == DEFAULT_HOST else host_text
+        self._host.placeholder = DEFAULT_HOST
         self.refresh_validation()
 
     def _safe_update(self, widget: Static, renderable: Text | str) -> None:
@@ -181,7 +179,7 @@ class SplashHostPanel(Vertical):
 
     @property
     def host(self) -> str:
-        return self._host.value.strip() or _DEFAULT_HOST
+        return self._host.value.strip() or DEFAULT_HOST
 
     @property
     def is_valid(self) -> bool:
@@ -199,7 +197,7 @@ class SplashLoginPanel(Vertical):
 
     def __init__(self) -> None:
         super().__init__(id="splash-login-panel")
-        _, target_host, target_secure = _connection_target_summary(_DEFAULT_HOST)
+        _, target_host, target_secure = _connection_target_summary(DEFAULT_HOST)
         self._target_host = target_host
         self._target_secure = target_secure
         self._login_error = ""

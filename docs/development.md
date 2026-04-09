@@ -33,12 +33,9 @@ A0_SET_mcp_server_token=your-token python run_ui.py --host=127.0.0.1 --port=5000
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
-pip install aiohttp>=3.11.0  # required by python-engineio for WebSocket transport
 export AGENT_ZERO_HOST=http://127.0.0.1:50001
 agentzero
 ```
-
-> `aiohttp` is a transitive dependency of `python-engineio` but not declared in `pyproject.toml`. You must install it explicitly or WebSocket connections will fail.
 
 ### Mirroring backend changes back into this repo
 

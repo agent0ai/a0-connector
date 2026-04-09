@@ -10,6 +10,7 @@ import aiohttp
 import httpx
 import socketio
 
+from agent_zero_cli import __version__
 
 _PLUGIN_API = "/api/plugins/a0_connector/v1"
 DEFAULT_HOST = "http://127.0.0.1:5080"
@@ -17,12 +18,6 @@ PROTOCOL_VERSION = "a0-connector.v1"
 _SOCKET_IO_PATH = "/socket.io"
 WS_NAMESPACE = "/ws"
 WS_HANDLER = "plugins/a0_connector/ws_connector"
-
-# Backward-compatible aliases for legacy imports.
-_DEFAULT_HOST = DEFAULT_HOST
-_PROTOCOL_VERSION = PROTOCOL_VERSION
-_WS_NAMESPACE = WS_NAMESPACE
-_WS_HANDLER = WS_HANDLER
 
 _EVENT_HELLO = "connector_hello"
 _EVENT_SUBSCRIBE = "connector_subscribe_context"
@@ -87,9 +82,6 @@ class A0Client:
         self.on_file_op: Callable[[dict[str, Any]], Any] | None = None
         self.on_exec_op: Callable[[dict[str, Any]], Any] | None = None
 
-    def _url(self, path: str) -> str:
-        return f"{self.base_url}{path}"
-
     def _api_url(self, endpoint: str) -> str:
         return f"{self.base_url}{_PLUGIN_API}/{endpoint}"
 
@@ -103,7 +95,7 @@ class A0Client:
         return headers
 
     def _ws_auth(self) -> dict[str, Any]:
-        auth: dict[str, Any] = {"handlers": [_WS_HANDLER]}
+        auth: dict[str, Any] = {"handlers": [WS_HANDLER]}
         if self.api_key:
             auth["api_key"] = self.api_key
         return auth
@@ -247,12 +239,12 @@ class A0Client:
 
         if reason == _BLANK_SOCKET_IO_REJECTION:
             return (
-                f"Socket.IO transport probe succeeded, but the {_WS_NAMESPACE} namespace "
+                f"Socket.IO transport probe succeeded, but the {WS_NAMESPACE} namespace "
                 f"connection was rejected. {guidance}"
             )
 
         return (
-            f"Socket.IO transport probe succeeded, but the {_WS_NAMESPACE} namespace connection "
+            f"Socket.IO transport probe succeeded, but the {WS_NAMESPACE} namespace connection "
             f"was rejected: {reason}. {guidance}"
         )
 
@@ -273,7 +265,7 @@ class A0Client:
         response = await self.sio.call(
             event,
             payload or {},
-            namespace=_WS_NAMESPACE,
+            namespace=WS_NAMESPACE,
         )
         return self._raise_for_results(response, event)
 
@@ -281,14 +273,14 @@ class A0Client:
         if self._events_registered:
             return
 
-        @self.sio.on("connect", namespace=_WS_NAMESPACE)
+        @self.sio.on("connect", namespace=WS_NAMESPACE)
         async def _on_connect() -> None:
             self.connected = True
             callback = self.on_connect
             if callback is not None:
                 callback()
 
-        @self.sio.on("disconnect", namespace=_WS_NAMESPACE)
+        @self.sio.on("disconnect", namespace=WS_NAMESPACE)
         async def _on_disconnect() -> None:
             self.connected = False
             callback = self.on_disconnect
@@ -299,52 +291,52 @@ class A0Client:
         async def _on_connect_error_root(payload: Any) -> None:
             self._last_connect_error = payload
 
-        @self.sio.on("connect_error", namespace=_WS_NAMESPACE)
+        @self.sio.on("connect_error", namespace=WS_NAMESPACE)
         async def _on_connect_error(payload: Any) -> None:
             self._last_connect_error = payload
 
-        @self.sio.on(_EVENT_CONTEXT_SNAPSHOT, namespace=_WS_NAMESPACE)
+        @self.sio.on(_EVENT_CONTEXT_SNAPSHOT, namespace=WS_NAMESPACE)
         async def _on_context_snapshot(payload: dict[str, Any]) -> None:
             callback = self.on_context_snapshot
             if callback is not None:
                 callback(self._unwrap_envelope(payload))
 
-        @self.sio.on(_EVENT_CONTEXT_EVENT, namespace=_WS_NAMESPACE)
+        @self.sio.on(_EVENT_CONTEXT_EVENT, namespace=WS_NAMESPACE)
         async def _on_context_event(payload: dict[str, Any]) -> None:
             callback = self.on_context_event
             if callback is not None:
                 callback(self._unwrap_envelope(payload))
 
-        @self.sio.on(_EVENT_CONTEXT_COMPLETE, namespace=_WS_NAMESPACE)
+        @self.sio.on(_EVENT_CONTEXT_COMPLETE, namespace=WS_NAMESPACE)
         async def _on_context_complete(payload: dict[str, Any]) -> None:
             callback = self.on_context_complete
             if callback is not None:
                 callback(self._unwrap_envelope(payload))
 
-        @self.sio.on(_EVENT_ERROR, namespace=_WS_NAMESPACE)
+        @self.sio.on(_EVENT_ERROR, namespace=WS_NAMESPACE)
         async def _on_error(payload: dict[str, Any]) -> None:
             callback = self.on_error
             if callback is not None:
                 callback(self._unwrap_envelope(payload))
 
-        @self.sio.on(_EVENT_FILE_OP, namespace=_WS_NAMESPACE)
+        @self.sio.on(_EVENT_FILE_OP, namespace=WS_NAMESPACE)
         async def _on_file_op(payload: dict[str, Any]) -> None:
             request = self._unwrap_envelope(payload)
             result = await self._handle_file_op(request)
             await self.sio.emit(
                 _EVENT_FILE_OP_RESULT,
                 result,
-                namespace=_WS_NAMESPACE,
+                namespace=WS_NAMESPACE,
             )
 
-        @self.sio.on(_EVENT_EXEC_OP, namespace=_WS_NAMESPACE)
+        @self.sio.on(_EVENT_EXEC_OP, namespace=WS_NAMESPACE)
         async def _on_exec_op(payload: dict[str, Any]) -> None:
             request = self._unwrap_envelope(payload)
             result = await self._handle_exec_op(request)
             await self.sio.emit(
                 _EVENT_EXEC_OP_RESULT,
                 result,
-                namespace=_WS_NAMESPACE,
+                namespace=WS_NAMESPACE,
             )
 
         self._events_registered = True
@@ -424,15 +416,6 @@ class A0Client:
         response.raise_for_status()
         return self._json(response)
 
-    async def check_health(self) -> bool:
-        try:
-            response = await self._post("capabilities", require_api_key=False)
-        except (httpx.ConnectError, httpx.TimeoutException):
-            return False
-        except Exception:
-            return False
-        return response.status_code == 200
-
     async def login(self, username: str, password: str) -> str | None:
         """Exchange username + password for an API key via the connector_login endpoint."""
         response = await self._post(
@@ -464,7 +447,7 @@ class A0Client:
         try:
             await self.sio.connect(
                 self.base_url,
-                namespaces=[_WS_NAMESPACE],
+                namespaces=[WS_NAMESPACE],
                 headers=self._ws_headers(),
                 auth=self._ws_auth(),
             )
@@ -475,9 +458,9 @@ class A0Client:
         return await self._call(
             _EVENT_HELLO,
             {
-                "protocol": _PROTOCOL_VERSION,
+                "protocol": PROTOCOL_VERSION,
                 "client": "agent-zero-cli",
-                "client_version": "0.1.0",
+                "client_version": __version__,
             },
         )
 
@@ -526,13 +509,6 @@ class A0Client:
         response.raise_for_status()
         return self._json(response)
 
-    async def remove_chat(self, context_id: str) -> None:
-        response = await self._post(
-            "chat_delete",
-            {"context_id": context_id},
-        )
-        response.raise_for_status()
-
     async def pause_agent(
         self,
         context_id: str | None,
@@ -572,12 +548,6 @@ class A0Client:
             data["ok"] = True
         return data
 
-    async def list_projects(self) -> list[dict[str, Any]]:
-        response = await self._post("projects_list")
-        response.raise_for_status()
-        data = self._json(response)
-        return data.get("projects", [])
-
     async def get_settings(self) -> dict[str, Any]:
         response = await self._post("settings_get")
         response.raise_for_status()
@@ -597,16 +567,6 @@ class A0Client:
         data = self._json(response)
         presets = data.get("presets", data.get("data", []))
         return presets if isinstance(presets, list) else []
-
-    async def set_model_presets(self, presets: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        response = await self._post(
-            "model_presets",
-            {"action": "set", "presets": presets},
-        )
-        response.raise_for_status()
-        data = self._json(response)
-        items = data.get("presets", data.get("data", presets))
-        return items if isinstance(items, list) else list(presets)
 
     async def get_model_switcher(self, context_id: str) -> dict[str, Any]:
         response = await self._post(

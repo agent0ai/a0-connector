@@ -64,6 +64,20 @@ def coerce_model_config(value: object) -> dict[str, str]:
     return payload
 
 
+def format_model_label(value: object, *, default: str = "Connector default") -> str:
+    if isinstance(value, Mapping):
+        label = str(value.get("label") or "").strip()
+        provider = str(value.get("provider") or "").strip()
+        name = str(value.get("name") or "").strip()
+        if label:
+            return label
+        if provider and name:
+            return f"{provider}/{name}"
+        return name or provider or default
+    text = str(value or "").strip()
+    return text or default
+
+
 def apply_model_switcher_state(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     """
     Returns (allowed, state_kwargs)

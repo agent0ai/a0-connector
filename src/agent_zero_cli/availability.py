@@ -13,16 +13,6 @@ def require_connection(app: AgentZeroCLI) -> CommandAvailability:
         return CommandAvailability(False, "Connect to an Agent Zero instance first.")
     return CommandAvailability(True)
 
-
-def require_context(app: AgentZeroCLI) -> CommandAvailability:
-    base = app._require_connection()
-    if not base.available:
-        return base
-    if not app.current_context:
-        return CommandAvailability(False, "Create or open a chat context first.")
-    return CommandAvailability(True)
-
-
 def require_features(app: AgentZeroCLI, *features: str) -> CommandAvailability:
     base = app._require_connection()
     if not base.available:
@@ -67,10 +57,6 @@ def resume_availability(app: AgentZeroCLI) -> CommandAvailability:
     if not app._pause_latched:
         return CommandAvailability(False, "Resume becomes available after pausing the active run.")
     return CommandAvailability(True)
-
-
-def pause_toggle_availability(app: AgentZeroCLI) -> CommandAvailability:
-    return app._resume_availability() if app._pause_latched else app._pause_availability()
 
 
 def nudge_availability(app: AgentZeroCLI) -> CommandAvailability:

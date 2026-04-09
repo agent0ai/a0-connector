@@ -51,8 +51,6 @@ from agent_zero_cli.token_usage import (
     refresh_token_usage,
 )
 
-_DEFAULT_HOST = DEFAULT_HOST
-
 
 class AgentZeroCLI(App):
     """Agent Zero CLI - terminal-native connector shell."""
@@ -93,7 +91,7 @@ class AgentZeroCLI(App):
         )
         self.theme = "a0-dark"
         self.config = config or load_config()
-        base_url = self.config.instance_url or _DEFAULT_HOST
+        base_url = self.config.instance_url or DEFAULT_HOST
         self.client = A0Client(base_url, api_key=self.config.api_key)
         self.capabilities: dict[str, Any] = {}
         self.connector_features: set[str] = set()
@@ -109,7 +107,7 @@ class AgentZeroCLI(App):
         self._token_refresh_task: asyncio.Task[None] | None = None
         self._splash_state = SplashState(
             stage="host",
-            host=self.config.instance_url or _DEFAULT_HOST,
+            host=self.config.instance_url or DEFAULT_HOST,
             local_workspace=self._local_workspace,
             remote_workspace=self._remote_workspace,
         )
@@ -427,9 +425,6 @@ class AgentZeroCLI(App):
     def _require_connection(self) -> CommandAvailability:
         return availability.require_connection(self)
 
-    def _require_context(self) -> CommandAvailability:
-        return availability.require_context(self)
-
     def _require_features(self, *features: str) -> CommandAvailability:
         return availability.require_features(self, *features)
 
@@ -441,9 +436,6 @@ class AgentZeroCLI(App):
 
     def _resume_availability(self) -> CommandAvailability:
         return availability.resume_availability(self)
-
-    def _pause_toggle_availability(self) -> CommandAvailability:
-        return availability.pause_toggle_availability(self)
 
     def _nudge_availability(self) -> CommandAvailability:
         return availability.nudge_availability(self)
@@ -662,15 +654,6 @@ class AgentZeroCLI(App):
         worker_name = f"splash-{event.action.lstrip('/').replace('/', '-')}"
         self.run_worker(self._dispatch_command(event.action), exclusive=True, name=worker_name)
 
-    async def _cmd_help(self) -> None:
-        await chat_commands.cmd_help(self)
-
-    async def _cmd_keys(self) -> None:
-        await chat_commands.cmd_keys(self)
-
-    async def _cmd_quit(self) -> None:
-        await chat_commands.cmd_quit(self)
-
     async def _cmd_clear(self) -> None:
         await chat_commands.cmd_clear(self)
 
@@ -700,9 +683,6 @@ class AgentZeroCLI(App):
 
     async def _cmd_models(self, *, focus_target: str = "main") -> None:
         await cmd_models(self, focus_target=focus_target)
-
-    async def _cmd_settings(self) -> None:
-        await chat_commands.cmd_settings(self)
 
     async def _cmd_compact(self) -> None:
         await compaction.cmd_compact(self)

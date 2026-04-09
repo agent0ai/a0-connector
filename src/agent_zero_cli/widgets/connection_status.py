@@ -5,27 +5,7 @@ from textual.app import RenderResult
 from textual.reactive import reactive
 from textual.widgets import Static
 
-
-def _coerce_positive_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    if isinstance(value, float):
-        if value.is_integer():
-            integer = int(value)
-            return integer if integer >= 0 else None
-        return None
-    text = str(value).strip().replace(",", "")
-    if not text:
-        return None
-    try:
-        integer = int(text)
-    except ValueError:
-        return None
-    return integer if integer >= 0 else None
+from agent_zero_cli.model_config import coerce_positive_int
 
 
 def _format_token_count(value: int) -> str:
@@ -55,8 +35,8 @@ class ConnectionStatus(Static):
             self._tick_count += 1
 
     def set_token_usage(self, token_count: object, token_limit: object = None) -> None:
-        self.token_count = _coerce_positive_int(token_count)
-        self.token_limit = _coerce_positive_int(token_limit)
+        self.token_count = coerce_positive_int(token_count)
+        self.token_limit = coerce_positive_int(token_limit)
 
     def clear_token_usage(self) -> None:
         self.token_count = None

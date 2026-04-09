@@ -8,7 +8,8 @@ from rich.padding import Padding
 from textual.app import App, ComposeResult
 from textual.widgets import Button, Input, Static
 
-from agent_zero_cli.app import AgentZeroCLI, _DEFAULT_HOST
+from agent_zero_cli.app import AgentZeroCLI
+from agent_zero_cli.client import DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.rendering import render_connector_event
 from agent_zero_cli.screens.compact_modal import CompactResult
@@ -141,7 +142,6 @@ class FakeInput:
         self.activity_label = ""
         self.activity_detail = ""
         self.activity_idle = True
-        self.slash_menu_active = False
         self.value = ""
 
     def focus(self) -> None:
@@ -156,9 +156,6 @@ class FakeInput:
         self.activity_label = ""
         self.activity_detail = ""
         self.activity_idle = True
-
-    def set_slash_menu_active(self, active: bool) -> None:
-        self.slash_menu_active = active
 
 
 class FakeConnectionStatus:
@@ -232,7 +229,7 @@ class FakeBodySwitcher:
 
 class FakeSplash:
     def __init__(self) -> None:
-        self.state = SplashState(stage="host", host=_DEFAULT_HOST)
+        self.state = SplashState(stage="host", host=DEFAULT_HOST)
         self.focused = False
 
     def set_state(self, state: SplashState) -> None:
@@ -240,36 +237,6 @@ class FakeSplash:
 
     def focus_primary(self) -> None:
         self.focused = True
-
-
-class FakeSlashMenu:
-    def __init__(self) -> None:
-        self.display = False
-        self.commands: list[object] = []
-        self._highlighted_index: int | None = None
-
-    def set_visible_commands(self, commands) -> None:
-        self.commands = list(commands)
-        self._highlighted_index = 0 if self.commands else None
-
-    @property
-    def highlighted_command(self):
-        if self._highlighted_index is None:
-            return None
-        if self._highlighted_index >= len(self.commands):
-            return None
-        return self.commands[self._highlighted_index]
-
-    def action_cursor_up(self) -> None:
-        if self._highlighted_index is None:
-            return
-        self._highlighted_index = max(0, self._highlighted_index - 1)
-
-    def action_cursor_down(self) -> None:
-        if self._highlighted_index is None:
-            return
-        self._highlighted_index = min(len(self.commands) - 1, self._highlighted_index + 1)
-
 
 class DummyAgentZeroCLI(AgentZeroCLI):
     def __init__(self, *, config: CLIConfig | None = None) -> None:
@@ -298,7 +265,6 @@ def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
         "#model-switcher-bar": FakeModelSwitcherBar(),
         "#body-switcher": FakeBodySwitcher(),
         "#splash-view": FakeSplash(),
-        "#slash-menu": FakeSlashMenu(),
         DynamicFooter: FakeFooter(),
     }
 
@@ -321,17 +287,17 @@ def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
 
 def test_default_client_host_uses_splash_default() -> None:
     app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
-    assert app.client.base_url == _DEFAULT_HOST
+    assert app.client.base_url == DEFAULT_HOST
 
 
 def test_splash_host_panel_uses_default_host_as_placeholder() -> None:
     panel = SplashHostPanel()
 
-    panel.set_host(_DEFAULT_HOST)
+    panel.set_host(DEFAULT_HOST)
 
-    assert panel.host == _DEFAULT_HOST
+    assert panel.host == DEFAULT_HOST
     assert panel._host.value == ""
-    assert panel._host.placeholder == _DEFAULT_HOST
+    assert panel._host.placeholder == DEFAULT_HOST
 
 
 def test_splash_view_uses_shared_agent_zero_banner_widget() -> None:
@@ -398,7 +364,7 @@ async def test_splash_host_panel_blocks_invalid_url_submission() -> None:
 
     async with app.run_test(size=(100, 32)) as pilot:
         view = app.query_one(SplashView)
-        view.set_state(SplashState(stage="host", host=_DEFAULT_HOST))
+        view.set_state(SplashState(stage="host", host=DEFAULT_HOST))
         await pilot.pause(0.1)
 
         host_input = view.query_one("#splash-host-input", Input)
@@ -506,7 +472,7 @@ async def test_splash_host_stage_hides_redundant_header_copy() -> None:
                 stage="host",
                 message="Enter an Agent Zero WebUI URL and port.",
                 detail="",
-                host=_DEFAULT_HOST,
+                host=DEFAULT_HOST,
             )
         )
         await pilot.pause(0.1)
@@ -526,7 +492,6 @@ async def test_startup_without_host_shows_host_stage(
         "#model-switcher-bar": FakeModelSwitcherBar(),
         "#body-switcher": FakeBodySwitcher(),
         "#splash-view": FakeSplash(),
-        "#slash-menu": FakeSlashMenu(),
     }
     app.query_one = lambda selector, cls=None: widgets[selector]
 
@@ -534,7 +499,7 @@ async def test_startup_without_host_shows_host_stage(
 
     splash = widgets["#splash-view"]
     assert splash.state.stage == "host"
-    assert splash.state.host == _DEFAULT_HOST
+    assert splash.state.host == DEFAULT_HOST
     assert splash.focused is True
 
 
@@ -615,7 +580,6 @@ async def test_invalid_api_key_returns_to_login_stage(
         "#model-switcher-bar": FakeModelSwitcherBar(),
         "#body-switcher": FakeBodySwitcher(),
         "#splash-view": FakeSplash(),
-        "#slash-menu": FakeSlashMenu(),
     }
     app.query_one = lambda selector, cls=None: widgets[selector]
 
@@ -991,7 +955,7 @@ async def test_help_is_generated_from_registry_on_welcome(dummy_app: DummyAgentZ
     }
     dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
 
-    await dummy_app._cmd_help()
+    dummy_app._surface_help()
 
     splash = dummy_app._test_widgets["#splash-view"]
     assert "Available commands:" in splash.state.detail

@@ -251,34 +251,6 @@ async def test_login_returns_none_on_401() -> None:
 # ------------------------------------------------------------------
 
 
-async def test_check_health_posts_capabilities() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
-    client.http = Mock()
-    client.http.post = AsyncMock(return_value=FakeResponse(status_code=200))
-
-    result = await client.check_health()
-
-    assert result is True
-    client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/capabilities",
-        json={},
-        headers={},
-    )
-
-
-async def test_check_health_returns_false_on_connect_error() -> None:
-    client = A0Client("http://localhost:5080")
-    request = httpx.Request(
-        "POST", "http://localhost:5080/api/plugins/a0_connector/v1/capabilities"
-    )
-    client.http = Mock()
-    client.http.post = AsyncMock(side_effect=httpx.ConnectError("boom", request=request))
-
-    result = await client.check_health()
-
-    assert result is False
-
-
 async def test_verify_api_key_uses_x_api_key_header() -> None:
     client = A0Client("http://localhost:5080", api_key="dev-a0-connector")
     client.http = Mock()
@@ -624,26 +596,6 @@ async def test_nudge_agent_normalizes_http_failure() -> None:
     }
 
 
-async def test_list_projects_returns_project_array() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
-    client.http = Mock()
-    client.http.post = AsyncMock(
-        return_value=FakeResponse(
-            status_code=200,
-            json_data={"projects": [{"name": "agent-zero"}]},
-        )
-    )
-
-    result = await client.list_projects()
-
-    assert result == [{"name": "agent-zero"}]
-    client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/projects_list",
-        json={},
-        headers={"X-API-KEY": "secret"},
-    )
-
-
 async def test_get_model_presets_returns_preset_list() -> None:
     client = A0Client("http://localhost:5080", api_key="secret")
     client.http = Mock()
@@ -660,43 +612,6 @@ async def test_get_model_presets_returns_preset_list() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/model_presets",
         json={},
-        headers={"X-API-KEY": "secret"},
-    )
-
-
-async def test_set_model_presets_posts_full_preset_payload() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
-    client.http = Mock()
-    client.http.post = AsyncMock(
-        return_value=FakeResponse(
-            status_code=200,
-            json_data={"ok": True, "presets": [{"name": "CLI Custom"}]},
-        )
-    )
-
-    result = await client.set_model_presets(
-        [
-            {
-                "name": "CLI Custom",
-                "chat": {"provider": "openai", "name": "gpt-4o"},
-                "utility": {"provider": "openai", "name": "gpt-4o-mini"},
-            }
-        ]
-    )
-
-    assert result == [{"name": "CLI Custom"}]
-    client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/model_presets",
-        json={
-            "action": "set",
-            "presets": [
-                {
-                    "name": "CLI Custom",
-                    "chat": {"provider": "openai", "name": "gpt-4o"},
-                    "utility": {"provider": "openai", "name": "gpt-4o-mini"},
-                }
-            ],
-        },
         headers={"X-API-KEY": "secret"},
     )
 

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from agent_zero_cli.screens.chat_list import ChatListScreen
-from agent_zero_cli.screens.settings_modal import SettingsResult, SettingsScreen
 from agent_zero_cli.widgets import ChatInput
 from agent_zero_cli.widgets.chat_log import ChatLog
 
@@ -103,34 +102,6 @@ async def cmd_new(app: AgentZeroCLI) -> None:
         actions=app._welcome_actions(),
     )
     app._focus_message_input()
-
-
-async def cmd_settings(app: AgentZeroCLI) -> None:
-    try:
-        payload = await app.client.get_settings()
-    except Exception as exc:
-        app._show_notice(f"Failed to load settings: {exc}", error=True)
-        return
-
-    settings = payload.get("settings", payload)
-    result = await app.push_screen_wait(SettingsScreen(settings))
-    if result is None:
-        return
-
-    if not isinstance(result, SettingsResult):
-        raise TypeError(f"Unexpected settings result: {result!r}")
-
-    if not result.changed_keys:
-        return
-
-    try:
-        await app.client.set_settings(result.settings)
-    except Exception as exc:
-        app._show_notice(f"Failed to save settings: {exc}", error=True)
-        return
-
-    await app._refresh_workspace_from_settings()
-    app._show_notice("Settings saved.")
 
 
 async def cmd_pause(app: AgentZeroCLI) -> None:

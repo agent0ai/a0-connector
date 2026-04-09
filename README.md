@@ -1,71 +1,82 @@
 # a0-connector
 
-Terminal chat client + server plugin for [Agent Zero](https://github.com/frdel/agent-zero). Chat with a running Agent Zero instance from the command line, with streaming output and remote file editing.
+Terminal connector for [Agent Zero](https://github.com/frdel/agent-zero). It pairs a Textual CLI with a small Agent Zero plugin so you can chat from the terminal, follow streaming events, and use the connector-specific remote editing/runtime features.
 
-| Component | Location | What it does |
-|-----------|----------|--------------|
-| **CLI** (`agent-zero-cli`) | `src/agent_zero_cli/` | Textual TUI — connects over HTTP + Socket.IO |
-| **Plugin** (`a0_connector`) | `plugin/a0_connector/` (source), deployed to `usr/plugins/a0_connector` in Agent Zero | Runs inside Agent Zero — exposes HTTP routes + WebSocket handler |
+## Components
 
-> The CLI and plugin are **installed separately**. If `agentzero` returns 404 on `/api/plugins/a0_connector/v1/capabilities`, the plugin isn't loaded — see [Troubleshooting](docs/README.md#troubleshooting).
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| CLI (`agent-zero-cli`) | `src/agent_zero_cli/` | Terminal UI and transport client |
+| Plugin (`a0_connector`) | `plugin/a0_connector/` | Agent Zero plugin that exposes the connector HTTP + Socket.IO surface |
 
-## Quick start
+Both parts are required for a live session.
 
-**1. Run an Agent Zero instance with the connector plugin loaded**
+## Install
 
-Local development instance (recommended for plugin work):
+### 1. Install the CLI
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+### 2. Install the plugin into Agent Zero
+
+Copy `plugin/a0_connector/` into the Agent Zero runtime at `usr/plugins/a0_connector`, then restart Agent Zero.
 
 ```bash
 cd /path/to/agent-zero
 mkdir -p usr/plugins/a0_connector
 rsync -a /path/to/a0-connector/plugin/a0_connector/ usr/plugins/a0_connector/
-A0_SET_mcp_server_token=your-token python run_ui.py --host=127.0.0.1 --port=50001
 ```
 
-Docker runtime is also supported if your container maps `/a0/usr/plugins`.
+For Docker-based Agent Zero setups, mount the same plugin directory at `/a0/usr/plugins/a0_connector` inside the container.
 
-**2. Install and run the CLI** (in this repo):
+### 3. Connect
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-pip install "aiohttp>=3.11.0"   # transitive runtime dep — must be installed explicitly
 export AGENT_ZERO_HOST=http://127.0.0.1:50001
 agentzero
 ```
 
-**3. If you edit backend/plugin code**, keep `plugin/a0_connector/` and the runtime `usr/plugins/a0_connector` copy in sync:
+If `AGENT_ZERO_HOST` or `AGENT_ZERO_API_KEY` are unset, the CLI will prompt for what it needs. You can optionally save them to `~/.agent-zero/.env` from inside the app.
 
-```bash
-rsync -a --delete plugin/a0_connector/ /path/to/agent-zero/usr/plugins/a0_connector/
-```
+## Usage
 
-If `AGENT_ZERO_HOST` or `AGENT_ZERO_API_KEY` are unset, the TUI prompts interactively. Values stay in memory unless you opt in to saving them to `~/.agent-zero/.env`. See [Configuration](docs/configuration.md).
+### Key bindings
 
-## How it works
+| Key | Action |
+|-----|--------|
+| `Ctrl+C` | Quit |
+| `F5` | Clear chat |
+| `F6` | List chats |
+| `F7` | Nudge agent |
+| `F8` | Pause / resume |
+| `Ctrl+P` | Command palette |
 
-1. CLI calls `POST /api/plugins/a0_connector/v1/capabilities` (public)
-2. If needed, exchanges credentials via `connector_login` for an API key
-3. Opens Socket.IO on namespace `/ws` with `auth: {api_key, handlers: ["plugins/a0_connector/ws_connector"]}`
-4. Creates a chat, subscribes to its event stream, and starts streaming
+### Slash commands
 
-Protected HTTP routes use the `X-API-KEY` header (value = Agent Zero's `mcp_server_token`). All WebSocket events are `connector_`-prefixed. Full protocol details: [Architecture](docs/architecture.md).
+| Command | Action |
+|---------|--------|
+| `/help` | Show available commands |
+| `/chats` | Switch chats |
+| `/new` | Start a new chat |
+| `/compact` | Compact the current chat when supported |
+| `/presets` | Pick a model preset |
+| `/models` | Override runtime models for the current chat |
+| `/keys` | Toggle key help |
+| `/quit` | Exit |
 
-## Key bindings & commands
+## Troubleshooting
 
-| Key | Action | | Command | Action |
-|-----|--------|-|---------|--------|
-| Ctrl+C | Quit | | `/help` | Show help |
-| F5 | Clear chat | | `/chats` | List chats |
-| F6 | List chats | | `/new` | New chat |
-| F7 | Nudge agent | | `/exit` | Quit |
-| F8 | Pause agent | | | |
+- `404` on `/api/plugins/a0_connector/v1/capabilities`: the plugin is not loaded in the target Agent Zero runtime.
+- Browser UI works but `agentzero` does not: the core web UI can run without the connector plugin; the CLI cannot.
+- WebSocket connection rejected: ensure proxies forward both `/socket.io` and `/api/plugins/` unchanged, and that `AGENT_ZERO_HOST` matches the real host seen by Agent Zero.
 
-## Development
+## Docs
 
-```bash
-pip install -e . && pip install aiohttp>=3.11.0 pytest
-pytest tests/ -v
-```
-
-Full details: [Development](docs/development.md)
+- [Configuration](docs/configuration.md)
+- [Architecture](docs/architecture.md)
+- [Development](docs/development.md)
+- [TUI frontend](docs/tui-frontend.md)

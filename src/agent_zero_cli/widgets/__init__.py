@@ -6,7 +6,6 @@ from agent_zero_cli.widgets.model_switcher_bar import (
     ModelPreset,
     ModelSwitcherBar,
 )
-from agent_zero_cli.widgets.slash_menu import SlashCommand, SlashCommandMenu
 from agent_zero_cli.widgets.splash_view import (
     SplashAction,
     SplashLoginPanel,
@@ -23,8 +22,6 @@ __all__ = [
     "ModelIdentity",
     "ModelPreset",
     "ModelSwitcherBar",
-    "SlashCommand",
-    "SlashCommandMenu",
     "SplashAction",
     "SplashLoginPanel",
     "SplashState",

@@ -48,13 +48,6 @@ class ChatInput(TextArea):
         value: str
         input: ChatInput
 
-    @dataclass
-    class SlashNavigation(Message):
-        """Posted when slash-menu keyboard navigation is requested."""
-
-        key: str
-        input: ChatInput
-
     DEFAULT_CSS = """
     ChatInput {
         height: auto;
@@ -83,7 +76,6 @@ class ChatInput(TextArea):
         self._activity_active = False
         self._activity_label = ""
         self._activity_detail = ""
-        self._slash_menu_active = False
 
     def on_mount(self) -> None:
         self.register_theme(_INPUT_THEME)
@@ -104,18 +96,9 @@ class ChatInput(TextArea):
     # ---- key handling ------------------------------------------------
 
     async def _on_key(self, event: events.Key) -> None:
-        if self._slash_menu_active and event.key in {"up", "down", "tab", "escape"}:
-            event.prevent_default()
-            event.stop()
-            self.post_message(self.SlashNavigation(key=event.key, input=self))
-            return
-
         if event.key == "enter":
             event.prevent_default()
             event.stop()
-            if self._slash_menu_active:
-                self.post_message(self.SlashNavigation(key="enter", input=self))
-                return
             text = self.text
             self.clear()
             self._update_height()
@@ -164,9 +147,6 @@ class ChatInput(TextArea):
         self._activity_detail = ""
         self.remove_class(_PROGRESS_CLASS)
         self.placeholder = self._base_placeholder
-
-    def set_slash_menu_active(self, active: bool) -> None:
-        self._slash_menu_active = active
 
     # ---- dynamic height ---------------------------------------------
 

@@ -9,6 +9,8 @@ from textual.containers import Horizontal
 from textual.message import Message
 from textual.widgets import Button, Select
 
+from agent_zero_cli.model_config import format_model_label
+
 _CUSTOM_OVERRIDE_VALUE = "__custom_override__"
 _PRESET_MIN_VISIBLE_WIDTH = 82
 
@@ -76,9 +78,13 @@ def _model_text(model: object) -> str:
     identity = _coerce_model_identity(model)
     if identity.label:
         return identity.label
-    if identity.provider and identity.name:
-        return f"{identity.provider}/{identity.name}"
-    return identity.name or identity.provider or "—"
+    return format_model_label(
+        {
+            "provider": identity.provider,
+            "name": identity.name,
+        },
+        default="—",
+    )
 
 
 def _preset_options(

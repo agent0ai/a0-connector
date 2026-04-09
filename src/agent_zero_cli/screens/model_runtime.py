@@ -15,7 +15,7 @@ _DEFAULT_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Openai", "openai"),
 )
 
-from agent_zero_cli.model_config import coerce_model_config
+from agent_zero_cli.model_config import coerce_model_config, format_model_label, format_provider_label
 
 
 @dataclass(frozen=True)
@@ -31,20 +31,7 @@ def _clean_text(value: Any) -> str:
 
 
 def _model_label(value: Mapping[str, Any] | None) -> str:
-    payload = coerce_model_config(value)
-    provider = payload.get("provider", "")
-    name = payload.get("name", "")
-    if provider and name:
-        return f"{provider}/{name}"
-    if name:
-        return name
-    if provider:
-        return provider
-    return "Connector default"
-
-
-def _provider_label(provider: str) -> str:
-    return provider.replace("_", " ").title()
+    return format_model_label(value)
 
 
 class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
@@ -110,7 +97,7 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
             if value in seen:
                 return
             seen.add(value)
-            label_text = _clean_text(label) or _provider_label(value)
+            label_text = _clean_text(label) or format_provider_label(value)
             ordered.append((label_text, value))
 
         for entry in options or ():

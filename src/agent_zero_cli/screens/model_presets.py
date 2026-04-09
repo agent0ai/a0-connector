@@ -10,6 +10,8 @@ from textual.containers import Center, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Select, Static
 
+from agent_zero_cli.model_config import format_model_label
+
 
 @dataclass(frozen=True)
 class ModelPresetChoice:
@@ -26,17 +28,7 @@ class ModelPresetsResult:
 
 
 def _model_label(value: object) -> str:
-    if isinstance(value, Mapping):
-        label = str(value.get("label") or "").strip()
-        provider = str(value.get("provider") or "").strip()
-        name = str(value.get("name") or "").strip()
-        if label:
-            return label
-        if provider and name:
-            return f"{provider}/{name}"
-        return name or provider or "Connector default"
-    text = str(value or "").strip()
-    return text or "Connector default"
+    return format_model_label(value)
 
 
 def _coerce_model_preset(value: object) -> ModelPresetChoice:
