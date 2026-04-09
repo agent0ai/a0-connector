@@ -19,16 +19,6 @@ def _show_preset_for_width(width: int) -> bool:
     return max(width, 0) >= _PRESET_MIN_VISIBLE_WIDTH
 
 
-def _should_stack_summary_rows(width: int, *, main_model_text: str, utility_model_text: str) -> bool:
-    """Return True when main + utility don't fit on one row."""
-    available = max(width, 0)
-    if available == 0:
-        return True
-    main_segment = len("Main ") + len(main_model_text)
-    utility_segment = len("Utility ") + len(utility_model_text)
-    return (main_segment + 3 + utility_segment) > available
-
-
 @dataclass(frozen=True)
 class ModelIdentity:
     provider: str = ""
@@ -172,8 +162,7 @@ class ModelSwitcherBar(Horizontal):
         try:
             self._main_model_text = "—"
             self._utility_model_text = "—"
-            self._main_button.label = "Main —"
-            self._utility_button.label = "Utility —"
+            self._sync_summary_labels()
             self._preset.set_options([("Default LLM", "")])
             self._preset.value = ""
         finally:
@@ -197,8 +186,7 @@ class ModelSwitcherBar(Horizontal):
         self.display = True
         self._main_model_text = _model_text(main_model)
         self._utility_model_text = _model_text(utility_model)
-        self._main_button.label = f"Main {self._main_model_text}"
-        self._utility_button.label = f"Utility {self._utility_model_text}"
+        self._sync_summary_labels()
 
         options = _preset_options(presets, override_label=override_label)
         option_values = {value for _, value in options}
@@ -221,22 +209,18 @@ class ModelSwitcherBar(Horizontal):
         self._sync_layout()
         self._update_select_state()
 
+    def _sync_summary_labels(self) -> None:
+        self._main_button.label = f"Main {self._main_model_text}"
+        self._utility_button.label = f"Utility {self._utility_model_text}"
+        # Textual doesn't always re-measure auto-width buttons after a label swap
+        # until the next resize event, so force a layout refresh here.
+        self._main_button.refresh(layout=True)
+        self._utility_button.refresh(layout=True)
+        self._summary.refresh(layout=True)
+        self.refresh(layout=True)
+
     def _sync_layout(self) -> None:
         self._preset.display = _show_preset_for_width(self.size.width)
-        available_width = max(self.size.width, 0)
-        if self._preset.display:
-            # Preserve space for the selector so model labels can adapt cleanly.
-            available_width = max(available_width - 34, 0)
-
-        stack_rows = _should_stack_summary_rows(
-            available_width,
-            main_model_text=self._main_model_text,
-            utility_model_text=self._utility_model_text,
-        )
-        if stack_rows:
-            self._summary.add_class("stacked")
-        else:
-            self._summary.remove_class("stacked")
 
     def _update_select_state(self) -> None:
         self._preset.disabled = self._busy or not self._switch_allowed or self._option_count <= 1

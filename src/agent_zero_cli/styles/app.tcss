@@ -70,11 +70,6 @@ Screen {
     align: left middle;
 }
 
-#model-switcher-summary.stacked {
-    layout: vertical;
-    align: left top;
-}
-
 .model-switcher-chip {
     width: auto;
     min-width: 10;
@@ -86,6 +81,7 @@ Screen {
     background: transparent;
     border: none;
     color: #9aa7b4;
+    content-align: left middle;
     text-style: bold;
 }
 
@@ -93,11 +89,6 @@ Screen {
     background: #172533;
     color: #d9e2ec;
     border: none;
-}
-
-#model-switcher-summary.stacked .model-switcher-chip {
-    margin-right: 0;
-    margin-bottom: 1;
 }
 
 #model-switcher-preset {
