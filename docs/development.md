@@ -12,23 +12,23 @@ a0-connector/
 
 ## Runtime setup options
 
-- Local Agent Zero checkout (recommended for plugin iteration): deploy to
-  `<agent-zero>/usr/plugins/a0_connector`.
-- Dockerized Agent Zero: deploy to the mapped container path
-  `/a0/usr/plugins/a0_connector`.
+- Local Agent Zero checkout: deploy to `<agent-zero>/usr/plugins/a0_connector`
+- Dockerized Agent Zero: deploy to `/a0/usr/plugins/a0_connector`
 
 ## Setup
 
-### Plugin runtime (in Agent Zero checkout)
+### Plugin runtime
 
 ```bash
 cd /path/to/agent-zero
 mkdir -p usr/plugins/a0_connector
 rsync -a /path/to/a0-connector/plugin/a0_connector/ usr/plugins/a0_connector/
-A0_SET_mcp_server_token=your-token python run_ui.py --host=127.0.0.1 --port=50001
+python run_ui.py --host=127.0.0.1 --port=50001
 ```
 
-### CLI (in this repo)
+To test a protected instance, start Agent Zero with `AUTH_LOGIN` and `AUTH_PASSWORD` configured in its runtime `.env`.
+
+### CLI
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -41,8 +41,7 @@ When you are developing against a Docker-detected local Agent Zero instance, pre
 
 ### Mirroring backend changes back into this repo
 
-If you edit an external runtime copy of the plugin, mirror changes back into
-this repo copy before testing/committing:
+If you edit an external runtime copy of the plugin, mirror changes back into this repo copy before testing or committing:
 
 ```bash
 rsync -a --delete /path/to/agent-zero/usr/plugins/a0_connector/ plugin/a0_connector/
@@ -73,19 +72,19 @@ import usr.plugins.a0_connector.api.v1.base as connector_base
 
 `test_plugin_backend.py` stubs the `usr.plugins` namespace to validate these imports work.
 
-### Lazy imports (deadlock prevention)
+### Lazy imports
 
-**Never** import `initialize`, `agent`, or `helpers.projects` at module level in plugin code. Agent Zero preloads plugin modules before initialization completes — top-level imports of these modules will deadlock.
+Never import `initialize`, `agent`, or `helpers.projects` at module level in plugin code.
 
 ```python
-# BAD — module-level import
+# BAD
 from agent import AgentContext
 
-# GOOD — inside handler method
+# GOOD
 async def process(self, ...):
     from agent import AgentContext
 ```
 
 ### aiohttp compatibility shim
 
-`client.py` patches `aiohttp.ClientWSTimeout` if missing (older aiohttp versions). This keeps the Engine.IO WebSocket transport working across versions.
+`client.py` patches `aiohttp.ClientWSTimeout` if missing. This keeps the Engine.IO WebSocket transport working across supported aiohttp versions.

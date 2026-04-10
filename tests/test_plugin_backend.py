@@ -47,6 +47,7 @@ def _install_fake_helpers(
     dotenv_mod = types.ModuleType("helpers.dotenv")
     extension_mod = types.ModuleType("helpers.extension")
     tool_mod = types.ModuleType("helpers.tool")
+    login_mod = types.ModuleType("helpers.login")
     ws_mod = types.ModuleType("helpers.ws")
     ws_manager_mod = types.ModuleType("helpers.ws_manager")
     settings_mod = types.ModuleType("helpers.settings")
@@ -313,12 +314,14 @@ def _install_fake_helpers(
     dotenv_mod.KEY_AUTH_LOGIN = "AUTH_LOGIN"
     dotenv_mod.KEY_AUTH_PASSWORD = "AUTH_PASSWORD"
     dotenv_mod.get_dotenv_value = lambda key, default=None: _dotenv_store.get(key) or default
+    login_mod.is_login_required = lambda: bool(_dotenv_store.get("AUTH_LOGIN"))
 
     sys.modules["helpers"] = helpers_pkg
     sys.modules["helpers.api"] = api_mod
     sys.modules["helpers.print_style"] = print_style_mod
     sys.modules["helpers.extension"] = extension_mod
     sys.modules["helpers.tool"] = tool_mod
+    sys.modules["helpers.login"] = login_mod
     sys.modules["helpers.ws"] = ws_mod
     sys.modules["helpers.ws_manager"] = ws_manager_mod
     sys.modules["helpers.security"] = security_mod
@@ -690,10 +693,11 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     payload = asyncio.run(handler.process({}, object()))
 
     assert payload["protocol"] == "a0-connector.v1"
-    assert payload["auth"] == ["api_key", "login"]
+    assert payload["auth"] == ["session"]
+    assert payload["auth_required"] is False
     assert payload["websocket_namespace"] == "/ws"
     assert payload["websocket_handlers"] == ["plugins/a0_connector/ws_connector"]
-    assert "connector_login" in payload["features"]
+    assert "connector_login" not in payload["features"]
     assert "token_status" in payload["features"]
     assert "remote_file_tree" in payload["features"]
     assert "code_execution_remote" in payload["features"]
@@ -710,6 +714,17 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert "model_switcher" in payload["features"]
     assert "compact_chat" in payload["features"]
     assert capabilities_mod.Capabilities.requires_api_key() is False
+
+
+def test_capabilities_report_auth_required_when_core_login_is_enabled() -> None:
+    _install_fake_helpers(auth_login="admin", auth_password="secret")
+
+    _reload("usr.plugins.a0_connector.api.v1.base")
+    capabilities_mod = _reload("usr.plugins.a0_connector.api.v1.capabilities")
+
+    payload = asyncio.run(capabilities_mod.Capabilities(None, None).process({}, object()))
+
+    assert payload["auth_required"] is True
 
 
 def test_capabilities_hide_unsupported_optional_features(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -734,7 +749,7 @@ def test_capabilities_hide_unsupported_optional_features(monkeypatch: pytest.Mon
     assert "settings_get" in payload["features"]
 
 
-def test_protected_handlers_require_api_key_only() -> None:
+def test_protected_handlers_require_session_auth_without_api_keys() -> None:
     _install_fake_helpers()
 
     _reload("usr.plugins.a0_connector.api.v1.base")
@@ -784,9 +799,19 @@ def test_protected_handlers_require_api_key_only() -> None:
     for module_name, class_name in zip(modules, class_names, strict=True):
         module = _reload(module_name)
         handler_cls = getattr(module, class_name)
-        assert handler_cls.requires_auth() is False
+        assert handler_cls.requires_auth() is True
         assert handler_cls.requires_csrf() is False
-        assert handler_cls.requires_api_key() is True
+        assert handler_cls.requires_api_key() is False
+
+
+def test_ws_connector_requires_session_auth_without_api_key() -> None:
+    _install_fake_helpers()
+
+    ws_connector_mod = _reload("usr.plugins.a0_connector.api.ws_connector")
+
+    assert ws_connector_mod.WsConnector.requires_auth() is True
+    assert ws_connector_mod.WsConnector.requires_csrf() is False
+    assert ws_connector_mod.WsConnector.requires_api_key() is False
 
 
 def test_projects_action_list_returns_colors_and_current_project_from_context_output_data() -> None:
@@ -1109,57 +1134,6 @@ def test_ws_resolve_context_without_context_id_uses_shared_creation_helper() -> 
     assert context_id == context.id
     assert context.get_data("project") == "atlas"
     assert context.get_data("chat_model_override") == {"preset_name": "fast"}
-
-
-def test_connector_login_returns_token_when_no_auth_configured() -> None:
-    _install_fake_helpers(auth_login="", mcp_server_token="open-token")
-
-    _reload("usr.plugins.a0_connector.api.v1.base")
-    login_mod = _reload("usr.plugins.a0_connector.api.v1.connector_login")
-    handler = login_mod.ConnectorLogin(None, None)
-
-    result = asyncio.run(handler.process({}, object()))
-
-    assert result == {"api_key": "open-token"}
-    assert login_mod.ConnectorLogin.requires_api_key() is False
-    assert login_mod.ConnectorLogin.requires_auth() is False
-
-
-def test_connector_login_returns_token_on_valid_credentials() -> None:
-    _install_fake_helpers(
-        auth_login="admin",
-        auth_password="secret",
-        mcp_server_token="protected-token",
-    )
-
-    _reload("usr.plugins.a0_connector.api.v1.base")
-    login_mod = _reload("usr.plugins.a0_connector.api.v1.connector_login")
-    handler = login_mod.ConnectorLogin(None, None)
-
-    result = asyncio.run(
-        handler.process({"username": "admin", "password": "secret"}, object())
-    )
-
-    assert result == {"api_key": "protected-token"}
-
-
-def test_connector_login_rejects_invalid_credentials() -> None:
-    _install_fake_helpers(
-        auth_login="admin",
-        auth_password="secret",
-        mcp_server_token="protected-token",
-    )
-
-    _reload("usr.plugins.a0_connector.api.v1.base")
-    login_mod = _reload("usr.plugins.a0_connector.api.v1.connector_login")
-    handler = login_mod.ConnectorLogin(None, None)
-
-    result = asyncio.run(
-        handler.process({"username": "admin", "password": "wrong"}, object())
-    )
-
-    assert hasattr(result, "status")
-    assert result.status == 401
 
 
 def test_settings_round_trip_uses_connector_helpers() -> None:

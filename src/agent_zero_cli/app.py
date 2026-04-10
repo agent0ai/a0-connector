@@ -102,7 +102,7 @@ class AgentZeroCLI(App):
         self.theme = "a0-dark"
         self.config = config or load_config()
         base_url = self.config.instance_url or DEFAULT_HOST
-        self.client = A0Client(base_url, api_key=self.config.api_key)
+        self.client = A0Client(base_url)
         self.capabilities: dict[str, Any] = {}
         self.connector_features: set[str] = set()
         self.project_list: list[dict[str, str]] = []
@@ -241,7 +241,7 @@ class AgentZeroCLI(App):
             CommandSpec(
                 "/disconnect",
                 (),
-                "Disconnect and return to the current host sign-in screen.",
+                "Disconnect and return to the current host connection flow.",
                 lambda app: availability.require_connection(app),
                 lambda app: chat_commands.cmd_disconnect(app),
             ),
@@ -459,7 +459,7 @@ class AgentZeroCLI(App):
         host: str | None = None,
         username: str | None = None,
         password: str | None = None,
-        save_credentials: bool | None = None,
+        remember_host: bool | None = None,
         login_error: str | None = None,
         actions: tuple[SplashAction, ...] | None = None,
     ) -> None:
@@ -471,7 +471,7 @@ class AgentZeroCLI(App):
             host=host,
             username=username,
             password=password,
-            save_credentials=save_credentials,
+            remember_host=remember_host,
             login_error=login_error,
             actions=actions,
         )
@@ -694,14 +694,14 @@ class AgentZeroCLI(App):
         *,
         username: str = "",
         password: str = "",
-        save_credentials_flag: bool = False,
+        remember_host_flag: bool = False,
     ) -> None:
         await connection.begin_connection(
             self,
             host,
             username=username,
             password=password,
-            save_credentials_flag=save_credentials_flag,
+            remember_host_flag=remember_host_flag,
         )
 
     def _handle_context_snapshot(self, data: dict[str, Any]) -> None:
@@ -844,7 +844,7 @@ class AgentZeroCLI(App):
                 event.host or self._splash_host(),
                 username=event.username,
                 password=event.password,
-                save_credentials_flag=event.save_credentials,
+                remember_host_flag=event.remember_host,
             ),
             exclusive=True,
             name="splash-submit",
@@ -857,7 +857,13 @@ class AgentZeroCLI(App):
             host=event.host,
             selected_host_url=event.selected_host_url,
             manual_entry_expanded=event.manual_entry_expanded,
+            remember_host=event.remember_host,
         )
+
+    def on_splash_view_remember_host_changed(self, event: SplashView.RememberHostChanged) -> None:
+        if self._splash_state.remember_host == event.remember_host:
+            return
+        self._set_splash_state(remember_host=event.remember_host)
 
     def on_splash_view_action_requested(self, event: SplashView.ActionRequested) -> None:
         if event.action == "back":
@@ -868,7 +874,7 @@ class AgentZeroCLI(App):
                 host=self._splash_host(),
                 username=self._splash_state.username,
                 password="",
-                save_credentials=self._splash_state.save_credentials,
+                remember_host=self._splash_state.remember_host,
                 login_error="",
             )
             self._start_instance_discovery(auto_connect_single=False)
@@ -890,7 +896,7 @@ class AgentZeroCLI(App):
                     self._splash_host(),
                     username=self._splash_state.username,
                     password=self._splash_state.password,
-                    save_credentials_flag=self._splash_state.save_credentials,
+                    remember_host_flag=self._splash_state.remember_host,
                 ),
                 exclusive=True,
                 name="splash-retry",

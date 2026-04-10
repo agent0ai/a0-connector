@@ -9,7 +9,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
-from textual.widgets import Button, Checkbox, Input, ListItem, ListView, LoadingIndicator, Static
+from textual.widgets import Button, Checkbox, Input, LoadingIndicator, Static
 
 from agent_zero_cli.client import DEFAULT_HOST
 from agent_zero_cli.instance_discovery import DiscoveredInstance, DiscoveryStatus
@@ -102,7 +102,7 @@ class SplashState:
     host: str = ""
     username: str = ""
     password: str = ""
-    save_credentials: bool = False
+    remember_host: bool = False
     login_error: str = ""
     actions: Sequence[SplashAction] = ()
     discovered_instances: Sequence[DiscoveredInstance] = ()
@@ -114,7 +114,19 @@ class SplashState:
     remote_workspace: str = ""
 
 
-class SplashHostRow(ListItem):
+class SplashHostRow(Vertical):
+    can_focus = True
+
+    class Highlighted(Message):
+        def __init__(self, *, host: str) -> None:
+            super().__init__()
+            self.host = host
+
+    class Selected(Message):
+        def __init__(self, *, host: str) -> None:
+            super().__init__()
+            self.host = host
+
     def __init__(self, instance: DiscoveredInstance, *, item_id: str) -> None:
         super().__init__(id=item_id, classes="splash-host-row")
         self._instance = instance
@@ -124,6 +136,27 @@ class SplashHostRow(ListItem):
             yield Static(self._instance.url, classes="splash-host-row-title")
             detail = self._instance.status_text or self._instance.name or "Docker"
             yield Static(detail, classes="splash-host-row-meta")
+
+    @property
+    def host(self) -> str:
+        return self._instance.url
+
+    def on_focus(self) -> None:
+        self.add_class("-highlight")
+        self.post_message(self.Highlighted(host=self.host))
+
+    def on_blur(self) -> None:
+        self.remove_class("-highlight")
+
+    def on_click(self, event: events.Click) -> None:
+        self.add_class("-highlight")
+        self.post_message(self.Selected(host=self.host))
+        event.stop()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key in {"enter", "space"}:
+            self.post_message(self.Selected(host=self.host))
+            event.stop()
 
 
 class SplashHostPanel(Vertical):
@@ -150,6 +183,7 @@ class SplashHostPanel(Vertical):
         self._host = Input(placeholder=DEFAULT_HOST, id="splash-host-input")
         self._validation = Static("", id="splash-host-validation")
         self._button = Button("Connect", id="splash-host-submit", variant="primary")
+        self._remember_host = Checkbox("Remember this host", id="splash-host-remember")
         self._refresh = Button("Refresh list", id="splash-host-refresh")
         self._manual_toggle = Button("Enter URL manually", id="splash-host-toggle-manual")
         self._manual_title = Static("Manual URL", classes="splash-panel-title", id="splash-manual-title")
@@ -171,6 +205,7 @@ class SplashHostPanel(Vertical):
         yield self._status
         yield self._instances_mount
         yield self._button
+        yield self._remember_host
         with Horizontal(id="splash-host-secondary-actions"):
             yield self._refresh
             yield self._manual_toggle
@@ -191,6 +226,7 @@ class SplashHostPanel(Vertical):
 
     def _sync_ui(self) -> None:
         self.set_host(self._state.host)
+        self._remember_host.value = bool(self._state.remember_host)
         self._sync_discovery_status()
         self._rebuild_instance_list()
         self._manual_section.display = bool(self._state.manual_entry_expanded)
@@ -245,17 +281,17 @@ class SplashHostPanel(Vertical):
             child.remove()
         self._instances_mount.display = bool(self._state.discovered_instances)
         if not self._state.discovered_instances:
+            self._instances_mount.styles.height = 0
             return
 
-        rows: list[ListItem] = []
-        initial_index = 0
         for index, instance in enumerate(self._state.discovered_instances):
             item_id = f"splash-host-instance-{index}"
-            rows.append(SplashHostRow(instance, item_id=item_id))
+            row = SplashHostRow(instance, item_id=item_id)
             self._item_urls[item_id] = instance.url
             if instance.url == self._state.selected_host_url:
-                initial_index = index
-        self._instances_mount.mount(ListView(*rows, id="splash-host-list", initial_index=initial_index))
+                row.add_class("-highlight")
+            self._instances_mount.mount(row)
+        self._instances_mount.styles.height = min(max(len(self._state.discovered_instances) * 3 + 2, 5), 10)
 
     def _sync_connect_button(self) -> None:
         if self._state.manual_entry_expanded:
@@ -281,7 +317,13 @@ class SplashHostPanel(Vertical):
             self._host.focus()
             return
         try:
-            self.query_one("#splash-host-list", ListView).focus()
+            selected_host = self.selected_host_url
+            if selected_host:
+                for item_id, host in self._item_urls.items():
+                    if host == selected_host:
+                        self.query_one(f"#{item_id}", SplashHostRow).focus()
+                        return
+            self.query_one(SplashHostRow).focus()
         except Exception:
             self._manual_toggle.focus()
 
@@ -298,13 +340,7 @@ class SplashHostPanel(Vertical):
         selected = self._state.selected_host_url.strip()
         if selected:
             return selected
-        try:
-            highlighted = self.query_one("#splash-host-list", ListView).highlighted_child
-        except Exception:
-            return ""
-        if highlighted is None:
-            return ""
-        return self._item_urls.get(highlighted.id or "", "")
+        return next(iter(self._item_urls.values()), "")
 
     @property
     def connect_host(self) -> str:
@@ -315,9 +351,13 @@ class SplashHostPanel(Vertical):
     def selected_host_for_item(self, item_id: str) -> str:
         return self._item_urls.get(item_id, "")
 
+    @property
+    def remember_host(self) -> bool:
+        return bool(self._remember_host.value)
+
 
 class SplashLoginPanel(Vertical):
-    """Username/password panel shown when the connector advertises login auth."""
+    """Username/password panel shown when the selected host requires web login."""
 
     DEFAULT_CSS = """
     SplashLoginPanel {
@@ -334,14 +374,14 @@ class SplashLoginPanel(Vertical):
         self._login_error = ""
         self._title = Static("Ready to login", classes="splash-panel-title")
         self._copy = Static(
-            "Authenticate with the connector endpoint below.",
+            "Sign in to the Agent Zero instance below.",
             classes="splash-panel-copy",
         )
         self._target_summary = Static("", id="splash-login-target-summary")
         self._target_url = Static("", id="splash-login-target-url")
         self._username = Input(placeholder="Username", id="splash-login-username")
         self._password = Input(placeholder="Password", password=True, id="splash-login-password")
-        self._save_credentials = Checkbox("Save credentials", id="splash-save-credentials")
+        self._remember_host = Checkbox("Remember this host", id="splash-login-remember")
         self._back_button = Button("Change URL", id="splash-login-back")
         self._button = Button("Login", id="splash-login-submit", variant="primary")
 
@@ -354,16 +394,16 @@ class SplashLoginPanel(Vertical):
             yield self._back_button
         yield self._username
         yield self._password
-        yield self._save_credentials
+        yield self._remember_host
         yield self._button
 
     def on_mount(self) -> None:
         self._render_target_context()
 
-    def set_credentials(self, username: str = "", password: str = "", *, save: bool = False) -> None:
+    def set_credentials(self, username: str = "", password: str = "", *, remember_host: bool = False) -> None:
         self._username.value = username
         self._password.value = password
-        self._save_credentials.value = save
+        self._remember_host.value = remember_host
 
     def _safe_focus(self, widget: Input) -> None:
         try:
@@ -422,7 +462,7 @@ class SplashLoginPanel(Vertical):
             )
 
         copy_text = (
-            "Input the credentials used in your Agent Zero WebUI (Settings > External Services)."
+            "Use the same username and password you use in the Agent Zero Web UI."
             if self._target_detected_label
             else "Login with the Agent Zero endpoint below."
         )
@@ -469,8 +509,8 @@ class SplashLoginPanel(Vertical):
         return self._password.value
 
     @property
-    def save_credentials(self) -> bool:
-        return bool(self._save_credentials.value)
+    def remember_host(self) -> bool:
+        return bool(self._remember_host.value)
 
 
 class SplashStatusPanel(Vertical):
@@ -613,13 +653,13 @@ class SplashView(VerticalScroll):
     """
 
     class SubmitRequested(Message):
-        def __init__(self, *, stage: SplashStage, host: str, username: str, password: str, save_credentials: bool) -> None:
+        def __init__(self, *, stage: SplashStage, host: str, username: str, password: str, remember_host: bool) -> None:
             super().__init__()
             self.stage = stage
             self.host = host
             self.username = username
             self.password = password
-            self.save_credentials = save_credentials
+            self.remember_host = remember_host
 
     class ActionRequested(Message):
         def __init__(self, action: str) -> None:
@@ -627,11 +667,17 @@ class SplashView(VerticalScroll):
             self.action = action
 
     class HostStateChanged(Message):
-        def __init__(self, *, host: str, selected_host_url: str, manual_entry_expanded: bool) -> None:
+        def __init__(self, *, host: str, selected_host_url: str, manual_entry_expanded: bool, remember_host: bool) -> None:
             super().__init__()
             self.host = host
             self.selected_host_url = selected_host_url
             self.manual_entry_expanded = manual_entry_expanded
+            self.remember_host = remember_host
+
+    class RememberHostChanged(Message):
+        def __init__(self, *, remember_host: bool) -> None:
+            super().__init__()
+            self.remember_host = remember_host
 
     def __init__(self) -> None:
         super().__init__(id="splash-view")
@@ -708,7 +754,7 @@ class SplashView(VerticalScroll):
         self._login_panel.set_credentials(
             self._state.username,
             self._state.password,
-            save=self._state.save_credentials,
+            remember_host=self._state.remember_host,
         )
         discovered_instance = next(
             (instance for instance in self._state.discovered_instances if instance.url == self._state.host),
@@ -748,7 +794,7 @@ class SplashView(VerticalScroll):
         host: str = "",
         username: str = "",
         password: str = "",
-        save_credentials: bool = False,
+        remember_host: bool = False,
         login_error: str = "",
         actions: Sequence[SplashAction] | None = None,
     ) -> None:
@@ -760,7 +806,7 @@ class SplashView(VerticalScroll):
                 host=host,
                 username=username,
                 password=password,
-                save_credentials=save_credentials,
+                remember_host=remember_host,
                 login_error=login_error,
                 actions=actions or (self._default_actions() if stage == "ready" else ()),
                 discovered_instances=self._state.discovered_instances,
@@ -851,24 +897,35 @@ class SplashView(VerticalScroll):
                 return
             self._login_panel.clear_error()
 
-    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        if event.list_view.id != "splash-host-list":
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        checkbox_id = event.checkbox.id or ""
+        if checkbox_id == "splash-host-remember":
+            self._sync_host_state(remember_host=bool(event.value))
             return
-        self._sync_host_state(selected_host_url=self._host_panel.selected_host_for_item(event.item.id or ""))
+        if checkbox_id == "splash-login-remember":
+            remember_host = bool(event.value)
+            if remember_host == self._state.remember_host:
+                return
+            self._state = replace(self._state, remember_host=remember_host)
+            self.post_message(self.RememberHostChanged(remember_host=remember_host))
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.list_view.id != "splash-host-list":
+    def on_splash_host_row_highlighted(self, event: SplashHostRow.Highlighted) -> None:
+        if self._state.stage != "host":
             return
-        host = self._host_panel.selected_host_for_item(event.item.id or "")
+        self._sync_host_state(selected_host_url=event.host)
+
+    def on_splash_host_row_selected(self, event: SplashHostRow.Selected) -> None:
+        host = event.host.strip()
         if not host:
             return
+        self._sync_host_state(selected_host_url=host)
         self.post_message(
             self.SubmitRequested(
                 stage="host",
                 host=host,
                 username="",
                 password="",
-                save_credentials=False,
+                remember_host=self._host_panel.remember_host,
             )
         )
 
@@ -904,7 +961,7 @@ class SplashView(VerticalScroll):
                 host=self._login_panel.target_host,
                 username=username,
                 password=password,
-                save_credentials=self._login_panel.save_credentials,
+                remember_host=self._login_panel.remember_host,
             )
         )
 
@@ -924,20 +981,26 @@ class SplashView(VerticalScroll):
                 host=self._host_panel.connect_host,
                 username="",
                 password="",
-                save_credentials=False,
+                remember_host=self._host_panel.remember_host,
             )
         )
 
     def _request_back_to_host(self) -> None:
         self.post_message(self.ActionRequested("back"))
 
-    def _sync_host_state(self, *, selected_host_url: str | None = None) -> None:
+    def _sync_host_state(
+        self,
+        *,
+        selected_host_url: str | None = None,
+        remember_host: bool | None = None,
+    ) -> None:
         if self._suppress_host_state_events or self._state.stage != "host":
             return
 
         next_selected_host = selected_host_url
         if next_selected_host is None:
             next_selected_host = self._host_panel.selected_host_url
+        next_remember_host = self._host_panel.remember_host if remember_host is None else remember_host
         next_host = self._host_panel.host
         if not self._state.manual_entry_expanded and next_selected_host:
             next_host = next_selected_host
@@ -946,6 +1009,7 @@ class SplashView(VerticalScroll):
             self._state,
             host=next_host,
             selected_host_url=next_selected_host or "",
+            remember_host=next_remember_host,
         )
         if next_state == self._state:
             return
@@ -955,5 +1019,6 @@ class SplashView(VerticalScroll):
                 host=self._state.host,
                 selected_host_url=self._state.selected_host_url,
                 manual_entry_expanded=self._state.manual_entry_expanded,
+                remember_host=self._state.remember_host,
             )
         )

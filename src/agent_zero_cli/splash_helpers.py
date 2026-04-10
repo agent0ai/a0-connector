@@ -82,7 +82,7 @@ def set_splash_stage(
     host: str | None = None,
     username: str | None = None,
     password: str | None = None,
-    save_credentials: bool | None = None,
+    remember_host: bool | None = None,
     login_error: str | None = None,
     actions: tuple[SplashAction, ...] | None = None,
 ) -> None:
@@ -97,8 +97,8 @@ def set_splash_stage(
         updates["username"] = username
     if password is not None:
         updates["password"] = password
-    if save_credentials is not None:
-        updates["save_credentials"] = save_credentials
+    if remember_host is not None:
+        updates["remember_host"] = remember_host
     if login_error is not None:
         updates["login_error"] = login_error
     if actions is not None:

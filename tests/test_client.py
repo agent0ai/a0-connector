@@ -13,7 +13,7 @@ from agent_zero_cli.client import (
     A0WebSocketConnectionError,
     _ensure_aiohttp_ws_timeout_compat,
 )
-from agent_zero_cli.config import CLIConfig, load_config, save_env, _ENV_FILE
+from agent_zero_cli.config import CLIConfig, _ENV_FILE, delete_env, load_config, save_env
 
 
 class FakeResponse:
@@ -111,7 +111,7 @@ def test_load_config_reads_from_env_vars(monkeypatch: pytest.MonkeyPatch) -> Non
     config = load_config()
 
     assert config.instance_url == "http://10.0.0.1:9000"
-    assert config.api_key == "env-secret"
+    assert not hasattr(config, "api_key")
 
 
 def test_load_config_falls_back_to_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,7 +132,7 @@ def test_load_config_falls_back_to_dotenv(tmp_path: Path, monkeypatch: pytest.Mo
     config = load_config()
 
     assert config.instance_url == "http://192.168.1.5:5080"
-    assert config.api_key == "dotenv-key"
+    assert not hasattr(config, "api_key")
 
 
 def test_load_config_env_overrides_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,7 +153,7 @@ def test_load_config_env_overrides_dotenv(tmp_path: Path, monkeypatch: pytest.Mo
     config = load_config()
 
     assert config.instance_url == "http://env-host:1234"
-    assert config.api_key == "env-key"
+    assert not hasattr(config, "api_key")
 
 
 def test_load_config_returns_empty_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -166,7 +166,7 @@ def test_load_config_returns_empty_defaults(monkeypatch: pytest.MonkeyPatch, tmp
     config = load_config()
 
     assert config.instance_url == ""
-    assert config.api_key == ""
+    assert not hasattr(config, "api_key")
 
 
 def test_save_env_creates_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -201,26 +201,46 @@ def test_save_env_updates_existing_key(tmp_path: Path, monkeypatch: pytest.Monke
     assert "http://old:5080" not in content
 
 
+def test_delete_env_removes_existing_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_dir = tmp_path / ".agent-zero"
+    env_dir.mkdir()
+    env_file = env_dir / ".env"
+    env_file.write_text(
+        "AGENT_ZERO_HOST=http://saved:5080\nAGENT_ZERO_API_KEY=stale-key\n",
+        encoding="utf-8",
+    )
+
+    import agent_zero_cli.config as config_mod
+    monkeypatch.setattr(config_mod, "_ENV_DIR", env_dir)
+    monkeypatch.setattr(config_mod, "_ENV_FILE", env_file)
+
+    delete_env("AGENT_ZERO_API_KEY")
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "AGENT_ZERO_HOST=http://saved:5080" in content
+    assert "AGENT_ZERO_API_KEY=stale-key" not in content
+
+
 # ------------------------------------------------------------------
 # Client: login
 # ------------------------------------------------------------------
 
 
-async def test_login_returns_api_key_on_success() -> None:
+async def test_login_posts_form_data_and_returns_true_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = A0Client("http://localhost:5080")
     client.http = Mock()
-    client.http.post = AsyncMock(
-        return_value=FakeResponse(status_code=200, json_data={"api_key": "abc123"})
-    )
+    client.http.post = AsyncMock(return_value=FakeResponse(status_code=302))
+    monkeypatch.setattr(client, "verify_session", AsyncMock(return_value=True))
 
     result = await client.login("admin", "password")
 
-    assert result == "abc123"
-    assert client.api_key == "abc123"
+    assert result is True
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/connector_login",
-        json={"username": "admin", "password": "password"},
-        headers={},
+        "http://localhost:5080/login",
+        data={"username": "admin", "password": "password"},
+        follow_redirects=False,
     )
 
 
@@ -233,17 +253,17 @@ async def test_fetch_capabilities_raises_plugin_missing_on_404() -> None:
         await client.fetch_capabilities()
 
 
-async def test_login_returns_none_on_401() -> None:
+async def test_login_returns_false_when_session_verification_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = A0Client("http://localhost:5080")
     client.http = Mock()
-    client.http.post = AsyncMock(
-        return_value=FakeResponse(status_code=401)
-    )
+    client.http.post = AsyncMock(return_value=FakeResponse(status_code=200))
+    monkeypatch.setattr(client, "verify_session", AsyncMock(return_value=False))
 
     result = await client.login("admin", "wrong")
 
-    assert result is None
-    assert client.api_key == ""
+    assert result is False
 
 
 # ------------------------------------------------------------------
@@ -251,34 +271,48 @@ async def test_login_returns_none_on_401() -> None:
 # ------------------------------------------------------------------
 
 
-async def test_verify_api_key_uses_x_api_key_header() -> None:
-    client = A0Client("http://localhost:5080", api_key="dev-a0-connector")
+async def test_verify_session_returns_true_on_200() -> None:
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(return_value=FakeResponse(status_code=200))
 
-    result = await client.verify_api_key()
+    result = await client.verify_session()
 
     assert result is True
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/chats_list",
         json={},
-        headers={"X-API-KEY": "dev-a0-connector"},
     )
 
 
-async def test_verify_api_key_returns_false_on_401() -> None:
-    client = A0Client("http://localhost:5080", api_key="bad-key")
+async def test_verify_session_returns_false_on_401() -> None:
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(return_value=FakeResponse(status_code=401))
 
-    result = await client.verify_api_key()
+    result = await client.verify_session()
 
     assert result is False
 
 
-async def test_connect_websocket_uses_ws_auth_payload() -> None:
-    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+async def test_verify_session_returns_false_on_login_redirect() -> None:
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=302, headers={"location": "/login"})
+    )
+
+    result = await client.verify_session()
+
+    assert result is False
+
+
+async def test_connect_websocket_forwards_session_cookie_and_handler_auth() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.http.cookies.set("session_test", "cookie-value", domain="127.0.0.1", path="/")
+    client.http = Mock()
+    client.http.cookies = httpx.Cookies()
+    client.http.cookies.set("session_test", "cookie-value", domain="127.0.0.1", path="/")
     client.http.get = AsyncMock(
         return_value=FakeResponse(
             status_code=200,
@@ -294,6 +328,7 @@ async def test_connect_websocket_uses_ws_auth_payload() -> None:
         "http://127.0.0.1:50001/socket.io",
         params={"transport": "polling", "EIO": "4"},
         headers={
+            "Cookie": "session_test=cookie-value",
             "Origin": "http://127.0.0.1:50001",
             "Referer": "http://127.0.0.1:50001/",
         },
@@ -305,11 +340,11 @@ async def test_connect_websocket_uses_ws_auth_payload() -> None:
             {
                 "namespaces": ["/ws"],
                 "headers": {
+                    "Cookie": "session_test=cookie-value",
                     "Origin": "http://127.0.0.1:50001",
                     "Referer": "http://127.0.0.1:50001/",
                 },
                 "auth": {
-                    "api_key": "dev-a0-connector",
                     "handlers": ["plugins/a0_connector/ws_connector"],
                 },
             },
@@ -318,7 +353,7 @@ async def test_connect_websocket_uses_ws_auth_payload() -> None:
 
 
 async def test_connect_websocket_surfaces_connect_error_payload() -> None:
-    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client = A0Client("http://127.0.0.1:50001")
     client.http = Mock()
     client.http.get = AsyncMock(
         return_value=FakeResponse(
@@ -346,7 +381,7 @@ async def test_connect_websocket_surfaces_connect_error_payload() -> None:
 
 
 async def test_connect_websocket_reports_missing_socketio_forwarding() -> None:
-    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client = A0Client("http://127.0.0.1:50001")
     client.http = Mock()
     client.http.get = AsyncMock(return_value=FakeResponse(status_code=404, text="Not Found"))
     fake_sio = FakeSocketIOClient()
@@ -363,7 +398,7 @@ async def test_connect_websocket_reports_missing_socketio_forwarding() -> None:
 
 
 async def test_connect_websocket_reports_blank_namespace_rejection_after_probe() -> None:
-    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client = A0Client("http://127.0.0.1:50001")
     client.http = Mock()
     client.http.get = AsyncMock(
         return_value=FakeResponse(
@@ -402,7 +437,7 @@ async def test_connect_websocket_patches_old_aiohttp_before_connect(
 ) -> None:
     monkeypatch.delattr(aiohttp, "ClientWSTimeout", raising=False)
 
-    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client = A0Client("http://127.0.0.1:50001")
     client.http = Mock()
     client.http.get = AsyncMock(
         return_value=FakeResponse(
@@ -416,14 +451,11 @@ async def test_connect_websocket_patches_old_aiohttp_before_connect(
     await client.connect_websocket()
 
     assert aiohttp.ClientWSTimeout(ws_close=7.0) == 7.0
-    assert fake_sio.connect_calls[0][1]["auth"] == {
-        "api_key": "dev-a0-connector",
-        "handlers": ["plugins/a0_connector/ws_connector"],
-    }
+    assert fake_sio.connect_calls[0][1]["auth"] == {"handlers": ["plugins/a0_connector/ws_connector"]}
 
 
 async def test_send_message_uses_prefixed_ws_event() -> None:
-    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client = A0Client("http://127.0.0.1:50001")
     fake_sio = FakeSocketIOClient(
         call_response={
             "results": [
@@ -448,7 +480,7 @@ async def test_send_message_uses_prefixed_ws_event() -> None:
 
 
 async def test_create_chat_posts_current_context_when_provided() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=200, json_data={"context_id": "ctx-new"})
@@ -460,12 +492,11 @@ async def test_create_chat_posts_current_context_when_provided() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/chat_create",
         json={"current_context": "ctx-current"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_get_settings_posts_to_connector_endpoint() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -480,12 +511,11 @@ async def test_get_settings_posts_to_connector_endpoint() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/settings_get",
         json={},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_set_settings_posts_curated_payload() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -500,12 +530,11 @@ async def test_set_settings_posts_curated_payload() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/settings_set",
         json={"settings": {"agent_profile": "researcher"}},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_get_chat_uses_context_id_payload() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=200, json_data={"context_id": "ctx-1"})
@@ -517,12 +546,11 @@ async def test_get_chat_uses_context_id_payload() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/chat_get",
         json={"context_id": "ctx-1"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_get_projects_posts_list_action_with_context_id() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -541,12 +569,11 @@ async def test_get_projects_posts_list_action_with_context_id() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/projects",
         json={"action": "list", "context_id": "ctx-1"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_activate_project_posts_activate_action() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=200, json_data={"ok": True, "projects": []})
@@ -558,12 +585,11 @@ async def test_activate_project_posts_activate_action() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/projects",
         json={"action": "activate", "context_id": "ctx-1", "name": "atlas"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_deactivate_project_posts_deactivate_action() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=200, json_data={"ok": True, "projects": []})
@@ -575,12 +601,11 @@ async def test_deactivate_project_posts_deactivate_action() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/projects",
         json={"action": "deactivate", "context_id": "ctx-1"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_load_project_posts_load_action() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=200, json_data={"ok": True, "project": {"name": "atlas"}})
@@ -592,12 +617,11 @@ async def test_load_project_posts_load_action() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/projects",
         json={"action": "load", "name": "atlas"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_update_project_posts_full_project_payload() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -613,12 +637,11 @@ async def test_update_project_posts_full_project_payload() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/projects",
         json={"action": "update", "project": payload},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_pause_agent_posts_pause_request_and_normalizes_success() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -633,12 +656,11 @@ async def test_pause_agent_posts_pause_request_and_normalizes_success() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/pause",
         json={"context_id": "ctx-1", "paused": True},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_pause_agent_can_resume_with_paused_false() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -653,12 +675,11 @@ async def test_pause_agent_can_resume_with_paused_false() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/pause",
         json={"context_id": "ctx-1", "paused": False},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_pause_agent_normalizes_http_failure() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=409, text="Context is not currently running")
@@ -674,7 +695,7 @@ async def test_pause_agent_normalizes_http_failure() -> None:
 
 
 async def test_nudge_agent_posts_nudge_request_and_normalizes_success() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -689,12 +710,11 @@ async def test_nudge_agent_posts_nudge_request_and_normalizes_success() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/nudge",
         json={"context_id": "ctx-1"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_nudge_agent_normalizes_http_failure() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=404, text="Context not found")
@@ -710,7 +730,7 @@ async def test_nudge_agent_normalizes_http_failure() -> None:
 
 
 async def test_get_model_presets_returns_preset_list() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -725,12 +745,11 @@ async def test_get_model_presets_returns_preset_list() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/model_presets",
         json={},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_get_model_switcher_returns_current_models_and_override() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -752,12 +771,11 @@ async def test_get_model_switcher_returns_current_models_and_override() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
         json={"action": "get", "context_id": "ctx-1"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_set_model_preset_posts_set_preset_action() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=200, json_data={"ok": True, "override": {"preset_name": "Fast"}})
@@ -769,12 +787,11 @@ async def test_set_model_preset_posts_set_preset_action() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
         json={"context_id": "ctx-1", "action": "set_preset", "preset_name": "Fast"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_set_model_preset_can_clear_override() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=200, json_data={"ok": True, "override": None})
@@ -786,12 +803,11 @@ async def test_set_model_preset_can_clear_override() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
         json={"context_id": "ctx-1", "action": "clear"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_set_model_override_posts_direct_chat_override_payload() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -821,12 +837,11 @@ async def test_set_model_override_posts_direct_chat_override_payload() -> None:
             "main_model": {"provider": "openai", "name": "gpt-4o"},
             "utility_model": {"provider": "openai", "name": "gpt-4o-mini"},
         },
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_get_compaction_stats_normalizes_http_failure() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=409, text="Cannot compact while agent is running")
@@ -842,12 +857,11 @@ async def test_get_compaction_stats_normalizes_http_failure() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/compact_chat",
         json={"context_id": "ctx-1", "action": "stats"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_get_token_status_returns_connector_payload() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(
@@ -872,12 +886,11 @@ async def test_get_token_status_returns_connector_payload() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/token_status",
         json={"context_id": "ctx-1"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_get_token_status_normalizes_http_failure() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=404, text="Context not found")
@@ -893,12 +906,11 @@ async def test_get_token_status_normalizes_http_failure() -> None:
     client.http.post.assert_awaited_once_with(
         "http://localhost:5080/api/plugins/a0_connector/v1/token_status",
         json={"context_id": "ctx-1"},
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_compact_chat_posts_selected_model_and_preset() -> None:
-    client = A0Client("http://localhost:5080", api_key="secret")
+    client = A0Client("http://localhost:5080")
     client.http = Mock()
     client.http.post = AsyncMock(
         return_value=FakeResponse(status_code=200, json_data={"ok": True, "message": "Compaction started"})
@@ -919,12 +931,11 @@ async def test_compact_chat_posts_selected_model_and_preset() -> None:
             "use_chat_model": False,
             "preset_name": "Balanced",
         },
-        headers={"X-API-KEY": "secret"},
     )
 
 
 async def test_file_op_requests_are_returned_via_result_event() -> None:
-    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client = A0Client("http://127.0.0.1:50001")
     client.http = Mock()
     client.http.get = AsyncMock(
         return_value=FakeResponse(
@@ -974,7 +985,7 @@ async def test_file_op_requests_are_returned_via_result_event() -> None:
 
 
 async def test_exec_op_requests_are_returned_via_result_event() -> None:
-    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client = A0Client("http://127.0.0.1:50001")
     client.http = Mock()
     client.http.get = AsyncMock(
         return_value=FakeResponse(
@@ -1025,7 +1036,7 @@ async def test_exec_op_requests_are_returned_via_result_event() -> None:
 
 
 async def test_send_remote_tree_update_uses_prefixed_ws_event() -> None:
-    client = A0Client("http://127.0.0.1:50001", api_key="dev-a0-connector")
+    client = A0Client("http://127.0.0.1:50001")
     fake_sio = FakeSocketIOClient(
         call_response={
             "results": [

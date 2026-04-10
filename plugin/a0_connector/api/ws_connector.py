@@ -43,7 +43,7 @@ class WsConnector(WsHandler):
 
     @classmethod
     def requires_auth(cls) -> bool:
-        return False
+        return True
 
     @classmethod
     def requires_csrf(cls) -> bool:
@@ -51,7 +51,7 @@ class WsConnector(WsHandler):
 
     @classmethod
     def requires_api_key(cls) -> bool:
-        return True
+        return False
 
     async def on_connect(self, sid: str) -> None:
         register_sid(sid)

@@ -3,12 +3,12 @@
 ## Components
 
 ```
-┌─────────────────┐     HTTP POST + X-API-KEY     ┌────────────────────────────┐
-│  agentzero CLI  │ ────────────────────────────► │  Agent Zero                │
-│                 │                               │  + a0_connector plugin     │
-│                 │     Socket.IO /ws namespace   │                            │
-│                 │ ◄──────────────────────────── │                            │
-└─────────────────┘     connector_* events        └────────────────────────────┘
+┌─────────────────┐     HTTP POST /login + session cookie     ┌────────────────────────────┐
+│  agentzero CLI  │ ────────────────────────────────────────► │  Agent Zero                │
+│                 │                                           │  + a0_connector plugin     │
+│                 │     Socket.IO /ws namespace               │                            │
+│                 │ ◄──────────────────────────────────────── │                            │
+└─────────────────┘     connector_* events                   └────────────────────────────┘
 ```
 
 - **CLI** (`agent-zero-cli`): Textual TUI, installed via `pip install -e .`
@@ -16,19 +16,22 @@
 
 ## Startup flow
 
-1. **Discover** — `POST /api/plugins/a0_connector/v1/capabilities` (public, no key)
-2. **Authenticate** — resolve API key from env, dotenv, or `connector_login`
-3. **Verify** — test key against `chats_list`
-4. **Connect** — Socket.IO to `/ws` with `auth: {api_key, handlers: ["plugins/a0_connector/ws_connector"]}`
-5. **Chat** — create context, subscribe, stream events
+1. **Discover** — `POST /api/plugins/a0_connector/v1/capabilities`
+2. **Validate** — confirm protocol, `/ws`, handler activation, `auth == ["session"]`, and boolean `auth_required`
+3. **Authenticate if needed** — for protected instances, reuse any valid in-memory session or `POST /login` with form data
+4. **Verify** — probe `chats_list` to confirm the session is valid
+5. **Connect** — Socket.IO to `/ws` with `auth: {handlers: ["plugins/a0_connector/ws_connector"]}` and the current session cookie forwarded in headers
+6. **Chat** — create context, subscribe, stream events
+
+Open instances (`AUTH_LOGIN` unset) skip step 3 entirely.
 
 ## Protocol
 
-**Version:** `a0-connector.v1` — advertised by `capabilities`, validated by the CLI.
-
-**Transport:** Engine.IO at `/socket.io`, Socket.IO namespace `/ws`.
-
-**Auth:** `auth.api_key` (= `mcp_server_token`) + `auth.handlers` to activate the connector on the shared namespace.
+- **Version:** `a0-connector.v1`
+- **Transport:** Engine.IO at `/socket.io`, Socket.IO namespace `/ws`
+- **Auth contract:** `auth == ["session"]`
+- **Capability flag:** `auth_required: bool` derived from Agent Zero core web-auth state
+- **WebSocket activation:** `auth.handlers` contains `plugins/a0_connector/ws_connector`
 
 ## HTTP routes
 
@@ -36,18 +39,26 @@ All routes: `POST /api/plugins/a0_connector/v1/<endpoint>`
 
 | Endpoint | Auth | Purpose |
 |----------|------|---------|
-| `capabilities` | Public | Discovery — protocol, features, auth modes |
-| `connector_login` | Public | Exchange username/password for API key |
-| `chat_create` | API key | Create a new chat context |
-| `chats_list` | API key | List existing contexts |
-| `chat_get` | API key | Get a single context |
-| `chat_reset` | API key | Reset a context |
-| `chat_delete` | API key | Delete a context |
-| `pause` | API key | Pause the currently running context |
-| `nudge` | API key | Continue a stopped or paused context run |
-| `message_send` | API key | Send a message (with optional base64 attachments) |
-| `log_tail` | API key | Paginated context log entries |
-| `projects_list` | API key | List available projects |
+| `capabilities` | Public | Discovery — protocol, features, session contract, `auth_required` |
+| `chat_create` | Session | Create a new chat context |
+| `chats_list` | Session | List existing contexts |
+| `chat_get` | Session | Get a single context |
+| `chat_reset` | Session | Reset a context |
+| `chat_delete` | Session | Delete a context |
+| `pause` | Session | Pause the currently running context |
+| `nudge` | Session | Continue a stopped or paused context run |
+| `message_send` | Session | Send a message (with optional base64 attachments) |
+| `log_tail` | Session | Paginated context log entries |
+| `projects` | Session | Project list/activate/deactivate/load/update |
+| `settings_get` | Session | Optional runtime settings surface |
+| `settings_set` | Session | Optional runtime settings surface |
+| `agents_list` | Session | Optional agent-profile list |
+| `skills_list` | Session | Optional installed-skill list |
+| `skills_delete` | Session | Optional installed-skill delete |
+| `model_presets` | Session | Optional model preset surface |
+| `model_switcher` | Session | Optional per-chat model override surface |
+| `compact_chat` | Session | Optional chat compaction surface |
+| `token_status` | Session | Optional token usage surface |
 
 ## WebSocket events
 
@@ -76,7 +87,7 @@ All events are `connector_`-prefixed to avoid collisions on the shared `/ws` nam
 | `connector_file_op` | Request a local file operation (read/write/patch) |
 | `connector_exec_op` | Request a shell-backed frontend execution operation |
 
-### Event bridge
+## Event bridge
 
 `helpers/event_bridge.py` translates Agent Zero log entry types into normalized connector events:
 
@@ -95,7 +106,7 @@ All events are `connector_`-prefixed to avoid collisions on the shared `/ws` nam
 
 ## Remote file operations
 
-The `text_editor_remote` tool (agent-side) emits `connector_file_op` to the subscribed CLI client. The CLI performs the file read/write/patch on the **local machine** and returns `connector_file_op_result`. Operations are correlated by `op_id`.
+The `text_editor_remote` tool (agent-side) emits `connector_file_op` to the subscribed CLI client. The CLI performs the file read/write/patch on the local machine and returns `connector_file_op_result`. Operations are correlated by `op_id`.
 
 `ws_runtime.py` manages the in-memory state: SID-to-context subscriptions, pending file operation futures, pending execution futures, and latest remote tree snapshots per SID, all thread-safe via `threading.RLock`.
 
@@ -104,23 +115,16 @@ The `text_editor_remote` tool (agent-side) emits `connector_file_op` to the subs
 The `code_execution_remote` tool emits `connector_exec_op` to the subscribed CLI client, which runs a shell-backed persistent frontend session and returns `connector_exec_op_result`.
 
 Supported runtimes:
-- `terminal` (execute a shell command)
-- `python` (execute `ipython -c <code>` through the shell session)
-- `nodejs` (execute `node /exe/node_eval.js <code>` through the shell session)
-- `output` (poll more output for long-running jobs)
-- `reset` (reset and recreate a session)
-- `input` (temporary deprecated compatibility alias for sending one line into a running shell session)
-
-The CLI resolves the local Agent Zero Core tree in this order: `AGENT_ZERO_CORE_ROOT`, then `/home/eclypso/agentdocker`, then `/a0`. If no valid Core tree is available, chat and remote-file features still work, but remote exec returns a structured `{ok: false}` unavailable error and does not fall back to a connector-local implementation.
-
-Each operation is correlated by `op_id` and scoped to a numeric `session` id.
-
-## Prompt context injection
-
-The frontend publishes a bounded remote workspace tree via `connector_remote_tree_update` (immediate on connect + periodic changed-only updates).  
-During prompt build, extension `extensions/python/message_loop_prompts_after/_76_include_remote_file_structure.py` injects a `remote_file_structure` prompt block into `loop_data.extras_temporary` when a snapshot is fresh (<= 90 seconds old) for the active context subscription.
+- `terminal`
+- `python`
+- `nodejs`
+- `output`
+- `reset`
+- `input`
 
 ## Security
 
-- **API key** = Agent Zero's `mcp_server_token`. Gates all protected HTTP routes and validates `auth.api_key` on WebSocket connect.
-- **Login** is optional: `connector_login` compares against `AUTH_LOGIN`/`AUTH_PASSWORD` from Agent Zero's `.env`. If no UI auth is configured, returns `mcp_server_token` directly.
+- Public discovery stays unauthenticated.
+- Protected connector HTTP handlers use Agent Zero's existing web session check: `requires_auth=True`, `requires_csrf=False`, `requires_api_key=False`.
+- The connector `/ws` handler uses the same session policy.
+- Connector access is independent from MCP enablement. `mcp_server_enabled` does not affect CLI access.

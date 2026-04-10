@@ -10,7 +10,7 @@ from agent_zero_cli.client import (
     WS_HANDLER,
     WS_NAMESPACE,
 )
-from agent_zero_cli.config import save_env
+from agent_zero_cli.config import delete_env, save_env
 from agent_zero_cli.widgets import ChatInput
 from agent_zero_cli.widgets.chat_log import ChatLog
 
@@ -55,7 +55,9 @@ def validate_capabilities(
     protocol = capabilities.get("protocol")
     namespace = capabilities.get("websocket_namespace")
     handlers = capabilities.get("websocket_handlers") or []
-    auth_modes = capabilities.get("auth") or []
+    auth_modes = capabilities.get("auth")
+    auth_required = capabilities.get("auth_required")
+    features = capabilities.get("features") or []
 
     if protocol != protocol_version:
         raise ValueError(f"Unsupported connector protocol: expected {protocol_version}, got {protocol!r}")
@@ -63,8 +65,14 @@ def validate_capabilities(
         raise ValueError(f"Unsupported WebSocket namespace: expected {ws_namespace}, got {namespace!r}")
     if not isinstance(handlers, list) or ws_handler not in handlers:
         raise ValueError(f"Connector handler activation is missing {ws_handler!r} in capabilities")
-    if "api_key" not in auth_modes:
-        raise ValueError("Connector capabilities do not advertise API-key auth")
+    if auth_modes != ["session"]:
+        raise ValueError(f"Unsupported connector auth contract: expected ['session'], got {auth_modes!r}")
+    if not isinstance(auth_required, bool):
+        raise ValueError("Connector capabilities must include boolean auth_required")
+    if not isinstance(features, list):
+        raise ValueError("Connector capabilities features payload is invalid")
+    if "connector_login" in features:
+        raise ValueError("Connector capabilities still advertise the removed connector_login feature")
 
 
 async def begin_connection(
@@ -73,7 +81,7 @@ async def begin_connection(
     *,
     username: str = "",
     password: str = "",
-    save_credentials_flag: bool = False,
+    remember_host_flag: bool = False,
 ) -> None:
     app._stop_remote_tree_publisher()
     app._stop_token_refresh()
@@ -84,7 +92,6 @@ async def begin_connection(
     normalized_host = app._normalize_host(host)
     app.config.instance_url = normalized_host
     app.client.base_url = normalized_host.rstrip("/")
-    app.client.api_key = app.config.api_key
     app._sync_connection_status("connecting", normalized_host)
     app.query_one("#message-input", ChatInput).disabled = True
     app._slash_palette_query = None
@@ -95,7 +102,7 @@ async def begin_connection(
         host=normalized_host,
         username=username,
         password=password,
-        save_credentials=save_credentials_flag,
+        remember_host=remember_host_flag,
     )
 
     capabilities, plugin_missing, capability_error = await app._fetch_capabilities()
@@ -109,7 +116,7 @@ async def begin_connection(
             host=normalized_host,
             username=username,
             password="",
-            save_credentials=save_credentials_flag,
+            remember_host=remember_host_flag,
         )
         app._focus_splash_primary()
         return
@@ -125,26 +132,55 @@ async def begin_connection(
             host=normalized_host,
             username=username,
             password="",
-            save_credentials=save_credentials_flag,
+            remember_host=remember_host_flag,
         )
         return
 
     app.capabilities = capabilities
     app.connector_features = set(capabilities.get("features") or [])
-    auth_modes = capabilities.get("auth") or []
+    auth_required = bool(capabilities.get("auth_required"))
+    if auth_required:
+        try:
+            session_ok = await app.client.verify_session()
+        except Exception as exc:
+            app._sync_connection_status("disconnected", normalized_host)
+            app._set_splash_stage(
+                "error",
+                message="Session verification failed",
+                detail=str(exc),
+                host=normalized_host,
+                username=username,
+                password="",
+                remember_host=remember_host_flag,
+            )
+            return
 
-    if not app.config.api_key and "login" in auth_modes and username and password:
-        app._set_splash_stage(
-            "connecting",
-            message="Signing in...",
-            detail=normalized_host,
-            host=normalized_host,
-            username=username,
-            password=password,
-            save_credentials=save_credentials_flag,
-        )
-        api_key = await app.client.login(username, password)
-        if not api_key:
+        if not session_ok and username and password:
+            app._set_splash_stage(
+                "connecting",
+                message="Signing in...",
+                detail=normalized_host,
+                host=normalized_host,
+                username=username,
+                password=password,
+                remember_host=remember_host_flag,
+            )
+            try:
+                session_ok = await app.client.login(username, password)
+            except Exception as exc:
+                app._sync_connection_status("disconnected", normalized_host)
+                app._set_splash_stage(
+                    "error",
+                    message="Login failed",
+                    detail=str(exc),
+                    host=normalized_host,
+                    username=username,
+                    password="",
+                    remember_host=remember_host_flag,
+                )
+                return
+
+        if not session_ok:
             app._sync_connection_status("disconnected", normalized_host)
             app._set_splash_stage(
                 "login",
@@ -153,79 +189,10 @@ async def begin_connection(
                 host=normalized_host,
                 username=username,
                 password="",
-                save_credentials=save_credentials_flag,
-                login_error="Wrong username or password: retry.",
+                remember_host=remember_host_flag,
+                login_error="Wrong username or password: retry." if username or password else "",
             )
             app._focus_splash_primary()
-            return
-
-        app.config.api_key = api_key
-        app.client.api_key = api_key
-        if save_credentials_flag:
-            save_env("AGENT_ZERO_HOST", normalized_host)
-            save_env("AGENT_ZERO_API_KEY", api_key)
-
-    elif not app.config.api_key and "login" in auth_modes:
-        app._sync_connection_status("disconnected", normalized_host)
-        app._set_splash_stage(
-            "login",
-            message="",
-            detail="",
-            host=normalized_host,
-            username=username,
-            password="",
-            save_credentials=save_credentials_flag,
-            login_error="",
-        )
-        app._focus_splash_primary()
-        return
-
-    elif not app.config.api_key and "api_key" in auth_modes:
-        app._sync_connection_status("disconnected", normalized_host)
-        app._set_splash_stage(
-            "error",
-            message="No API key available",
-            detail="Set AGENT_ZERO_API_KEY or connect to a server that supports login auth.",
-            host=normalized_host,
-        )
-        return
-
-    if app.config.api_key:
-        try:
-            api_key_ok = await app.client.verify_api_key()
-        except Exception as exc:
-            app._sync_connection_status("disconnected", normalized_host)
-            app._set_splash_stage(
-                "error",
-                message="API-key verification failed",
-                detail=str(exc),
-                host=normalized_host,
-            )
-            return
-
-        if not api_key_ok:
-            app.config.api_key = ""
-            app.client.api_key = ""
-            app._sync_connection_status("disconnected", normalized_host)
-            if "login" in auth_modes:
-                app._set_splash_stage(
-                    "login",
-                    message="",
-                    detail="",
-                    host=normalized_host,
-                    username=username,
-                    password="",
-                    save_credentials=save_credentials_flag,
-                    login_error="Saved API key was rejected. Sign in again to refresh the connector token.",
-                )
-                app._focus_splash_primary()
-            else:
-                app._set_splash_stage(
-                    "error",
-                    message="API key rejected",
-                    detail="The connector rejected the configured API key.",
-                    host=normalized_host,
-                )
             return
 
     app.client.on_connect = lambda: app._run_on_ui(app._set_connected, True)
@@ -287,11 +254,18 @@ async def begin_connection(
     input_widget = app.query_one("#message-input", ChatInput)
     input_widget.disabled = False
     app._start_remote_tree_publisher()
+    if remember_host_flag:
+        save_env("AGENT_ZERO_HOST", normalized_host)
+        delete_env("AGENT_ZERO_API_KEY")
     app._set_splash_stage(
         "ready",
         message="Ready when you are.",
         detail=normalized_host,
         host=normalized_host,
+        username=username if auth_required else "",
+        password="",
+        remember_host=remember_host_flag,
+        login_error="",
         actions=app._welcome_actions(),
     )
     await app._refresh_model_switcher()
@@ -352,22 +326,25 @@ def set_connected(app: AgentZeroCLI, value: bool) -> None:
 
 async def disconnect_to_login(app: AgentZeroCLI) -> None:
     current_host = app.config.instance_url or app._splash_host()
-    login_supported = "login" in (app.capabilities.get("auth") or [])
+    auth_required = bool(app.capabilities.get("auth_required"))
     username = app._splash_state.username
-    save_credentials = app._splash_state.save_credentials
+    remember_host = app._splash_state.remember_host
 
     app.client.on_disconnect = None
     try:
         await app.client.disconnect(close_http=False)
     except Exception:
         pass
+    try:
+        await app.client.logout()
+    except Exception:
+        pass
+    app.client.clear_session()
 
-    app.config.api_key = ""
-    app.client.api_key = ""
     _reset_disconnected_state(app)
     app._sync_connection_status("disconnected", current_host)
 
-    if login_supported and current_host:
+    if auth_required and current_host:
         app._set_splash_stage(
             "login",
             message="",
@@ -375,7 +352,7 @@ async def disconnect_to_login(app: AgentZeroCLI) -> None:
             host=current_host,
             username=username,
             password="",
-            save_credentials=save_credentials,
+            remember_host=remember_host,
             login_error="",
         )
     else:
@@ -384,6 +361,10 @@ async def disconnect_to_login(app: AgentZeroCLI) -> None:
             message="",
             detail="",
             host=current_host or DEFAULT_HOST,
+            username="",
+            password="",
+            remember_host=remember_host,
+            login_error="",
         )
     app._focus_splash_primary()
 

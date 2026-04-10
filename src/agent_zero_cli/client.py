@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import aiohttp
 import httpx
@@ -63,10 +64,9 @@ def _ensure_aiohttp_ws_timeout_compat() -> None:
 class A0Client:
     """Client for communicating with a running Agent Zero instance."""
 
-    def __init__(self, base_url: str, *, api_key: str = "") -> None:
+    def __init__(self, base_url: str) -> None:
         _ensure_aiohttp_ws_timeout_compat()
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
         self.sio = socketio.AsyncClient()
         self.connected = False
@@ -85,26 +85,32 @@ class A0Client:
     def _api_url(self, endpoint: str) -> str:
         return f"{self.base_url}{_PLUGIN_API}/{endpoint}"
 
+    def _login_url(self) -> str:
+        return f"{self.base_url}/login"
+
+    def _logout_url(self) -> str:
+        return f"{self.base_url}/logout"
+
     def _socket_io_url(self) -> str:
         return f"{self.base_url}{_SOCKET_IO_PATH}"
 
-    def _api_headers(self, *, require_api_key: bool = False) -> dict[str, str]:
-        headers: dict[str, str] = {}
-        if require_api_key and self.api_key:
-            headers["X-API-KEY"] = self.api_key
-        return headers
-
     def _ws_auth(self) -> dict[str, Any]:
-        auth: dict[str, Any] = {"handlers": [WS_HANDLER]}
-        if self.api_key:
-            auth["api_key"] = self.api_key
-        return auth
+        return {"handlers": [WS_HANDLER]}
+
+    def _cookie_header(self, url: str) -> str:
+        request = httpx.Request("GET", url)
+        self.http.cookies.set_cookie_header(request)
+        return request.headers.get("Cookie", "")
 
     def _ws_headers(self) -> dict[str, str]:
-        return {
+        headers = {
             "Origin": self.base_url,
             "Referer": f"{self.base_url}/",
         }
+        cookie_header = self._cookie_header(self._socket_io_url())
+        if cookie_header:
+            headers["Cookie"] = cookie_header
+        return headers
 
     def _unwrap_envelope(self, payload: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(payload, dict):
@@ -134,6 +140,17 @@ class A0Client:
             return text
 
         return f"HTTP {response.status_code}"
+
+    def _is_login_redirect(self, response: httpx.Response) -> bool:
+        if response.status_code not in {301, 302, 303, 307, 308}:
+            return False
+
+        location = response.headers.get("location", "").strip()
+        if not location:
+            return False
+
+        path = urlparse(location).path or location
+        return path == "/login" or path.endswith("/login")
 
     def _raise_for_results(self, response: dict[str, Any] | None, event: str) -> dict[str, Any]:
         if not isinstance(response, dict):
@@ -252,13 +269,10 @@ class A0Client:
         self,
         endpoint: str,
         payload: dict[str, Any] | None = None,
-        *,
-        require_api_key: bool = True,
     ) -> httpx.Response:
         return await self.http.post(
             self._api_url(endpoint),
             json=payload or {},
-            headers=self._api_headers(require_api_key=require_api_key),
         )
 
     async def _call(self, event: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -402,7 +416,7 @@ class A0Client:
         }
 
     async def fetch_capabilities(self) -> dict[str, Any]:
-        response = await self._post("capabilities", require_api_key=False)
+        response = await self._post("capabilities")
         if response.status_code == 404:
             raise A0ConnectorPluginMissingError(
                 "HTTP 404 — the a0_connector plugin is not installed on this Agent Zero server.\n"
@@ -416,26 +430,22 @@ class A0Client:
         response.raise_for_status()
         return self._json(response)
 
-    async def login(self, username: str, password: str) -> str | None:
-        """Exchange username + password for an API key via the connector_login endpoint."""
-        response = await self._post(
-            "connector_login",
-            {"username": username, "password": password},
-            require_api_key=False,
+    async def login(self, username: str, password: str) -> bool:
+        """Create a browser-style authenticated session via the core /login form."""
+        response = await self.http.post(
+            self._login_url(),
+            data={"username": username, "password": password},
+            follow_redirects=False,
         )
-        if response.status_code == 200:
-            data = self._json(response)
-            api_key = data.get("api_key", "")
-            if api_key:
-                self.api_key = api_key
-                return api_key
-        return None
+        if response.status_code >= 500:
+            response.raise_for_status()
+        return await self.verify_session()
 
-    async def verify_api_key(self) -> bool:
+    async def verify_session(self) -> bool:
         response = await self._post("chats_list")
         if response.status_code == 200:
             return True
-        if response.status_code in {401, 403}:
+        if response.status_code in {401, 403} or self._is_login_redirect(response):
             return False
         response.raise_for_status()
         return False
@@ -737,3 +747,9 @@ class A0Client:
             await self.sio.disconnect()
         if close_http:
             await self.http.aclose()
+
+    async def logout(self) -> None:
+        await self.http.get(self._logout_url(), follow_redirects=False)
+
+    def clear_session(self) -> None:
+        self.http.cookies.clear()

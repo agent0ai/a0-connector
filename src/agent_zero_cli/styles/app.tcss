@@ -769,26 +769,22 @@ SplashStatusPanel {
 
 #splash-host-list-mount {
     width: 100%;
-    height: auto;
-}
-
-#splash-host-list {
-    width: 100%;
-    height: auto;
-    max-height: 10;
     border: round #2a3a4a;
     background: #111820;
     padding: 0 1;
+    overflow-y: auto;
 }
 
-#splash-host-list > ListItem {
+.splash-host-row {
+    width: 100%;
+    height: auto;
     margin: 0;
     padding: 0;
     border-bottom: solid #1d2a36;
 }
 
-#splash-host-list > ListItem.-highlight,
-#splash-host-list > ListItem.-hovered {
+.splash-host-row.-highlight,
+.splash-host-row:hover {
     background: #172533;
 }
 
@@ -815,11 +811,13 @@ SplashStatusPanel {
     text-overflow: ellipsis;
 }
 
-#splash-host-list > ListItem.-highlight .splash-host-row-title {
+.splash-host-row.-highlight .splash-host-row-title,
+.splash-host-row:focus .splash-host-row-title {
     color: #f5f7fa;
 }
 
-#splash-host-list > ListItem.-highlight .splash-host-row-meta {
+.splash-host-row.-highlight .splash-host-row-meta,
+.splash-host-row:focus .splash-host-row-meta {
     color: #9ecfff;
 }
 

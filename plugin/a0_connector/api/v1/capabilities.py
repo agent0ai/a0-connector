@@ -22,7 +22,6 @@ _BASE_FEATURES = [
     "text_editor_remote",
     "code_execution_remote",
     "remote_file_tree",
-    "connector_login",
     "token_status",
 ]
 
@@ -68,10 +67,13 @@ class Capabilities(connector_base.PublicConnectorApiHandler):
     """Return the connector discovery contract for current Agent Zero."""
 
     async def process(self, input: dict, request: Request) -> dict | Response:
+        from helpers import login
+
         return {
             "protocol": "a0-connector.v1",
             "version": "0.1.0",
-            "auth": ["api_key", "login"],
+            "auth": ["session"],
+            "auth_required": bool(login.is_login_required()),
             "transports": ["http", "websocket"],
             "streaming": True,
             "websocket_namespace": "/ws",

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from rich.padding import Padding
 from textual.app import App, ComposeResult
-from textual.widgets import Button, Input, ListView, LoadingIndicator, Static
+from textual.widgets import Button, Input, LoadingIndicator, Static
 
 from agent_zero_cli.app import AgentZeroCLI
 from agent_zero_cli.client import DEFAULT_HOST
@@ -31,6 +31,7 @@ from agent_zero_cli.widgets.chat_log import (
 from agent_zero_cli.widgets import ConnectionStatus, DynamicFooter, ProjectMenuItem, ProjectMenuPopover, SplashState
 from agent_zero_cli.widgets.splash_view import (
     SplashHostPanel,
+    SplashHostRow,
     SplashLoginPanel,
     SplashStatusPanel,
     SplashView,
@@ -303,7 +304,6 @@ class DummyAgentZeroCLI(AgentZeroCLI):
             config=config
             or CLIConfig(
                 instance_url="http://example.test",
-                api_key="",
             )
         )
         self.rendered_events: list[dict] = []
@@ -369,7 +369,7 @@ def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
 
 
 def test_default_client_host_uses_splash_default() -> None:
-    app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
+    app = AgentZeroCLI(config=CLIConfig(instance_url=""))
     assert app.client.base_url == DEFAULT_HOST
 
 
@@ -435,7 +435,7 @@ def test_splash_login_submit_uses_visible_login_target_host(
 
     monkeypatch.setattr(type(view._login_panel), "username", property(lambda self: "admin"))
     monkeypatch.setattr(type(view._login_panel), "password", property(lambda self: "secret"))
-    monkeypatch.setattr(type(view._login_panel), "save_credentials", property(lambda self: False))
+    monkeypatch.setattr(type(view._login_panel), "remember_host", property(lambda self: False))
     monkeypatch.setattr(type(view._login_panel), "target_host", property(lambda self: "http://localhost:32080"))
 
     view._submit_login()
@@ -482,10 +482,7 @@ async def test_splash_login_stage_surfaces_detected_instance_context() -> None:
         )
         await pilot.pause(0.1)
 
-        assert (
-            view._login_panel._copy.render().plain
-            == "Input the credentials used in your Agent Zero WebUI (Settings > External Services)."
-        )
+        assert view._login_panel._copy.render().plain == "Use the same username and password you use in the Agent Zero Web UI."
         summary = view.query_one("#splash-login-target-summary", Static)
         assert summary.display is True
         assert "Detected A0 instance" in summary.render().plain
@@ -622,7 +619,6 @@ async def test_project_menu_overlay_does_not_shift_connection_status(
     app = ProjectMenuOverlayHarnessApp(
         config=CLIConfig(
             instance_url="http://example.test",
-            api_key="",
         )
     )
 
@@ -764,7 +760,10 @@ async def test_splash_host_stage_renders_discovered_instances_as_selectable_rows
         )
         await pilot.pause(0.1)
 
-        assert len(view.query_one("#splash-host-list", ListView).children) == 2
+        host_rows = view.query(SplashHostRow)
+        assert len(host_rows) == 2
+        host_mount = view.query_one("#splash-host-list-mount")
+        assert host_mount.region.height >= 5
 
 
 async def test_splash_host_stage_hides_manual_section_when_instances_exist() -> None:
@@ -812,7 +811,7 @@ async def test_splash_host_stage_invalid_manual_url_keeps_connect_disabled() -> 
 async def test_startup_without_host_shows_host_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = DummyAgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
+    app = DummyAgentZeroCLI(config=CLIConfig(instance_url=""))
     widgets = {
         "#chat-log": FakeChatLog(),
         "#message-input": FakeInput(),
@@ -834,7 +833,7 @@ async def test_startup_without_host_shows_host_stage(
 async def test_startup_with_saved_host_stays_on_picker_and_skips_autoconnect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = DummyAgentZeroCLI(config=CLIConfig(instance_url="http://saved-host:50001", api_key=""))
+    app = DummyAgentZeroCLI(config=CLIConfig(instance_url="http://saved-host:50001"))
     widgets = {
         "#chat-log": FakeChatLog(),
         "#message-input": FakeInput(),
@@ -981,15 +980,17 @@ def test_splash_host_submit_uses_selected_discovered_url() -> None:
     assert posted[0].host == "http://localhost:50001"
 
 
-async def test_begin_connection_with_saved_login_persists_host_and_api_key(
+async def test_begin_connection_with_login_persists_only_host_and_cleans_stale_api_key(
     dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     saved: dict[str, str] = {}
+    deleted: list[str] = []
 
     async def fake_fetch_capabilities():
         return {
-            "auth": ["api_key", "login"],
+            "auth": ["session"],
+            "auth_required": True,
             "features": ["chat_create", "chats_list", "model_switcher", "projects"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
@@ -997,8 +998,8 @@ async def test_begin_connection_with_saved_login_persists_host_and_api_key(
         }, False, ""
 
     monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)
-    monkeypatch.setattr(dummy_app.client, "login", lambda u, p: _async_return("api-key-123"))
-    monkeypatch.setattr(dummy_app.client, "verify_api_key", lambda: _async_return(True))
+    monkeypatch.setattr(dummy_app.client, "verify_session", lambda: _async_return(False))
+    monkeypatch.setattr(dummy_app.client, "login", lambda u, p: _async_return(True))
     monkeypatch.setattr(dummy_app.client, "connect_websocket", lambda: _async_return(None))
     monkeypatch.setattr(dummy_app.client, "send_hello", lambda: _async_return(None))
     monkeypatch.setattr(dummy_app.client, "create_chat", lambda: _async_return("ctx-1"))
@@ -1028,18 +1029,14 @@ async def test_begin_connection_with_saved_login_persists_host_and_api_key(
             }
         ),
     )
-    monkeypatch.setattr(
-        "agent_zero_cli.app.save_env",
-        lambda key, value: saved.__setitem__(key, value),
-        raising=False,
-    )
     monkeypatch.setattr("agent_zero_cli.connection.save_env", lambda key, value: saved.__setitem__(key, value))
+    monkeypatch.setattr("agent_zero_cli.connection.delete_env", lambda key: deleted.append(key))
 
     await dummy_app._begin_connection(
         "http://example.test",
         username="admin",
         password="secret",
-        save_credentials_flag=True,
+        remember_host_flag=True,
     )
 
     splash = dummy_app._test_widgets["#splash-view"]
@@ -1059,16 +1056,49 @@ async def test_begin_connection_with_saved_login_persists_host_and_api_key(
         "color": "#123456",
     }
     assert dummy_app._test_widgets["#connection-status"].project_enabled is True
-    assert saved == {
-        "AGENT_ZERO_HOST": "http://example.test",
-        "AGENT_ZERO_API_KEY": "api-key-123",
-    }
+    assert saved == {"AGENT_ZERO_HOST": "http://example.test"}
+    assert deleted == ["AGENT_ZERO_API_KEY"]
 
-
-async def test_invalid_api_key_returns_to_login_stage(
+async def test_open_manual_host_connects_without_login(
+    dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = DummyAgentZeroCLI(config=CLIConfig(instance_url="http://example.test", api_key="bad-key"))
+    async def fake_fetch_capabilities():
+        return {
+            "auth": ["session"],
+            "auth_required": False,
+            "features": ["chat_create", "chats_list"],
+            "protocol": "a0-connector.v1",
+            "websocket_namespace": "/ws",
+            "websocket_handlers": ["plugins/a0_connector/ws_connector"],
+        }, False, ""
+
+    monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)
+    monkeypatch.setattr(dummy_app.client, "connect_websocket", lambda: _async_return(None))
+    monkeypatch.setattr(dummy_app.client, "send_hello", lambda: _async_return(None))
+    monkeypatch.setattr(dummy_app.client, "create_chat", lambda: _async_return("ctx-open"))
+    monkeypatch.setattr(dummy_app.client, "subscribe_context", lambda context_id, from_seq=0: _async_return(None))
+
+    async def fail_verify_session() -> bool:
+        raise AssertionError("verify_session should not run for open hosts")
+
+    async def fail_login(username: str, password: str) -> bool:
+        raise AssertionError("login should not run for open hosts")
+
+    monkeypatch.setattr(dummy_app.client, "verify_session", fail_verify_session)
+    monkeypatch.setattr(dummy_app.client, "login", fail_login)
+
+    await dummy_app._begin_connection("http://example.test")
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert splash.state.stage == "ready"
+    assert dummy_app.current_context == "ctx-open"
+
+
+async def test_protected_host_without_session_returns_to_login_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = DummyAgentZeroCLI(config=CLIConfig(instance_url="http://example.test"))
     widgets = {
         "#chat-log": FakeChatLog(),
         "#message-input": FakeInput(),
@@ -1081,7 +1111,8 @@ async def test_invalid_api_key_returns_to_login_stage(
 
     async def fake_fetch_capabilities():
         return {
-            "auth": ["api_key", "login"],
+            "auth": ["session"],
+            "auth_required": True,
             "features": ["chat_create", "chats_list"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
@@ -1089,14 +1120,12 @@ async def test_invalid_api_key_returns_to_login_stage(
         }, False, ""
 
     monkeypatch.setattr(app, "_fetch_capabilities", fake_fetch_capabilities)
-    monkeypatch.setattr(app.client, "verify_api_key", lambda: _async_return(False))
+    monkeypatch.setattr(app.client, "verify_session", lambda: _async_return(False))
 
     await app._begin_connection("http://example.test")
 
     splash = widgets["#splash-view"]
     assert splash.state.stage == "login"
-    assert app.config.api_key == ""
-    assert app.client.api_key == ""
 
 
 async def test_disconnect_clears_project_state(dummy_app: DummyAgentZeroCLI) -> None:
@@ -1127,7 +1156,8 @@ async def test_rejected_login_shows_inline_retry_copy(
 ) -> None:
     async def fake_fetch_capabilities():
         return {
-            "auth": ["api_key", "login"],
+            "auth": ["session"],
+            "auth_required": True,
             "features": ["chat_create", "chats_list"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
@@ -1135,13 +1165,14 @@ async def test_rejected_login_shows_inline_retry_copy(
         }, False, ""
 
     monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)
-    monkeypatch.setattr(dummy_app.client, "login", lambda u, p: _async_return(None))
+    monkeypatch.setattr(dummy_app.client, "verify_session", lambda: _async_return(False))
+    monkeypatch.setattr(dummy_app.client, "login", lambda u, p: _async_return(False))
 
     await dummy_app._begin_connection(
         "http://example.test",
         username="admin",
         password="wrong-password",
-        save_credentials_flag=False,
+        remember_host_flag=False,
     )
 
     splash = dummy_app._test_widgets["#splash-view"]
@@ -1155,7 +1186,7 @@ def test_splash_back_action_returns_to_host_stage(dummy_app: DummyAgentZeroCLI) 
         stage="login",
         host="http://example.test:5080",
         username="admin",
-        save_credentials=True,
+        remember_host=True,
         login_error="Wrong username or password: retry.",
     )
     dummy_app._start_instance_discovery = lambda *, auto_connect_single=False: refresh_calls.append(auto_connect_single)
@@ -1178,6 +1209,7 @@ def test_host_state_change_is_ignored_outside_host_stage(dummy_app: DummyAgentZe
             host=DEFAULT_HOST,
             selected_host_url="http://localhost:32081",
             manual_entry_expanded=False,
+            remember_host=False,
         )
     )
 
@@ -1766,14 +1798,14 @@ def test_binding_descriptions_reflect_remote_safety_mode(dummy_app: DummyAgentZe
         binding for binding in dummy_app.BINDINGS if binding.action == "toggle_remote_exec"
     )
 
-    assert dummy_app.get_binding_description(read_binding) == "Read&Write"
-    assert dummy_app.get_binding_description(exec_binding) == "exec on"
+    assert dummy_app.get_binding_description(read_binding) == "Read-only"
+    assert dummy_app.get_binding_description(exec_binding) == "Code-exec OFF"
 
     dummy_app._set_remote_file_write_enabled(True)
     dummy_app._set_remote_exec_enabled(True)
 
-    assert dummy_app.get_binding_description(read_binding) == "Read"
-    assert dummy_app.get_binding_description(exec_binding) == "exec off"
+    assert dummy_app.get_binding_description(read_binding) == "Read&Write"
+    assert dummy_app.get_binding_description(exec_binding) == "Code-exec ON"
 
 
 async def test_remote_safety_toggle_actions_update_local_permissions(
@@ -1797,7 +1829,7 @@ async def test_remote_safety_function_keys_toggle_permissions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(AgentZeroCLI, "_startup", lambda self: _async_return(None))
-    app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
+    app = AgentZeroCLI(config=CLIConfig(instance_url=""))
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -2489,31 +2521,36 @@ async def test_disconnect_returns_to_login_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     disconnect_calls: list[bool] = []
+    logout_calls: list[bool] = []
+    cleared_sessions: list[bool] = []
 
     async def fake_disconnect(*, close_http: bool = True) -> None:
         disconnect_calls.append(close_http)
 
+    async def fake_logout() -> None:
+        logout_calls.append(True)
+
     dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
     dummy_app.current_context_has_messages = True
-    dummy_app.capabilities = {"auth": ["api_key", "login"]}
+    dummy_app.capabilities = {"auth": ["session"], "auth_required": True}
     dummy_app.config.instance_url = "http://example.test"
-    dummy_app.config.api_key = "key-123"
-    dummy_app.client.api_key = "key-123"
-    dummy_app._set_splash_state(stage="ready", host="http://example.test", username="admin", save_credentials=True)
+    dummy_app._set_splash_state(stage="ready", host="http://example.test", username="admin", remember_host=True)
     monkeypatch.setattr(dummy_app.client, "disconnect", fake_disconnect)
+    monkeypatch.setattr(dummy_app.client, "logout", fake_logout)
+    monkeypatch.setattr(dummy_app.client, "clear_session", lambda: cleared_sessions.append(True))
 
     await dummy_app.action_disconnect()
 
     splash = dummy_app._test_widgets["#splash-view"]
     body = dummy_app._test_widgets["#body-switcher"]
     assert disconnect_calls == [False]
+    assert logout_calls == [True]
+    assert cleared_sessions == [True]
     assert splash.state.stage == "login"
     assert splash.state.host == "http://example.test"
     assert splash.state.username == "admin"
-    assert splash.state.save_credentials is True
-    assert dummy_app.config.api_key == ""
-    assert dummy_app.client.api_key == ""
+    assert splash.state.remember_host is True
     assert dummy_app.current_context is None
     assert dummy_app.connected is False
     assert body.current == "splash-view"

@@ -6,7 +6,7 @@ Terminal connector for [Agent Zero](https://github.com/frdel/agent-zero). It pai
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| CLI (`agent-zero-cli`) | `src/agent_zero_cli/` | Terminal UI and transport client |
+| CLI (`agent-zero-cli`) | `src/agent_zero_cli/` | Terminal UI and session-aware transport client |
 | Plugin (`a0_connector`) | `plugin/a0_connector/` | Agent Zero plugin that exposes the connector HTTP + Socket.IO surface |
 
 Both parts are required for a live session.
@@ -39,13 +39,15 @@ For Docker-based Agent Zero setups, mount the same plugin directory at `/a0/usr/
 agentzero
 ```
 
-On every launch the CLI opens a startup picker first. It checks Docker for local Agent Zero containers, lists any detected WebUI endpoints as friendly URLs such as `http://localhost:50001`, and lets you connect explicitly with Enter or the `Connect` button.
+On every launch the CLI opens the host picker first. It checks Docker for local Agent Zero containers, lists any detected WebUI endpoints as friendly URLs such as `http://localhost:50001`, and lets you connect explicitly with Enter or the `Connect` button.
 
-If Docker finds exactly one local Agent Zero endpoint and there is no conflicting saved manual host, the CLI now auto-connects to that instance so the common local-dev path feels immediate.
+If Docker finds exactly one local Agent Zero endpoint and there is no conflicting saved manual host, the CLI auto-enters that instance:
+- open instance: it connects immediately
+- protected instance: it advances directly to the login stage
 
-Manual URL entry is still available from the same panel for remote hosts or anything Docker cannot see. `AGENT_ZERO_HOST` remains useful, but it now seeds the picker/manual URL instead of auto-connecting on launch.
+Manual URL entry is available from the same panel for remote hosts or anything Docker cannot see. `AGENT_ZERO_HOST` still seeds the picker/manual URL instead of forcing an immediate connection.
 
-If the chosen server requires login, the sign-in screen now tells you which Docker-detected local instance you are about to authenticate against. `Change URL` returns to the host picker and refreshes the local instance list before you choose again.
+Protected instances use the same web login as Agent Zero itself. The CLI posts to `/login`, keeps the resulting session cookie in memory for the current process, and forwards that session to `/ws`. Open instances skip the login stage entirely.
 
 If you want to prefill a host, export it before starting the CLI:
 
@@ -54,7 +56,7 @@ export AGENT_ZERO_HOST=http://localhost:50001
 agentzero
 ```
 
-You can optionally save the chosen host and any connector API key to `~/.agent-zero/.env` from inside the app.
+You can optionally remember only the chosen host in `~/.agent-zero/.env` from inside the app. The CLI never stores usernames, passwords, session cookies, or connector tokens.
 
 ## Usage
 
@@ -79,7 +81,7 @@ You can optionally save the chosen host and any connector API key to `~/.agent-z
 | `/compact` | Compact the current chat when supported |
 | `/presets` | Pick a model preset |
 | `/models` | Override runtime models for the current chat |
-| `/disconnect` | Disconnect and return to the current host sign-in screen |
+| `/disconnect` | Disconnect and return to the current host connection flow |
 | `/keys` | Toggle key help |
 | `/quit` | Exit |
 
@@ -87,6 +89,7 @@ You can optionally save the chosen host and any connector API key to `~/.agent-z
 
 - `404` on `/api/plugins/a0_connector/v1/capabilities`: the plugin is not loaded in the target Agent Zero runtime.
 - Browser UI works but `agentzero` does not: the core web UI can run without the connector plugin; the CLI cannot.
+- `Connector contract mismatch`: the server is advertising an older connector auth contract. Update the installed `a0_connector` plugin to the session-only v1 version.
 - WebSocket connection rejected: ensure proxies forward both `/socket.io` and `/api/plugins/` unchanged, and that `AGENT_ZERO_HOST` exactly matches the real host seen by Agent Zero. If Docker discovery shows `localhost`, prefer `localhost` over `127.0.0.1`.
 
 ## Docs

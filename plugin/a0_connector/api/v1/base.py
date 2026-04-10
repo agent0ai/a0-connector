@@ -18,7 +18,7 @@ class PublicConnectorApiHandler(ApiHandler):
 class ProtectedConnectorApiHandler(ApiHandler):
     @classmethod
     def requires_auth(cls) -> bool:
-        return False
+        return True
 
     @classmethod
     def requires_csrf(cls) -> bool:
@@ -26,4 +26,4 @@ class ProtectedConnectorApiHandler(ApiHandler):
 
     @classmethod
     def requires_api_key(cls) -> bool:
-        return True
+        return False
