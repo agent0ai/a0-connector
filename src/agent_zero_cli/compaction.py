@@ -4,8 +4,6 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from agent_zero_cli.screens.compact_modal import CompactResult, CompactScreen
-from agent_zero_cli.widgets import ChatInput
-
 if TYPE_CHECKING:
     from agent_zero_cli.app import AgentZeroCLI
 
@@ -23,8 +21,6 @@ def finalize_compaction_refresh(app: AgentZeroCLI, context_id: str) -> None:
 
     app.agent_active = False
     app._sync_ready_actions()
-    input_widget = app.query_one("#message-input", ChatInput)
-    input_widget.disabled = False
     app._focus_message_input()
     app._set_idle()
 
@@ -35,8 +31,6 @@ def begin_compaction_refresh(app: AgentZeroCLI, context_id: str) -> None:
     app._set_pause_latched(False)
     app.agent_active = True
     app._sync_ready_actions()
-    input_widget = app.query_one("#message-input", ChatInput)
-    input_widget.disabled = True
     app._set_activity("Compacting chat history", "Updating context")
 
 

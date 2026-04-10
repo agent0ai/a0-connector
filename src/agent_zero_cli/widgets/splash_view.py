@@ -127,8 +127,8 @@ class SplashHostRow(Vertical):
             super().__init__()
             self.host = host
 
-    def __init__(self, instance: DiscoveredInstance, *, item_id: str) -> None:
-        super().__init__(id=item_id, classes="splash-host-row")
+    def __init__(self, instance: DiscoveredInstance) -> None:
+        super().__init__(classes="splash-host-row")
         self._instance = instance
 
     def compose(self) -> ComposeResult:
@@ -196,7 +196,6 @@ class SplashHostPanel(Vertical):
             classes="splash-panel-hint",
         )
         self._manual_section = Vertical(id="splash-manual-section")
-        self._item_urls: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         yield self._title
@@ -276,7 +275,6 @@ class SplashHostPanel(Vertical):
         return Text(detail or "Docker discovery failed. Enter a URL manually.", style="#ff8b6b")
 
     def _rebuild_instance_list(self) -> None:
-        self._item_urls.clear()
         for child in list(self._instances_mount.children):
             child.remove()
         self._instances_mount.display = bool(self._state.discovered_instances)
@@ -284,14 +282,14 @@ class SplashHostPanel(Vertical):
             self._instances_mount.styles.height = 0
             return
 
-        for index, instance in enumerate(self._state.discovered_instances):
-            item_id = f"splash-host-instance-{index}"
-            row = SplashHostRow(instance, item_id=item_id)
-            self._item_urls[item_id] = instance.url
+        for instance in self._state.discovered_instances:
+            row = SplashHostRow(instance)
             if instance.url == self._state.selected_host_url:
                 row.add_class("-highlight")
             self._instances_mount.mount(row)
-        self._instances_mount.styles.height = min(max(len(self._state.discovered_instances) * 3 + 2, 5), 10)
+        # Give each discovered host row a fixed 4-cell lane so browser-preview
+        # repaints can't collapse the text out of view after the initial frame.
+        self._instances_mount.styles.height = min(max(len(self._state.discovered_instances) * 4 + 1, 6), 12)
 
     def _sync_connect_button(self) -> None:
         if self._state.manual_entry_expanded:
@@ -319,9 +317,9 @@ class SplashHostPanel(Vertical):
         try:
             selected_host = self.selected_host_url
             if selected_host:
-                for item_id, host in self._item_urls.items():
-                    if host == selected_host:
-                        self.query_one(f"#{item_id}", SplashHostRow).focus()
+                for row in self.query(SplashHostRow):
+                    if row.host == selected_host:
+                        row.focus()
                         return
             self.query_one(SplashHostRow).focus()
         except Exception:
@@ -340,16 +338,15 @@ class SplashHostPanel(Vertical):
         selected = self._state.selected_host_url.strip()
         if selected:
             return selected
-        return next(iter(self._item_urls.values()), "")
+        if self._state.discovered_instances:
+            return str(self._state.discovered_instances[0].url)
+        return ""
 
     @property
     def connect_host(self) -> str:
         if self._state.manual_entry_expanded:
             return self.host
         return self.selected_host_url
-
-    def selected_host_for_item(self, item_id: str) -> str:
-        return self._item_urls.get(item_id, "")
 
     @property
     def remember_host(self) -> bool:

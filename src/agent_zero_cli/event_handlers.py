@@ -9,7 +9,6 @@ from agent_zero_cli.rendering import (
     extract_detail,
     render_connector_event,
 )
-from agent_zero_cli.widgets import ChatInput
 from agent_zero_cli.widgets.chat_log import ChatLog
 
 if TYPE_CHECKING:
@@ -78,15 +77,12 @@ def handle_context_event(app: AgentZeroCLI, data: dict[str, Any]) -> None:
 
     post_complete = app._context_run_complete
 
-    input_widget = app.query_one("#message-input", ChatInput)
     if not app._pause_latched and not post_complete:
         app.agent_active = True
         app._sync_ready_actions()
-        input_widget.disabled = True
 
     if category == "response":
         app._response_delivered = True
-        input_widget.disabled = False
         app._focus_message_input()
         app._set_idle()
         app._show_chat_intro(log, category)
@@ -131,8 +127,6 @@ def handle_context_complete(app: AgentZeroCLI, data: dict[str, Any]) -> None:
     app.agent_active = False
     app._context_run_complete = True
     app._sync_ready_actions()
-    input_widget = app.query_one("#message-input", ChatInput)
-    input_widget.disabled = False
     app._focus_message_input()
     app._set_idle()
     asyncio.create_task(app._refresh_token_usage(context_id=context_id))

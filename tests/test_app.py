@@ -28,7 +28,14 @@ from agent_zero_cli.widgets.chat_log import (
     _AGENT_ZERO_BANNER_TINY,
     _select_agent_zero_banner,
 )
-from agent_zero_cli.widgets import ConnectionStatus, DynamicFooter, ProjectMenuItem, ProjectMenuPopover, SplashState
+from agent_zero_cli.widgets import (
+    ChatInput,
+    ConnectionStatus,
+    DynamicFooter,
+    ProjectMenuItem,
+    ProjectMenuPopover,
+    SplashState,
+)
 from agent_zero_cli.widgets.splash_view import (
     SplashHostPanel,
     SplashHostRow,
@@ -1397,6 +1404,7 @@ def test_context_event_keeps_status_messages_in_activity_lane(dummy_app: DummyAg
 
     input_widget = dummy_app._test_widgets["#message-input"]
     log = dummy_app._test_widgets["#chat-log"]
+    assert input_widget.disabled is False
     assert input_widget.activity_label == "Thinking"
     assert input_widget.activity_detail == "Using response..."
     assert log._active_seq == 4
@@ -1424,7 +1432,7 @@ def test_context_event_status_after_first_response_is_not_skipped(dummy_app: Dum
 
     input_widget = dummy_app._test_widgets["#message-input"]
     log = dummy_app._test_widgets["#chat-log"]
-    assert input_widget.disabled is True
+    assert input_widget.disabled is False
     assert input_widget.activity_label == "Thinking"
     assert input_widget.activity_detail == "Calling subordinate A1"
     assert log._active_seq == 12
@@ -1875,7 +1883,7 @@ async def test_pause_action_resumes_when_paused(
     assert calls == [("ctx-1", False)]
     assert dummy_app._pause_latched is False
     assert dummy_app.agent_active is True
-    assert input_widget.disabled is True
+    assert input_widget.disabled is False
     assert input_widget.activity_label == "Resuming"
     assert log.writes == []
 
@@ -1902,7 +1910,84 @@ async def test_nudge_command_uses_connector_nudge_endpoint(
 
     assert called == ["ctx-1"]
     assert dummy_app.agent_active is True
-    assert input_widget.disabled is True
+    assert input_widget.disabled is False
+
+
+async def test_active_run_preserves_draft_and_blocks_new_send(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app.agent_active = True
+    input_widget = dummy_app._test_widgets["#message-input"]
+
+    sent_messages: list[tuple[str, str | None]] = []
+    notices: list[tuple[str, bool]] = []
+
+    async def fake_send_message(text: str, context_id: str | None) -> None:
+        sent_messages.append((text, context_id))
+
+    monkeypatch.setattr(dummy_app.client, "send_message", fake_send_message)
+    monkeypatch.setattr(dummy_app, "_show_notice", lambda message, *, error=False: notices.append((message, error)))
+
+    await dummy_app.on_chat_input_submitted(ChatInput.Submitted(value="draft follow-up", input=input_widget))
+
+    assert sent_messages == []
+    assert input_widget.value == "draft follow-up"
+    assert input_widget.focused is True
+    assert notices == [
+        (
+            "The agent is still running. Keep drafting here, then send after it finishes or pause it with F8.",
+            True,
+        )
+    ]
+
+
+async def test_hidden_pause_command_dispatches_during_active_run(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app.agent_active = True
+    dummy_app.connector_features = {"pause"}
+
+    monkeypatch.setattr(
+        dummy_app.client,
+        "pause_agent",
+        lambda context_id: _async_return({"ok": True, "message": "Agent paused."}),
+    )
+
+    await dummy_app._dispatch_command("/pause")
+
+    assert dummy_app._pause_latched is True
+    assert dummy_app.agent_active is False
+
+
+async def test_hidden_nudge_command_dispatches_for_current_context(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app.connector_features = {"nudge"}
+
+    called: list[str | None] = []
+
+    async def fake_nudge_agent(context_id: str | None):
+        called.append(context_id)
+        return {"ok": True, "status": "nudged"}
+
+    monkeypatch.setattr(dummy_app.client, "nudge_agent", fake_nudge_agent)
+
+    await dummy_app._dispatch_command("/nudge")
+
+    assert called == ["ctx-1"]
+    assert dummy_app.agent_active is True
 
 
 def test_system_commands_are_curated_and_ordered(dummy_app: DummyAgentZeroCLI) -> None:
@@ -2460,6 +2545,23 @@ def test_slash_query_opens_command_palette_with_seeded_query(
     assert isinstance(opened[0], AgentCommandPalette)
     assert opened[0]._initial_query == "/"
     assert dummy_app._slash_palette_query == "/"
+
+
+def test_hidden_run_control_slash_command_skips_palette(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_widget = dummy_app._test_widgets["#message-input"]
+    input_widget.value = "/pause"
+
+    opened: list[AgentCommandPalette] = []
+    monkeypatch.setattr(dummy_app, "_is_command_palette_open", lambda: False)
+    monkeypatch.setattr(dummy_app, "push_screen", lambda screen: opened.append(screen))
+
+    dummy_app.on_chat_input_value_changed(SimpleNamespace(value="/pause", input=input_widget))
+
+    assert opened == []
+    assert dummy_app._slash_palette_query is None
 
 
 def test_command_palette_closed_clears_stale_slash_query(dummy_app: DummyAgentZeroCLI) -> None:

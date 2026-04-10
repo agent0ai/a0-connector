@@ -777,10 +777,12 @@ SplashStatusPanel {
 
 .splash-host-row {
     width: 100%;
-    height: auto;
+    height: 4;
+    min-height: 4;
     margin: 0;
     padding: 0;
     border-bottom: solid #1d2a36;
+    overflow: hidden;
 }
 
 .splash-host-row.-highlight,
@@ -790,9 +792,11 @@ SplashStatusPanel {
 
 .splash-host-row-body {
     width: 100%;
-    height: auto;
+    height: 4;
+    min-height: 4;
     padding: 1 1 0 1;
     background: transparent;
+    overflow: hidden;
 }
 
 .splash-host-row-title {

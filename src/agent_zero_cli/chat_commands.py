@@ -153,8 +153,6 @@ async def cmd_resume(app: AgentZeroCLI) -> None:
 
     app._set_pause_latched(False)
     app.agent_active = True
-    input_widget = app.query_one("#message-input", ChatInput)
-    input_widget.disabled = True
     app._set_activity("Resuming")
 
 
@@ -164,9 +162,7 @@ async def cmd_nudge(app: AgentZeroCLI) -> None:
         app._show_notice(availability.reason or "Nudge is unavailable.", error=True)
         return
 
-    input_widget = app.query_one("#message-input", ChatInput)
     app._set_pause_latched(False)
-    input_widget.disabled = True
     app.agent_active = True
     app._response_delivered = False
     app._context_run_complete = False
@@ -175,13 +171,11 @@ async def cmd_nudge(app: AgentZeroCLI) -> None:
         response = await app.client.nudge_agent(app.current_context)
     except Exception as exc:
         app._show_notice(f"Nudge failed: {exc}", error=True)
-        input_widget.disabled = False
         app.agent_active = False
         app._sync_ready_actions()
         return
 
     if not response.get("ok"):
         app._show_notice(str(response.get("message") or "Nudge failed."), error=True)
-        input_widget.disabled = False
         app.agent_active = False
         app._sync_ready_actions()

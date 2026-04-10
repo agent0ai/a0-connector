@@ -59,6 +59,8 @@ from agent_zero_cli.token_usage import (
     refresh_token_usage,
 )
 
+_HIDDEN_SLASH_COMMANDS = frozenset({"/pause", "/resume", "/nudge"})
+
 
 class AgentZeroCLI(App):
     """Agent Zero CLI - terminal-native connector shell."""
@@ -218,6 +220,27 @@ class AgentZeroCLI(App):
                 lambda app: compaction.cmd_compact(app),
             ),
             CommandSpec(
+                "/pause",
+                (),
+                "Pause the active agent run.",
+                lambda app: availability.pause_availability(app),
+                lambda app: chat_commands.cmd_pause(app),
+            ),
+            CommandSpec(
+                "/resume",
+                (),
+                "Resume a paused agent run.",
+                lambda app: availability.resume_availability(app),
+                lambda app: chat_commands.cmd_resume(app),
+            ),
+            CommandSpec(
+                "/nudge",
+                (),
+                "Nudge the current agent run.",
+                lambda app: availability.nudge_availability(app),
+                lambda app: chat_commands.cmd_nudge(app),
+            ),
+            CommandSpec(
                 "/presets",
                 (),
                 "Open preset picker with Main/Utility model details.",
@@ -287,6 +310,8 @@ class AgentZeroCLI(App):
         rows: list[tuple[CommandSpec, CommandAvailability]] = []
         for spec in self._command_registry:
             availability = spec.availability(self)
+            if spec.canonical_name in _HIDDEN_SLASH_COMMANDS:
+                continue
             if spec.canonical_name in {"/presets", "/models", "/project", "/disconnect"} and not availability.available:
                 continue
             rows.append((spec, availability))
@@ -760,7 +785,8 @@ class AgentZeroCLI(App):
         self._sync_ready_actions()
 
     async def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
-        text = event.value.strip()
+        raw_text = event.value
+        text = raw_text.strip()
         if not text:
             self._slash_palette_query = None
             return
@@ -775,6 +801,15 @@ class AgentZeroCLI(App):
             )
             return
 
+        if self.agent_active:
+            event.input.value = raw_text
+            self._focus_message_input()
+            self._show_notice(
+                "The agent is still running. Keep drafting here, then send after it finishes or pause it with F8.",
+                error=True,
+            )
+            return
+
         if not self.current_context:
             self._show_notice("No active chat context.", error=True)
             return
@@ -783,7 +818,6 @@ class AgentZeroCLI(App):
         self._mark_context_has_messages()
         self._response_delivered = False
         self._context_run_complete = False
-        event.input.disabled = True
         self.agent_active = True
         self._sync_ready_actions()
 
@@ -791,13 +825,14 @@ class AgentZeroCLI(App):
             await self.client.send_message(text, self.current_context)
         except Exception as exc:
             self._show_notice(f"Error sending message: {exc}", error=True)
-            event.input.disabled = False
             self.agent_active = False
             self._sync_ready_actions()
 
     def on_chat_input_value_changed(self, event: ChatInput.ValueChanged) -> None:
         query = self._slash_query(event.value)
         if query is None:
+            return
+        if query in _HIDDEN_SLASH_COMMANDS:
             return
 
         self._open_command_palette(initial_query=query, from_slash=True)
