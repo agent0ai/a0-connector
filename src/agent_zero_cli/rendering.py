@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from rich.align import Align
@@ -41,6 +42,72 @@ _STATUS_LABEL: dict[str, str] = {
     "context_updated": "Updating memory",
 }
 
+_CODE_HEADING_PREFIX_RE = re.compile(r"^\s*icon://terminal\s*")
+_CODE_HEADING_SESSION_RE = re.compile(r"^\[\d+\]\s*")
+_GENERIC_CODE_DETAIL_RE = re.compile(
+    r"^(?:code_execution(?:_remote)?(?:_tool)?\s*-\s*)?"
+    r"(?:python|ipython|nodejs|node|terminal|output|input|reset)\s*$",
+    re.IGNORECASE,
+)
+_SHELL_ECHO_LINE_RE = re.compile(
+    r"^\s*(?:python|node|bash|sh|zsh|fish|pwsh|powershell|ps)>\s+.*$",
+    re.IGNORECASE,
+)
+_SESSION_COMPLETE_LINE_RE = re.compile(r"^\s*Session \d+ completed\.\s*$")
+_OSC_TITLE_PREFIX_RE = re.compile(r"^\s*\d+;[A-Za-z0-9_.+-]+:\s*")
+_OSC_CWD_PREFIX_RE = re.compile(
+    r"^(?:/?(?:[a-z0-9._-]+/)+[a-z0-9._-]*)(?=[A-Z0-9\"'(\[{])"
+)
+_PROMPT_LINE_RE = re.compile(
+    r"^\s*(?:\([^)\n]+\)\s*)?(?:[\w.-]+@[\w.-]+:)?[/~.\w-]*[#$]\s*$"
+)
+
+
+def _normalize_code_heading(heading: str) -> str:
+    normalized = " ".join(str(heading or "").split())
+    if not normalized:
+        return ""
+
+    normalized = _CODE_HEADING_PREFIX_RE.sub("", normalized, count=1)
+    normalized = _CODE_HEADING_SESSION_RE.sub("", normalized, count=1).strip()
+    if _GENERIC_CODE_DETAIL_RE.match(normalized):
+        return ""
+    return normalized
+
+
+def _strip_terminal_title_noise(line: str) -> str:
+    stripped = _OSC_TITLE_PREFIX_RE.sub("", line, count=1)
+    if stripped != line:
+        stripped = _OSC_CWD_PREFIX_RE.sub("", stripped, count=1).lstrip()
+    return stripped
+
+
+def _sanitize_code_output(text: str, *, code_present: bool) -> str:
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return ""
+
+    lines = normalized.splitlines()
+
+    if code_present and lines and _SHELL_ECHO_LINE_RE.match(lines[0]):
+        lines.pop(0)
+
+    if len(lines) > 1 and lines and _SESSION_COMPLETE_LINE_RE.match(lines[0]):
+        lines.pop(0)
+
+    cleaned_lines = [_strip_terminal_title_noise(line).rstrip() for line in lines]
+
+    while cleaned_lines and not cleaned_lines[0].strip():
+        cleaned_lines.pop(0)
+
+    while cleaned_lines and not cleaned_lines[-1].strip():
+        cleaned_lines.pop()
+
+    while cleaned_lines and _PROMPT_LINE_RE.match(cleaned_lines[-1]):
+        cleaned_lines.pop()
+
+    return "\n".join(cleaned_lines).strip()
+
 
 def extract_detail(event_type: str, data: dict[str, Any]) -> str:
     """Extract a short human-readable detail string from event data."""
@@ -53,7 +120,8 @@ def extract_detail(event_type: str, data: dict[str, Any]) -> str:
         return heading[:40] if heading else ""
 
     if event_type in ("code_start", "code_output"):
-        return heading[:40] if heading else ""
+        clean_heading = _normalize_code_heading(heading)
+        return clean_heading[:40] if clean_heading else ""
 
     if event_type == "context_updated":
         return "memory"
@@ -130,23 +198,27 @@ def render_connector_event(log: ChatLog, event: dict[str, Any]) -> bool:
         return False
 
     if category == "code":
-        code = meta.get("code") or ""
-        if code or text:
-            # Code block with a slightly lighter background and subtle border.
-            # If both source code and output (text) are present, show both.
-            md_content = f"```python\n{code}\n```" if code else ""
-            if text:
-                if md_content:
-                    md_content += "\n\n---\n\n"
-                md_content += text
+        code = str(meta.get("code") or "").rstrip()
+        display_text = _sanitize_code_output(text, code_present=bool(code))
+        if code or display_text:
+            markdown_parts: list[str] = []
+            if code:
+                markdown_parts.append(f"```python\n{code}\n```")
+            if display_text:
+                markdown_parts.append(f"```text\n{display_text}\n```")
+            md_content = "\n\n".join(markdown_parts)
 
-            panel = Panel(
-                Markdown(md_content),
-                box=box.SIMPLE,
-                padding=(1, 1),
-                style="on #202124"
+            log.append_or_update_code(
+                seq,
+                _STATUS_LABEL[event_type],
+                extract_detail(event_type, data),
+                Panel(
+                    Markdown(md_content),
+                    box=box.SIMPLE,
+                    padding=(1, 1),
+                    style="on #202124",
+                ),
             )
-            log.append_or_update(seq, Padding(panel, (1, 0, 1, 0)))
             return True
         return False
 

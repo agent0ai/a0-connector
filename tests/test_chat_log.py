@@ -3,8 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from rich.padding import Padding
+from rich.panel import Panel
+from rich.text import Text
 
-from agent_zero_cli.widgets.chat_log import ChatLog, StatusEntry, sanitize_status_meta
+from agent_zero_cli.widgets.chat_log import ChatLog, CodeEntry, StatusEntry, sanitize_status_meta
 
 
 def test_append_or_update_new_entry_auto_scrolls_by_default(
@@ -75,6 +77,31 @@ def test_status_entry_uses_left_padding() -> None:
 
     assert isinstance(entry.content, Padding)
     assert entry.content.left == 2
+
+
+def test_append_or_update_code_mounts_expanded_code_entry(
+    monkeypatch,
+) -> None:
+    log = ChatLog(id="chat-log")
+    mount_calls: list[object] = []
+    scroll_end_calls: list[bool] = []
+
+    monkeypatch.setattr(log, "mount", lambda widget, before=None, after=None: mount_calls.append(widget))
+    monkeypatch.setattr(log, "call_after_refresh", lambda callback: callback())
+    monkeypatch.setattr(log, "scroll_end", lambda animate=False: scroll_end_calls.append(animate))
+    monkeypatch.setattr(log, "is_at_bottom", lambda: False)
+
+    log.append_or_update_code(
+        11,
+        "Running code",
+        "python",
+        Panel(Text("print(42)")),
+        scroll=True,
+    )
+
+    assert isinstance(mount_calls[0], CodeEntry)
+    assert mount_calls[0]._expanded is True
+    assert scroll_end_calls == [False]
 
 
 def test_sanitize_status_meta_extracts_kvps_and_truncated_thoughts() -> None:

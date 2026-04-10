@@ -1591,6 +1591,32 @@ def test_code_execution_remote_accepts_shell_backed_runtimes() -> None:
     assert "no CLI client connected" in response.message
 
 
+def test_code_execution_remote_logs_with_code_handler_shape() -> None:
+    _install_fake_helpers()
+
+    tool_mod = _reload("usr.plugins.a0_connector.tools.code_execution_remote")
+
+    class _FakeLog:
+        def __init__(self) -> None:
+            self.entries: list[dict[str, object]] = []
+
+        def log(self, **kwargs):
+            self.entries.append(kwargs)
+            return types.SimpleNamespace(id=kwargs.get("id", "log-1"))
+
+    fake_log = _FakeLog()
+    tool = tool_mod.CodeExecutionRemote(
+        agent=types.SimpleNamespace(context=types.SimpleNamespace(log=fake_log)),
+        args={"runtime": "python", "session": 0, "code": "print(42)"},
+    )
+
+    tool.get_log_object()
+
+    assert fake_log.entries[0]["type"] == "code_exe"
+    assert fake_log.entries[0]["heading"] == "icon://terminal [0] code_execution_remote - python"
+    assert fake_log.entries[0]["kvps"] == {"runtime": "python", "session": 0, "code": "print(42)"}
+
+
 def test_code_execution_remote_rejects_unknown_runtime_with_expanded_list() -> None:
     _install_fake_helpers()
 

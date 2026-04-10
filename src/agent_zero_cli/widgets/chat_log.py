@@ -295,6 +295,84 @@ class StatusEntry(Static):
         self.update(Padding(Group(*renderables), _STATUS_HISTORY_PADDING), layout=layout)
 
 
+class CodeEntry(Static):
+    """Interactive code row with a status header and expandable rich body."""
+
+    can_focus = True
+    BINDINGS = [
+        Binding("enter", "toggle", "Toggle code details", show=False),
+        Binding("space", "toggle", "Toggle code details", show=False),
+    ]
+
+    def __init__(self, *, id: str | None = None, classes: str = "status-entry code-entry") -> None:
+        super().__init__("", id=id, classes=classes)
+        self._label = ""
+        self._detail = ""
+        self._body: RenderableType | None = None
+        self._active = False
+        self._expanded = False
+        self._phase = 0.0
+        self._frame = 0
+
+    @property
+    def has_details(self) -> bool:
+        return self._body is not None
+
+    def set_code(
+        self,
+        label: str,
+        detail: str,
+        body: RenderableType | None,
+        *,
+        active: bool,
+        shimmer_phase: float = 0.0,
+        shimmer_frame: int = 0,
+        default_expanded: bool = True,
+    ) -> None:
+        had_details = self.has_details
+        self._label = label
+        self._detail = detail
+        self._body = body
+        self._active = active
+        self._phase = shimmer_phase
+        self._frame = shimmer_frame
+        if not self.has_details:
+            self._expanded = False
+        elif default_expanded and not had_details:
+            self._expanded = True
+        self._refresh_content(layout=True)
+
+    def action_toggle(self) -> None:
+        if not self.has_details:
+            return
+        self._expanded = not self._expanded
+        self._refresh_content(layout=True)
+        self.scroll_visible(animate=False)
+
+    def on_click(self, event: events.Click) -> None:
+        if not self.has_details:
+            return
+        self.action_toggle()
+        event.stop()
+
+    def _refresh_content(self, *, layout: bool) -> None:
+        arrow = "▼" if self._expanded and self.has_details else "▶" if self.has_details else "•"
+        header = Text()
+        header.append(f"{arrow} ", style="#7f8c98")
+        status_text = (
+            build_shimmer_text(self._label, self._detail, self._phase, self._frame)
+            if self._active
+            else build_dim_status(self._label, self._detail)
+        )
+        header.append_text(status_text)
+
+        renderables: list[RenderableType] = [header]
+        if self._expanded and self._body is not None:
+            renderables.append(Padding(self._body, _STATUS_BODY_PADDING))
+
+        self.update(Padding(Group(*renderables), _STATUS_HISTORY_PADDING), layout=layout)
+
+
 class AgentZeroBanner(Static):
     """Responsive Agent Zero banner that keeps a readable shape while resizing."""
 
@@ -503,6 +581,39 @@ class ChatLog(VerticalScroll):
             label,
             detail,
             meta,
+            active=active,
+            shimmer_phase=self._shimmer_phase,
+            shimmer_frame=self._shimmer_frame,
+        )
+        if should_scroll:
+            self._schedule_scroll_end()
+
+    def append_or_update_code(
+        self,
+        sequence: int,
+        label: str,
+        detail: str,
+        body: RenderableType | None,
+        *,
+        active: bool = False,
+        scroll: bool = True,
+    ) -> None:
+        """Add or update an expandable code widget bounded to `sequence`."""
+        should_scroll = self._should_auto_scroll(scroll)
+        widget = self._seq_to_widget.get(sequence)
+        if widget is not None and not isinstance(widget, CodeEntry):
+            widget.remove()
+            widget = None
+
+        if not isinstance(widget, CodeEntry):
+            widget = CodeEntry()
+            self._seq_to_widget[sequence] = widget
+            self.mount(widget)
+
+        widget.set_code(
+            label,
+            detail,
+            body,
             active=active,
             shimmer_phase=self._shimmer_phase,
             shimmer_frame=self._shimmer_frame,

@@ -100,7 +100,10 @@ def handle_context_event(app: AgentZeroCLI, data: dict[str, Any]) -> None:
     if label:
         event_data = data.get("data", {})
         detail = extract_detail(event_type, event_data)
-        if post_complete:
+        if category == "code":
+            if not post_complete:
+                app._set_activity(label, detail)
+        elif post_complete:
             log.append_or_update_status(
                 sequence,
                 label,

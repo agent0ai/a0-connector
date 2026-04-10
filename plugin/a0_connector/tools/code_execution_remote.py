@@ -23,6 +23,31 @@ EXEC_OP_EVENT = "connector_exec_op"
 class CodeExecutionRemote(Tool):
     """Send shell-backed frontend execution operations to the connected CLI machine."""
 
+    def get_log_object(self):
+        import uuid
+
+        return self.agent.context.log.log(
+            type="code_exe",
+            heading=self.get_heading(),
+            content="",
+            kvps=self.args,
+            id=str(uuid.uuid4()),
+        )
+
+    def get_heading(self, text: str = "") -> str:
+        if not text:
+            name = str(getattr(self, "name", "code_execution_remote"))
+            runtime = str(self.args.get("runtime", "unknown") or "unknown")
+            text = f"{name} - {runtime}"
+
+        normalized = " ".join(str(text).split())
+        if len(normalized) > 200:
+            normalized = normalized[:197].rstrip() + "..."
+
+        session = self.args.get("session", None)
+        session_text = f"[{session}] " if session or session == 0 else ""
+        return f"icon://terminal {session_text}{normalized}"
+
     async def execute(self, **kwargs: Any) -> Response:
         runtime = str(self.args.get("runtime", "")).strip().lower()
         if runtime not in {"terminal", "python", "nodejs", "output", "input", "reset"}:

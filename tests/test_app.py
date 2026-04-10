@@ -11,7 +11,7 @@ from textual.widgets import Button, Input, Static
 from agent_zero_cli.app import AgentZeroCLI
 from agent_zero_cli.client import DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
-from agent_zero_cli.rendering import render_connector_event
+from agent_zero_cli.rendering import _sanitize_code_output, extract_detail, render_connector_event
 from agent_zero_cli.screens.compact_modal import CompactResult
 from agent_zero_cli.screens.model_runtime import ModelRuntimeResult
 from agent_zero_cli.screens.model_presets import ModelPresetsResult
@@ -51,6 +51,7 @@ class FakeChatLog:
         self.lines: list[object] = []
         self.sequences: dict[int, object] = {}
         self.status_entries: dict[int, dict[str, object]] = {}
+        self.code_entries: dict[int, dict[str, object]] = {}
         self.intro_visible = False
         self._active_seq: int | None = None
         self._active_label = ""
@@ -92,6 +93,28 @@ class FakeChatLog:
         self.status_entries[sequence] = entry
         self.sequences[sequence] = entry
 
+    def append_or_update_code(
+        self,
+        sequence: int,
+        label: str,
+        detail: str,
+        body: object,
+        *,
+        active: bool = False,
+        scroll: bool = True,
+    ) -> None:
+        entry = {
+            "label": label,
+            "detail": detail,
+            "body": body,
+            "active": active,
+            "expanded": True,
+        }
+        if sequence not in self.sequences:
+            self.writes.append(entry)
+        self.code_entries[sequence] = entry
+        self.sequences[sequence] = entry
+
     def set_active_status(
         self,
         seq: int,
@@ -131,6 +154,7 @@ class FakeChatLog:
         self.lines.clear()
         self.sequences.clear()
         self.status_entries.clear()
+        self.code_entries.clear()
         self._active_seq = None
 
     def set_workspace(self, *, local_workspace: str = "", remote_workspace: str = "") -> None:
@@ -881,6 +905,70 @@ def test_render_connector_event_pads_info_messages() -> None:
     assert isinstance(log.writes[-1], Padding)
 
 
+def test_extract_detail_strips_code_heading_noise() -> None:
+    detail = extract_detail(
+        "code_output",
+        {"heading": "icon://terminal [0] Python version: 3.13.1"},
+    )
+
+    assert detail == "Python version: 3.13.1"
+
+
+def test_sanitize_code_output_removes_echo_title_noise_and_prompt() -> None:
+    cleaned = _sanitize_code_output(
+        "python> print('Hello, World!')\n0;IPython: usr/workdirHello, World!\nworkdir$",
+        code_present=True,
+    )
+
+    assert cleaned == "Hello, World!"
+
+
+def test_sanitize_code_output_drops_session_complete_when_output_exists() -> None:
+    cleaned = _sanitize_code_output(
+        "Session 0 completed.\n\n42",
+        code_present=True,
+    )
+
+    assert cleaned == "42"
+
+
+def test_render_connector_event_renders_code_as_expandable_entry() -> None:
+    log = FakeChatLog()
+
+    rendered = render_connector_event(
+        log,
+        {
+            "event": "code_output",
+            "sequence": 8,
+            "data": {
+                "heading": "icon://terminal [0] Python version: 3.13",
+                "text": (
+                    "python> print('Hello, World!')\n"
+                    "0;IPython: usr/workdirHello, World!\n"
+                    "workdir$"
+                ),
+                "meta": {
+                    "code": "print('Hello, World!')",
+                    "runtime": "python",
+                    "session": 0,
+                },
+            },
+        },
+    )
+
+    assert rendered is True
+    assert log.code_entries[8]["label"] == "Running code"
+    assert log.code_entries[8]["detail"] == "Python version: 3.13"
+    assert log.code_entries[8]["expanded"] is True
+    body = log.code_entries[8]["body"]
+    assert "```python" in body.renderable.markup
+    assert "```text" in body.renderable.markup
+    assert "---" not in body.renderable.markup
+    assert "python>" not in body.renderable.markup
+    assert "0;IPython" not in body.renderable.markup
+    assert "workdir$" not in body.renderable.markup
+
+
 def test_context_event_keeps_status_messages_in_activity_lane(dummy_app: DummyAgentZeroCLI) -> None:
     dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
@@ -936,6 +1024,35 @@ def test_context_event_status_after_first_response_is_not_skipped(dummy_app: Dum
     assert log._active_seq == 12
     assert log._active_meta == {"step": "Calling subordinate A1"}
     assert dummy_app.rendered_events == []
+
+
+def test_context_event_code_keeps_bottom_activity_without_status_timeline_entry(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+
+    dummy_app._handle_context_event(
+        {
+            "context_id": "ctx-1",
+            "event": "code_output",
+            "sequence": 14,
+            "data": {
+                "heading": "icon://terminal [0] python",
+                "text": "42",
+                "meta": {"code": "print(42)", "runtime": "python", "session": 0},
+            },
+        }
+    )
+
+    input_widget = dummy_app._test_widgets["#message-input"]
+    log = dummy_app._test_widgets["#chat-log"]
+    assert input_widget.activity_label == "Running code"
+    assert input_widget.activity_detail == ""
+    assert log._active_seq is None
+    assert 14 not in log.status_entries
+    assert dummy_app.rendered_events[-1]["event"] == "code_output"
 
 
 def test_context_event_after_complete_does_not_reactivate_input_lock(dummy_app: DummyAgentZeroCLI) -> None:
