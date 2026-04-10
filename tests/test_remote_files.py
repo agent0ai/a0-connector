@@ -5,7 +5,7 @@ from pathlib import Path
 from agent_zero_cli.remote_files import RemoteFileUtility
 
 
-def test_remote_file_utility_read_write_patch_roundtrip(tmp_path: Path) -> None:
+def test_remote_file_utility_roundtrips_read_write_and_patch(tmp_path: Path) -> None:
     utility = RemoteFileUtility(scan_root=str(tmp_path))
     target = tmp_path / "sample.txt"
 
@@ -17,8 +17,6 @@ def test_remote_file_utility_read_write_patch_roundtrip(tmp_path: Path) -> None:
             "content": "line-1\nline-2\n",
         }
     )
-    assert write_result["ok"] is True
-
     read_result = utility.handle_file_op(
         {
             "op_id": "op-read",
@@ -28,9 +26,6 @@ def test_remote_file_utility_read_write_patch_roundtrip(tmp_path: Path) -> None:
             "line_to": 2,
         }
     )
-    assert read_result["ok"] is True
-    assert "1 | line-1" in read_result["result"]["content"]
-
     patch_result = utility.handle_file_op(
         {
             "op_id": "op-patch",
@@ -39,27 +34,15 @@ def test_remote_file_utility_read_write_patch_roundtrip(tmp_path: Path) -> None:
             "edits": [{"from": 2, "to": 2, "content": "line-2-updated\n"}],
         }
     )
+
+    assert write_result["ok"] is True
+    assert read_result["ok"] is True
+    assert "1 | line-1" in read_result["result"]["content"]
     assert patch_result["ok"] is True
     assert target.read_text(encoding="utf-8") == "line-1\nline-2-updated\n"
 
 
-def test_remote_file_utility_blocks_writes_when_disabled(tmp_path: Path) -> None:
-    utility = RemoteFileUtility(scan_root=str(tmp_path), allow_writes=False)
-
-    result = utility.handle_file_op(
-        {
-            "op_id": "op-write-disabled",
-            "op": "write",
-            "path": str(tmp_path / "blocked.txt"),
-            "content": "hello\n",
-        }
-    )
-
-    assert result["ok"] is False
-    assert "Press F3" in result["error"]
-
-
-def test_remote_file_tree_snapshot_is_bounded_and_hashed(tmp_path: Path) -> None:
+def test_remote_file_utility_blocks_writes_and_bounds_tree_snapshots(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.py").write_text("a\n", encoding="utf-8")
     (tmp_path / "src" / "b.py").write_text("b\n", encoding="utf-8")
@@ -67,14 +50,25 @@ def test_remote_file_tree_snapshot_is_bounded_and_hashed(tmp_path: Path) -> None
 
     utility = RemoteFileUtility(
         scan_root=str(tmp_path),
+        allow_writes=False,
         max_depth=3,
         max_files=1,
         max_folders=5,
         max_lines=20,
     )
 
+    blocked = utility.handle_file_op(
+        {
+            "op_id": "op-write-disabled",
+            "op": "write",
+            "path": str(tmp_path / "blocked.txt"),
+            "content": "hello\n",
+        }
+    )
     snapshot = utility.build_tree_snapshot()
 
+    assert blocked["ok"] is False
+    assert "Press F3" in blocked["error"]
     assert snapshot.root_path == str(tmp_path)
     assert snapshot.tree_hash
     assert "# 1 more file" in snapshot.tree

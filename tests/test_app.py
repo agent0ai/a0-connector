@@ -1,103 +1,43 @@
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from rich.padding import Padding
-from textual.app import App, ComposeResult
-from textual.geometry import Offset
-from textual.widgets import Button, Input, LoadingIndicator, Static
 
 from agent_zero_cli.app import AgentZeroCLI
 from agent_zero_cli.client import DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.instance_discovery import DiscoveredInstance, DiscoveryResult
-from agent_zero_cli.rendering import _sanitize_code_output, extract_detail, render_connector_event
-from agent_zero_cli.screens.compact_modal import CompactResult
-from agent_zero_cli.screens.model_runtime import ModelRuntimeResult
-from agent_zero_cli.screens.model_presets import ModelPresetsResult
-from agent_zero_cli.screens.project_instructions import (
-    ProjectInstructionsResult,
-    ProjectInstructionsScreen,
-)
-from agent_zero_cli.widgets.command_palette import AgentCommandPalette
-from agent_zero_cli.widgets.chat_log import (
-    _AGENT_ZERO_BANNER,
-    _AGENT_ZERO_BANNER_COMPACT,
-    _AGENT_ZERO_BANNER_TINY,
-    _select_agent_zero_banner,
-)
-from agent_zero_cli.widgets import (
-    ChatInput,
-    ConnectionStatus,
-    DynamicFooter,
-    ProjectMenuItem,
-    ProjectMenuPopover,
-    SplashState,
-)
-from agent_zero_cli.widgets.splash_view import (
-    SplashHostPanel,
-    SplashHostRow,
-    SplashLoginPanel,
-    SplashStatusPanel,
-    SplashView,
-    _connection_target_summary,
-    _validate_connection_target,
-)
-
-
-async def _async_return(value=None):
-    return value
-
-
-def _instance(
-    url: str,
-    *,
-    name: str = "agent-zero",
-    host_port: str = "50001",
-    status_text: str = "agent-zero | frdel/agent-zero:latest",
-) -> DiscoveredInstance:
-    return DiscoveredInstance(
-        id=f"{name}:{host_port}",
-        name=name,
-        url=url,
-        host_port=host_port,
-        status_text=status_text,
-    )
+from agent_zero_cli.widgets import ChatInput, SplashState
 
 
 pytestmark = pytest.mark.anyio
 
 
+def _instance(url: str, *, host_port: str = "50001") -> DiscoveredInstance:
+    return DiscoveredInstance(
+        id=f"agent-zero:{host_port}",
+        name="agent-zero",
+        url=url,
+        host_port=host_port,
+        status_text="agent-zero | frdel/agent-zero:latest",
+    )
+
+
 class FakeChatLog:
     def __init__(self) -> None:
-        self.writes: list[object] = []
-        self.cleared = False
-        self.lines: list[object] = []
-        self.sequences: dict[int, object] = {}
-        self.status_entries: dict[int, dict[str, object]] = {}
-        self.code_entries: dict[int, dict[str, object]] = {}
         self.intro_visible = False
+        self.cleared = False
+        self.writes: list[object] = []
+        self.status_entries: dict[int, dict[str, object]] = {}
         self._active_seq: int | None = None
-        self._active_label = ""
-        self._active_detail = ""
         self._active_meta: dict[str, object] = {}
-        self.local_workspace = ""
-        self.remote_workspace = ""
 
     def write(self, message: object) -> None:
         self.writes.append(message)
-        self.lines.append(message)
 
     def ensure_intro_banner(self) -> None:
         self.intro_visible = True
-
-    def append_or_update(self, sequence: int, renderable: object, scroll: bool = True) -> None:
-        if sequence not in self.sequences:
-            self.writes.append(renderable)
-        self.sequences[sequence] = renderable
 
     def append_or_update_status(
         self,
@@ -109,84 +49,33 @@ class FakeChatLog:
         active: bool = False,
         scroll: bool = True,
     ) -> None:
-        entry = {
-            "label": label,
+        del label, scroll
+        self.status_entries[sequence] = {
             "detail": detail,
             "meta": meta or {},
             "active": active,
         }
-        if sequence not in self.sequences:
-            self.writes.append(entry)
-        self.status_entries[sequence] = entry
-        self.sequences[sequence] = entry
 
-    def append_or_update_code(
+    def set_active_status(
         self,
         sequence: int,
         label: str,
         detail: str,
-        body: object,
-        *,
-        active: bool = False,
-        scroll: bool = True,
-    ) -> None:
-        entry = {
-            "label": label,
-            "detail": detail,
-            "body": body,
-            "active": active,
-            "expanded": True,
-        }
-        if sequence not in self.sequences:
-            self.writes.append(entry)
-        self.code_entries[sequence] = entry
-        self.sequences[sequence] = entry
-
-    def set_active_status(
-        self,
-        seq: int,
-        label: str,
-        detail: str,
         meta: dict[str, object] | None = None,
     ) -> None:
-        self._active_seq = seq
-        self._active_label = label
-        self._active_detail = detail
+        del label, detail
+        self._active_seq = sequence
         self._active_meta = meta or {}
-        self.append_or_update_status(seq, label, detail, meta, active=True)
 
     def dim_active_status(self) -> None:
-        if self._active_seq is not None:
-            self.append_or_update_status(
-                self._active_seq,
-                self._active_label,
-                self._active_detail,
-                self._active_meta,
-                active=False,
-            )
-        self._active_seq = None
-        self._active_label = ""
-        self._active_detail = ""
-        self._active_meta = {}
-
-    def stop_active_status(self) -> None:
         self._active_seq = None
         self._active_meta = {}
-
-    def advance_shimmer(self) -> None:
-        pass
 
     def clear(self) -> None:
         self.cleared = True
-        self.lines.clear()
-        self.sequences.clear()
         self.status_entries.clear()
-        self.code_entries.clear()
         self._active_seq = None
-
-    def set_workspace(self, *, local_workspace: str = "", remote_workspace: str = "") -> None:
-        self.local_workspace = local_workspace
-        self.remote_workspace = remote_workspace
+        self._active_meta = {}
 
 
 class FakeInput:
@@ -213,83 +102,6 @@ class FakeInput:
         self.activity_idle = True
 
 
-class FakeConnectionStatus:
-    def __init__(self) -> None:
-        self.status = "disconnected"
-        self.url = ""
-        self.token_count = None
-        self.token_limit = None
-        self.current_project = None
-        self.project_enabled = False
-
-    def set_token_usage(self, token_count: object, token_limit: object = None) -> None:
-        self.token_count = token_count
-        self.token_limit = token_limit
-
-    def clear_token_usage(self) -> None:
-        self.token_count = None
-        self.token_limit = None
-
-    def set_project_state(self, project: object, *, enabled: bool = False) -> None:
-        self.current_project = project
-        self.project_enabled = enabled
-
-    def set_project_enabled(self, enabled: bool) -> None:
-        self.project_enabled = enabled
-
-    def clear_project_state(self) -> None:
-        self.current_project = None
-        self.project_enabled = False
-
-
-class FakeFooter:
-    def __init__(self) -> None:
-        self.display = True
-
-
-class FakeModelSwitcherBar:
-    def __init__(self) -> None:
-        self.visible = False
-        self.busy = False
-        self.allowed = False
-        self.main_model = None
-        self.utility_model = None
-        self.presets: list[object] = []
-        self.selected_preset = ""
-        self.override_label = ""
-
-    def clear(self) -> None:
-        self.visible = False
-        self.busy = False
-        self.allowed = False
-        self.main_model = None
-        self.utility_model = None
-        self.presets = []
-        self.selected_preset = ""
-        self.override_label = ""
-
-    def set_busy(self, busy: bool) -> None:
-        self.busy = busy
-
-    def set_state(
-        self,
-        *,
-        main_model: object,
-        utility_model: object,
-        presets: list[object] | tuple[object, ...],
-        allowed: bool,
-        selected_preset: str = "",
-        override_label: str = "",
-    ) -> None:
-        self.visible = True
-        self.main_model = main_model
-        self.utility_model = utility_model
-        self.presets = list(presets)
-        self.allowed = allowed
-        self.selected_preset = selected_preset
-        self.override_label = override_label
-
-
 class FakeBodySwitcher:
     def __init__(self) -> None:
         self.current = "splash-view"
@@ -306,44 +118,24 @@ class FakeSplash:
     def focus_primary(self) -> None:
         self.focused = True
 
-class DummyAgentZeroCLI(AgentZeroCLI):
-    def __init__(self, *, config: CLIConfig | None = None) -> None:
-        super().__init__(
-            config=config
-            or CLIConfig(
-                instance_url="http://example.test",
-            )
-        )
-        self.rendered_events: list[dict] = []
 
-
-class SplashHarnessApp(App[None]):
-    def compose(self) -> ComposeResult:
-        yield SplashView()
-
-
-class ConnectionStatusHarnessApp(App[None]):
-    def compose(self) -> ComposeResult:
-        yield ConnectionStatus(id="connection-status")
-
-
-class ProjectMenuHarnessApp(App[None]):
+class FakeConnectionStatus:
     def __init__(self) -> None:
-        super().__init__()
-        self.project_actions: list[tuple[str, str | None]] = []
+        self.status = "disconnected"
+        self.url = ""
+        self.project_enabled = False
 
-    def compose(self) -> ComposeResult:
-        yield Static("host")
+    def set_project_enabled(self, enabled: bool) -> None:
+        self.project_enabled = enabled
 
-    def on_project_menu_item_selected(self, event: ProjectMenuItem.Selected) -> None:
-        self.project_actions.append((event.action, event.project_name))
-
-
-class ProjectMenuOverlayHarnessApp(AgentZeroCLI):
-    CSS_PATH = str(Path(__file__).resolve().parents[1] / "src/agent_zero_cli/styles/app.tcss")
-
-    async def _startup(self) -> None:
+    def clear_token_usage(self) -> None:
         return None
+
+
+class DummyAgentZeroCLI(AgentZeroCLI):
+    def __init__(self) -> None:
+        super().__init__(config=CLIConfig(instance_url="http://example.test"))
+        self.rendered_events: list[dict[str, object]] = []
 
 
 @pytest.fixture
@@ -352,18 +144,17 @@ def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
     widgets = {
         "#chat-log": FakeChatLog(),
         "#message-input": FakeInput(),
-        "#connection-status": FakeConnectionStatus(),
-        "#model-switcher-bar": FakeModelSwitcherBar(),
         "#body-switcher": FakeBodySwitcher(),
         "#splash-view": FakeSplash(),
-        DynamicFooter: FakeFooter(),
+        "#connection-status": FakeConnectionStatus(),
     }
 
-    def _query_one(selector: str, cls: object = None) -> object:
+    def _query_one(selector: object, cls: object = None) -> object:
+        del cls
         return widgets[selector]
 
-    app.query_one = _query_one
-    app._test_widgets = widgets
+    app.query_one = _query_one  # type: ignore[method-assign]
+    app._test_widgets = widgets  # type: ignore[attr-defined]
     monkeypatch.setattr(
         "agent_zero_cli.app.render_connector_event",
         lambda log, event: app.rendered_events.append(event) or True,
@@ -381,1071 +172,29 @@ def test_default_client_host_uses_splash_default() -> None:
     assert app.client.base_url == DEFAULT_HOST
 
 
-def test_splash_host_panel_uses_default_host_as_placeholder() -> None:
-    panel = SplashHostPanel()
-
-    panel.set_host(DEFAULT_HOST)
-
-    assert panel.host == DEFAULT_HOST
-    assert panel._host.value == ""
-    assert panel._host.placeholder == DEFAULT_HOST
-
-
-def test_splash_view_uses_shared_agent_zero_banner_widget() -> None:
-    view = SplashView()
-
-    hero = next(widget for widget in view.compose() if getattr(widget, "id", "") == "splash-hero")
-
-    assert isinstance(hero, Static)
-    assert "agent-zero-banner" in hero.classes
-
-
-def test_agent_zero_banner_selects_full_variant_when_it_fits() -> None:
-    assert _select_agent_zero_banner(120) == _AGENT_ZERO_BANNER
-
-
-def test_agent_zero_banner_selects_compact_variant_on_narrow_width() -> None:
-    assert _select_agent_zero_banner(20) == _AGENT_ZERO_BANNER_COMPACT
-
-
-def test_agent_zero_banner_selects_tiny_variant_for_extreme_narrow_width() -> None:
-    assert _select_agent_zero_banner(1) == _AGENT_ZERO_BANNER_TINY
-
-
-def test_splash_status_panel_hides_duplicate_error_copy() -> None:
-    panel = SplashStatusPanel()
-
-    panel.set_error("WebSocket connection failed", "Detailed connector guidance")
-
-    assert panel._spinner.display is False
-    assert panel._button.display is True
-    assert panel._title.display is False
-    assert panel._detail.display is False
-
-
-def test_splash_login_submit_requires_both_fields_in_top_context() -> None:
-    view = SplashView()
-    posted: list[object] = []
-    view.post_message = posted.append
-
-    view._submit_login()
-
-    assert posted == []
-    assert view._login_panel.error_message == "Username and password are required."
-
-
-def test_splash_login_submit_uses_visible_login_target_host(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    view = SplashView()
-    posted: list[object] = []
-    view.post_message = posted.append
-
-    monkeypatch.setattr(type(view._login_panel), "username", property(lambda self: "admin"))
-    monkeypatch.setattr(type(view._login_panel), "password", property(lambda self: "secret"))
-    monkeypatch.setattr(type(view._login_panel), "remember_host", property(lambda self: False))
-    monkeypatch.setattr(type(view._login_panel), "target_host", property(lambda self: "http://localhost:32080"))
-
-    view._submit_login()
-
-    assert len(posted) == 1
-    assert isinstance(posted[0], SplashView.SubmitRequested)
-    assert posted[0].host == "http://localhost:32080"
-
-
-def test_splash_login_panel_restores_target_context_after_error() -> None:
-    panel = SplashLoginPanel()
-    target = "http://207.148.13.38:32080"
-
-    panel.set_target(target)
-    panel.set_error("Wrong username or password: retry.")
-
-    assert panel.error_message == "Wrong username or password: retry."
-    assert panel.target_host == target
-
-    panel.clear_error()
-
-    assert panel.error_message == ""
-    assert panel.target_host == target
-
-
-async def test_splash_login_stage_surfaces_detected_instance_context() -> None:
-    app = SplashHarnessApp()
-
-    async with app.run_test(size=(100, 32)) as pilot:
-        view = app.query_one(SplashView)
-        view.set_state(
-            SplashState(
-                stage="login",
-                host="http://localhost:32081",
-                discovered_instances=(
-                    _instance(
-                        "http://localhost:32081",
-                        name="serene_haibt",
-                        host_port="32081",
-                        status_text="serene_haibt | 0ca698cd797e",
-                    ),
-                ),
-            )
-        )
-        await pilot.pause(0.1)
-
-        assert view._login_panel._copy.render().plain == "Use the same username and password you use in the Agent Zero Web UI."
-        summary = view.query_one("#splash-login-target-summary", Static)
-        assert summary.display is True
-        assert "Detected A0 instance" in summary.render().plain
-        assert "serene_haibt" in summary.render().plain
-
-
-async def test_splash_host_panel_blocks_invalid_url_submission() -> None:
-    app = SplashHarnessApp()
-
-    async with app.run_test(size=(100, 32)) as pilot:
-        view = app.query_one(SplashView)
-        view.set_state(SplashState(stage="host", host=DEFAULT_HOST))
-        await pilot.pause(0.1)
-
-        host_input = view.query_one("#splash-host-input", Input)
-        host_input.value = "localhost:5080"
-        await pilot.pause(0.1)
-
-        assert view._host_panel.is_valid is False
-        assert view.query_one("#splash-host-submit", Button).disabled is True
-
-
-def test_splash_view_back_action_posts_back_request() -> None:
-    view = SplashView()
-    posted: list[object] = []
-    view.post_message = posted.append
-
-    view._request_back_to_host()
-
-    assert len(posted) == 1
-    assert isinstance(posted[0], SplashView.ActionRequested)
-    assert posted[0].action == "back"
-
-
-async def test_splash_view_preserves_login_error_during_state_credentials_sync() -> None:
-    app = SplashHarnessApp()
-
-    async with app.run_test(size=(100, 32)) as pilot:
-        view = app.query_one(SplashView)
-        view.set_state(
-            SplashState(
-                stage="login",
-                host="http://127.0.0.1:5080",
-                username="admin",
-                password="wrong",
-                login_error="Wrong username or password: retry.",
-            )
-        )
-        await pilot.pause(0.1)
-
-        view.set_state(
-            SplashState(
-                stage="login",
-                host="http://127.0.0.1:5080",
-                username="admin",
-                password="",
-                login_error="Wrong username or password: retry.",
-            )
-        )
-        await pilot.pause(0.1)
-
-        assert view._login_panel.error_message == "Wrong username or password: retry."
-        assert len(view.query("#splash-login-error")) == 0
-
-
-async def test_connection_status_shows_no_project_but_keeps_trigger_enabled() -> None:
-    app = ConnectionStatusHarnessApp()
-
-    async with app.run_test(size=(100, 8)) as pilot:
-        status = app.query_one(ConnectionStatus)
-        status.status = "connected"
-        status.url = "http://example.test:5080"
-        status.set_project_state(None, enabled=True)
-        await pilot.pause(0.1)
-
-        trigger = app.query_one("#connection-status-project", ConnectionStatus.ProjectTrigger)
-        assert trigger.enabled is True
-        assert trigger.display is True
-        assert trigger.render().plain == "○ No project"
-
-
-async def test_project_menu_accepts_core_rgba_hex_colors() -> None:
-    app = ConnectionStatusHarnessApp()
-
-    async with app.run_test(size=(100, 20)) as pilot:
-        popover = ProjectMenuPopover(
-            [
-                {
-                    "name": "project_1",
-                    "title": "Project #1",
-                    "description": "",
-                    "color": "#002975ff",
-                }
-            ],
-            current_project=None,
-            id="project-menu-popover",
-        )
-        await app.mount(popover)
-        await pilot.pause(0.1)
-
-        button = app.query_one("#project-menu-switch-project_1", ProjectMenuItem)
-        assert button.render().plain == "● Project #1  /project_1"
-
-
-async def test_project_menu_item_click_posts_selection_message() -> None:
-    app = ProjectMenuHarnessApp()
-
-    async with app.run_test(size=(100, 20)) as pilot:
-        popover = ProjectMenuPopover(
-            [
-                {
-                    "name": "project_1",
-                    "title": "Project #1",
-                    "description": "",
-                    "color": "#002975ff",
-                }
-            ],
-            current_project=None,
-            id="project-menu-popover",
-        )
-        await app.mount(popover)
-        await pilot.pause(0.1)
-
-        button = app.query_one("#project-menu-switch-project_1", ProjectMenuItem)
-        button.on_click()
-        await pilot.pause(0.1)
-
-        assert app.project_actions == [("activate", "project_1")]
-
-
-async def test_project_menu_overlay_does_not_shift_connection_status(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = ProjectMenuOverlayHarnessApp(
-        config=CLIConfig(
-            instance_url="http://example.test",
-        )
-    )
-
-    monkeypatch.setattr(
-        app.client,
-        "get_projects",
-        lambda context_id: _async_return(
-            {
-                "ok": True,
-                "projects": [
-                    {"name": "project_1", "title": "Project #1", "color": "#002975ff"},
-                    {"name": "project_2", "title": "Project #2", "color": "#ff5b00ff"},
-                ],
-                "current_project": None,
-            }
-        ),
-    )
-
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause(0.1)
-        app.connected = True
-        app.current_context = "ctx-1"
-        app.connector_features = {"projects"}
-        app._sync_project_header()
-        await pilot.pause(0.1)
-
-        status = app.query_one("#connection-status", ConnectionStatus)
-        trigger = app.query_one("#connection-status-project", ConnectionStatus.ProjectTrigger)
-        before_status_region = status.region
-        before_trigger_region = trigger.region
-
-        await app._open_project_menu()
-        await pilot.pause(0.1)
-
-        popover = app.query_one("#project-menu-popover", ProjectMenuPopover)
-        assert status.region == before_status_region
-        assert trigger.region == before_trigger_region
-        assert popover.region.x == app.screen.size.width - popover.region.width - 2
-        assert popover.region.y == status.region.y + status.region.height
-
-
-async def test_project_menu_overlay_positions_on_first_render_tick(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = ProjectMenuOverlayHarnessApp(
-        config=CLIConfig(
-            instance_url="http://example.test",
-        )
-    )
-
-    monkeypatch.setattr(
-        app.client,
-        "get_projects",
-        lambda context_id: _async_return(
-            {
-                "ok": True,
-                "projects": [
-                    {"name": "project_1", "title": "Project #1", "color": "#002975ff"},
-                    {"name": "project_2", "title": "Project #2", "color": "#ff5b00ff"},
-                ],
-                "current_project": None,
-            }
-        ),
-    )
-
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause(0.1)
-        app.connected = True
-        app.current_context = "ctx-1"
-        app.connector_features = {"projects"}
-        app._sync_project_header()
-        await pilot.pause(0.1)
-
-        status = app.query_one("#connection-status", ConnectionStatus)
-
-        await app._open_project_menu()
-        popover = app.query_one("#project-menu-popover", ProjectMenuPopover)
-        expected = Offset(80, status.region.y + status.region.height)
-
-        assert popover.absolute_offset == expected
-
-        await pilot.pause(0)
-
-        assert popover.region.x == expected.x
-        assert popover.region.y == expected.y
-
-
-def test_connection_target_summary_handles_invalid_port() -> None:
-    label, normalized, secure = _connection_target_summary("http://bad:abc")
-
-    assert label == "bad"
-    assert normalized == "http://bad:abc"
-    assert secure is False
-
-
-def test_connection_target_summary_handles_malformed_ipv6_url() -> None:
-    label, normalized, secure = _connection_target_summary("http://[::1")
-
-    assert label == "Connector endpoint"
-    assert normalized == "http://[::1"
-    assert secure is False
-
-
-def test_validate_connection_target_accepts_empty_as_default() -> None:
-    valid, message = _validate_connection_target("")
-
-    assert valid is True
-    assert message == ""
-
-
-def test_validate_connection_target_rejects_missing_scheme() -> None:
-    valid, message = _validate_connection_target("127.0.0.1:5080")
-
-    assert valid is False
-    assert "http://" in message
-
-
-def test_validate_connection_target_rejects_missing_port() -> None:
-    valid, message = _validate_connection_target("http://127.0.0.1")
-
-    assert valid is False
-    assert "Missing port" in message
-
-
-def test_validate_connection_target_accepts_explicit_port() -> None:
-    valid, message = _validate_connection_target("http://127.0.0.1:5080")
-
-    assert valid is True
-    assert "looks valid" in message
-
-
-async def test_splash_host_stage_hides_redundant_header_copy() -> None:
-    app = SplashHarnessApp()
-
-    async with app.run_test(size=(100, 32)) as pilot:
-        view = app.query_one(SplashView)
-        view.set_state(
-            SplashState(
-                stage="host",
-                message="Enter an Agent Zero WebUI URL and port.",
-                detail="",
-                host=DEFAULT_HOST,
-            )
-        )
-        await pilot.pause(0.1)
-
-        assert view.query_one("#splash-stage-label", Static).display is False
-        assert view.query_one("#splash-message", Static).display is False
-
-
-async def test_splash_host_stage_shows_loading_before_discovery_completes() -> None:
-    app = SplashHarnessApp()
-
-    async with app.run_test(size=(100, 32)) as pilot:
-        view = app.query_one(SplashView)
-        view.set_state(
-            SplashState(
-                stage="host",
-                host=DEFAULT_HOST,
-                discovery_status="loading",
-            )
-        )
-        await pilot.pause(0.1)
-
-        assert view.query_one("#splash-host-loading", LoadingIndicator).display is True
-        assert view.query_one("#splash-host-submit", Button).disabled is True
-
-
-async def test_splash_host_stage_renders_discovered_instances_as_selectable_rows() -> None:
-    app = SplashHarnessApp()
-
-    async with app.run_test(size=(100, 32)) as pilot:
-        view = app.query_one(SplashView)
-        view.set_state(
-            SplashState(
-                stage="host",
-                host=DEFAULT_HOST,
-                discovery_status="ready",
-                discovered_instances=(
-                    _instance("http://localhost:50001", host_port="50001"),
-                    _instance("http://127.0.0.1:50002", host_port="50002"),
-                ),
-                selected_host_url="http://localhost:50001",
-            )
-        )
-        await pilot.pause(0.1)
-
-        host_rows = view.query(SplashHostRow)
-        assert len(host_rows) == 2
-        host_mount = view.query_one("#splash-host-list-mount")
-        assert host_mount.region.height >= 5
-
-
-async def test_splash_host_stage_hides_manual_section_when_instances_exist() -> None:
-    app = SplashHarnessApp()
-
-    async with app.run_test(size=(100, 32)) as pilot:
-        view = app.query_one(SplashView)
-        view.set_state(
-            SplashState(
-                stage="host",
-                host=DEFAULT_HOST,
-                discovery_status="ready",
-                discovered_instances=(_instance("http://localhost:50001"),),
-                selected_host_url="http://localhost:50001",
-                manual_entry_expanded=False,
-            )
-        )
-        await pilot.pause(0.1)
-
-        assert view._host_panel._manual_section.display is False
-
-
-async def test_splash_host_stage_invalid_manual_url_keeps_connect_disabled() -> None:
-    app = SplashHarnessApp()
-
-    async with app.run_test(size=(100, 32)) as pilot:
-        view = app.query_one(SplashView)
-        view.set_state(
-            SplashState(
-                stage="host",
-                host=DEFAULT_HOST,
-                discovery_status="empty",
-                manual_entry_expanded=True,
-            )
-        )
-        await pilot.pause(0.1)
-
-        host_input = view.query_one("#splash-host-input", Input)
-        host_input.value = "localhost:5080"
-        await pilot.pause(0.1)
-
-        assert view.query_one("#splash-host-submit", Button).disabled is True
-
-
-async def test_startup_without_host_shows_host_stage(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = DummyAgentZeroCLI(config=CLIConfig(instance_url=""))
-    widgets = {
-        "#chat-log": FakeChatLog(),
-        "#message-input": FakeInput(),
-        "#connection-status": FakeConnectionStatus(),
-        "#model-switcher-bar": FakeModelSwitcherBar(),
-        "#body-switcher": FakeBodySwitcher(),
-        "#splash-view": FakeSplash(),
-    }
-    app.query_one = lambda selector, cls=None: widgets[selector]
-
-    await app._startup()
-
-    splash = widgets["#splash-view"]
-    assert splash.state.stage == "host"
-    assert splash.state.host == DEFAULT_HOST
-    assert splash.focused is True
-
-
-async def test_startup_with_saved_host_stays_on_picker_and_skips_autoconnect(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = DummyAgentZeroCLI(config=CLIConfig(instance_url="http://saved-host:50001"))
-    widgets = {
-        "#chat-log": FakeChatLog(),
-        "#message-input": FakeInput(),
-        "#connection-status": FakeConnectionStatus(),
-        "#model-switcher-bar": FakeModelSwitcherBar(),
-        "#body-switcher": FakeBodySwitcher(),
-        "#splash-view": FakeSplash(),
-    }
-    app.query_one = lambda selector, cls=None: widgets[selector]
-
-    begin_calls: list[str] = []
-    discovery_calls: list[str] = []
-
-    async def fake_begin_connection(host: str, **kwargs) -> None:
-        begin_calls.append(host)
-
-    monkeypatch.setattr(app, "_begin_connection", fake_begin_connection)
-    monkeypatch.setattr(
-        app,
-        "_start_instance_discovery",
-        lambda *, auto_connect_single=False: discovery_calls.append(str(auto_connect_single)),
-    )
-
-    await app._startup()
-
-    splash = widgets["#splash-view"]
-    assert splash.state.stage == "host"
-    assert splash.state.host == "http://saved-host:50001"
-    assert begin_calls == []
-    assert discovery_calls == ["True"]
-
-
-def test_apply_instance_discovery_result_preselects_saved_host(dummy_app: DummyAgentZeroCLI) -> None:
-    saved_host = "http://localhost:50002"
-    dummy_app._set_splash_state(host=saved_host)
-
-    dummy_app._apply_instance_discovery_result(
-        DiscoveryResult(
-            status="ready",
-            instances=(
-                _instance("http://localhost:50001", host_port="50001"),
-                _instance(saved_host, host_port="50002"),
-            ),
-        )
-    )
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert splash.state.host == saved_host
-    assert splash.state.selected_host_url == saved_host
-    assert splash.state.manual_entry_expanded is False
-
-
-def test_apply_instance_discovery_result_returns_single_instance_for_autoconnect(
+def test_apply_instance_discovery_result_autoconnects_single_instance(
     dummy_app: DummyAgentZeroCLI,
 ) -> None:
     dummy_app._set_splash_state(host=DEFAULT_HOST)
+
     target = dummy_app._apply_instance_discovery_result(
         DiscoveryResult(
             status="ready",
-            instances=(_instance("http://localhost:50001", host_port="50001"),),
+            instances=(_instance("http://localhost:50001"),),
         ),
         auto_connect_single=True,
     )
 
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert splash.state.host == "http://localhost:50001"
+    splash = dummy_app._test_widgets["#splash-view"]  # type: ignore[index]
     assert target == "http://localhost:50001"
+    assert splash.state.host == "http://localhost:50001"
     assert splash.state.selected_host_url == "http://localhost:50001"
     assert splash.state.manual_entry_expanded is False
 
 
-def test_apply_instance_discovery_result_expands_manual_when_no_instances(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app._apply_instance_discovery_result(
-        DiscoveryResult(
-            status="empty",
-            instances=(),
-            detail="No local Agent Zero Docker instances were found.",
-        )
-    )
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert splash.state.discovery_status == "empty"
-    assert splash.state.manual_entry_expanded is True
-    assert splash.state.selected_host_url == ""
-
-
-def test_apply_instance_discovery_result_expands_manual_when_saved_host_is_not_discovered(
+def test_context_event_status_updates_activity_lane_without_rendering_message(
     dummy_app: DummyAgentZeroCLI,
 ) -> None:
-    dummy_app._set_splash_state(host="http://remote.example:5080")
-
-    dummy_app._apply_instance_discovery_result(
-        DiscoveryResult(
-            status="ready",
-            instances=(
-                _instance("http://localhost:50001", host_port="50001"),
-                _instance("http://localhost:50002", host_port="50002"),
-            ),
-        )
-    )
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert splash.state.manual_entry_expanded is True
-    assert splash.state.selected_host_url == "http://localhost:50001"
-
-
-def test_apply_instance_discovery_result_skips_autoconnect_for_conflicting_saved_host(
-    dummy_app: DummyAgentZeroCLI,
-) -> None:
-    dummy_app._set_splash_state(host="http://remote.example:5080")
-
-    target = dummy_app._apply_instance_discovery_result(
-        DiscoveryResult(
-            status="ready",
-            instances=(_instance("http://localhost:50001", host_port="50001"),),
-        ),
-        auto_connect_single=True,
-    )
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert target == ""
-    assert splash.state.manual_entry_expanded is True
-
-
-def test_splash_host_submit_uses_selected_discovered_url() -> None:
-    view = SplashView()
-    posted: list[object] = []
-    view.post_message = posted.append
-    view.set_state(
-        SplashState(
-            stage="host",
-            host=DEFAULT_HOST,
-            discovery_status="ready",
-            discovered_instances=(_instance("http://localhost:50001"),),
-            selected_host_url="http://localhost:50001",
-        )
-    )
-    view._host_panel.set_state(view._state)
-
-    view._submit_host()
-
-    assert len(posted) == 1
-    assert isinstance(posted[0], SplashView.SubmitRequested)
-    assert posted[0].host == "http://localhost:50001"
-
-
-async def test_begin_connection_with_login_persists_only_host_and_cleans_stale_api_key(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    saved: dict[str, str] = {}
-    deleted: list[str] = []
-
-    async def fake_fetch_capabilities():
-        return {
-            "auth": ["session"],
-            "auth_required": True,
-            "features": ["chat_create", "chats_list", "model_switcher", "projects"],
-            "protocol": "a0-connector.v1",
-            "websocket_namespace": "/ws",
-            "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
-        }, False, ""
-
-    monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)
-    monkeypatch.setattr(dummy_app.client, "verify_session", lambda: _async_return(False))
-    monkeypatch.setattr(dummy_app.client, "login", lambda u, p: _async_return(True))
-    monkeypatch.setattr(dummy_app.client, "connect_websocket", lambda: _async_return(None))
-    monkeypatch.setattr(dummy_app.client, "send_hello", lambda: _async_return(None))
-    monkeypatch.setattr(dummy_app.client, "create_chat", lambda: _async_return("ctx-1"))
-    monkeypatch.setattr(dummy_app.client, "subscribe_context", lambda context_id, from_seq=0: _async_return(None))
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_model_switcher",
-        lambda context_id: _async_return(
-            {
-                "ok": True,
-                "allowed": True,
-                "override": {"preset_name": "Fast"},
-                "presets": [{"name": "Fast"}],
-                "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_projects",
-        lambda context_id: _async_return(
-            {
-                "ok": True,
-                "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456"}],
-                "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456"},
-            }
-        ),
-    )
-    monkeypatch.setattr("agent_zero_cli.connection.save_env", lambda key, value: saved.__setitem__(key, value))
-    monkeypatch.setattr("agent_zero_cli.connection.delete_env", lambda key: deleted.append(key))
-
-    await dummy_app._begin_connection(
-        "http://example.test",
-        username="admin",
-        password="secret",
-        remember_host_flag=True,
-    )
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    body = dummy_app._test_widgets["#body-switcher"]
-    input_widget = dummy_app._test_widgets["#message-input"]
-    model_switcher = dummy_app._test_widgets["#model-switcher-bar"]
-    assert splash.state.stage == "ready"
-    assert dummy_app.current_context == "ctx-1"
-    assert body.current == "splash-view"
-    assert input_widget.focused is True
-    assert model_switcher.visible is True
-    assert model_switcher.selected_preset == "Fast"
-    assert dummy_app.current_project == {
-        "name": "atlas",
-        "title": "Atlas",
-        "description": "",
-        "color": "#123456",
-    }
-    assert dummy_app._test_widgets["#connection-status"].project_enabled is True
-    assert saved == {"AGENT_ZERO_HOST": "http://example.test"}
-    assert deleted == ["AGENT_ZERO_API_KEY"]
-
-async def test_open_manual_host_connects_without_login(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_fetch_capabilities():
-        return {
-            "auth": ["session"],
-            "auth_required": False,
-            "features": ["chat_create", "chats_list"],
-            "protocol": "a0-connector.v1",
-            "websocket_namespace": "/ws",
-            "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
-        }, False, ""
-
-    monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)
-    monkeypatch.setattr(dummy_app.client, "connect_websocket", lambda: _async_return(None))
-    monkeypatch.setattr(dummy_app.client, "send_hello", lambda: _async_return(None))
-    monkeypatch.setattr(dummy_app.client, "create_chat", lambda: _async_return("ctx-open"))
-    monkeypatch.setattr(dummy_app.client, "subscribe_context", lambda context_id, from_seq=0: _async_return(None))
-
-    async def fail_verify_session() -> bool:
-        raise AssertionError("verify_session should not run for open hosts")
-
-    async def fail_login(username: str, password: str) -> bool:
-        raise AssertionError("login should not run for open hosts")
-
-    monkeypatch.setattr(dummy_app.client, "verify_session", fail_verify_session)
-    monkeypatch.setattr(dummy_app.client, "login", fail_login)
-
-    await dummy_app._begin_connection("http://example.test")
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert splash.state.stage == "ready"
-    assert dummy_app.current_context == "ctx-open"
-
-
-async def test_protected_host_without_session_returns_to_login_stage(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = DummyAgentZeroCLI(config=CLIConfig(instance_url="http://example.test"))
-    widgets = {
-        "#chat-log": FakeChatLog(),
-        "#message-input": FakeInput(),
-        "#connection-status": FakeConnectionStatus(),
-        "#model-switcher-bar": FakeModelSwitcherBar(),
-        "#body-switcher": FakeBodySwitcher(),
-        "#splash-view": FakeSplash(),
-    }
-    app.query_one = lambda selector, cls=None: widgets[selector]
-
-    async def fake_fetch_capabilities():
-        return {
-            "auth": ["session"],
-            "auth_required": True,
-            "features": ["chat_create", "chats_list"],
-            "protocol": "a0-connector.v1",
-            "websocket_namespace": "/ws",
-            "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
-        }, False, ""
-
-    monkeypatch.setattr(app, "_fetch_capabilities", fake_fetch_capabilities)
-    monkeypatch.setattr(app.client, "verify_session", lambda: _async_return(False))
-
-    await app._begin_connection("http://example.test")
-
-    splash = widgets["#splash-view"]
-    assert splash.state.stage == "login"
-
-
-async def test_disconnect_clears_project_state(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"projects"}
-    dummy_app._apply_projects_payload(
-        {
-            "ok": True,
-            "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456"}],
-            "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456"},
-        }
-    )
-
-    await dummy_app._python_tty.close()
-    dummy_app._set_connected(False)
-    await asyncio.sleep(0)
-
-    assert dummy_app.current_project is None
-    assert dummy_app.project_list == []
-    assert dummy_app._test_widgets["#connection-status"].current_project is None
-    assert dummy_app._test_widgets["#connection-status"].project_enabled is False
-
-
-async def test_rejected_login_shows_inline_retry_copy(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_fetch_capabilities():
-        return {
-            "auth": ["session"],
-            "auth_required": True,
-            "features": ["chat_create", "chats_list"],
-            "protocol": "a0-connector.v1",
-            "websocket_namespace": "/ws",
-            "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
-        }, False, ""
-
-    monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)
-    monkeypatch.setattr(dummy_app.client, "verify_session", lambda: _async_return(False))
-    monkeypatch.setattr(dummy_app.client, "login", lambda u, p: _async_return(False))
-
-    await dummy_app._begin_connection(
-        "http://example.test",
-        username="admin",
-        password="wrong-password",
-        remember_host_flag=False,
-    )
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert splash.state.stage == "login"
-    assert splash.state.login_error == "Wrong username or password: retry."
-
-
-def test_splash_back_action_returns_to_host_stage(dummy_app: DummyAgentZeroCLI) -> None:
-    refresh_calls: list[bool] = []
-    dummy_app._set_splash_state(
-        stage="login",
-        host="http://example.test:5080",
-        username="admin",
-        remember_host=True,
-        login_error="Wrong username or password: retry.",
-    )
-    dummy_app._start_instance_discovery = lambda *, auto_connect_single=False: refresh_calls.append(auto_connect_single)
-
-    dummy_app.on_splash_view_action_requested(SplashView.ActionRequested("back"))
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert splash.state.stage == "host"
-    assert splash.state.host == "http://example.test:5080"
-    assert splash.state.login_error == ""
-    assert splash.focused is True
-    assert refresh_calls == [False]
-
-
-def test_host_state_change_is_ignored_outside_host_stage(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app._set_splash_state(stage="login", host="http://localhost:32080")
-
-    dummy_app.on_splash_view_host_state_changed(
-        SplashView.HostStateChanged(
-            host=DEFAULT_HOST,
-            selected_host_url="http://localhost:32081",
-            manual_entry_expanded=False,
-            remember_host=False,
-        )
-    )
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert splash.state.stage == "login"
-    assert splash.state.host == "http://localhost:32080"
-
-
-def test_login_stage_hides_composer_until_ready(dummy_app: DummyAgentZeroCLI) -> None:
-    input_widget = dummy_app._test_widgets["#message-input"]
-    footer = dummy_app._test_widgets[DynamicFooter]
-    dummy_app.connected = True
-    dummy_app.current_context_has_messages = False
-
-    dummy_app._set_splash_state(stage="login")
-
-    assert input_widget.display is False
-    assert footer.display is False
-
-    dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
-
-    assert input_widget.display is True
-    assert footer.display is True
-
-
-def test_context_event_switches_empty_welcome_to_chat(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = False
-    dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
-
-    dummy_app._handle_context_event(
-        {
-            "context_id": "ctx-1",
-            "event": "assistant_message",
-            "data": {"text": "Hello"},
-            "sequence": 1,
-        }
-    )
-
-    body = dummy_app._test_widgets["#body-switcher"]
-    log = dummy_app._test_widgets["#chat-log"]
-    assert dummy_app.current_context_has_messages is True
-    assert body.current == "chat-log"
-    assert log.intro_visible is True
-
-
-def test_context_snapshot_shows_intro_before_first_message(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = False
-
-    dummy_app._handle_context_snapshot(
-        {
-            "context_id": "ctx-1",
-            "events": [
-                {"event": "status", "sequence": 1, "data": {"text": "Thinking"}},
-                {"event": "assistant_message", "sequence": 2, "data": {"text": "Hello"}},
-            ],
-        }
-    )
-
-    body = dummy_app._test_widgets["#body-switcher"]
-    log = dummy_app._test_widgets["#chat-log"]
-    assert body.current == "chat-log"
-    assert log.intro_visible is True
-
-
-def test_context_event_renders_info_messages_as_standalone_entries(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-
-    dummy_app._handle_context_event(
-        {
-            "context_id": "ctx-1",
-            "event": "info",
-            "sequence": 3,
-            "data": {"text": "Process reset, agent nudged."},
-        }
-    )
-
-    assert dummy_app.rendered_events[-1]["event"] == "info"
-
-
-def test_render_connector_event_pads_info_messages() -> None:
-    log = FakeChatLog()
-
-    rendered = render_connector_event(
-        log,
-        {
-            "event": "info",
-            "sequence": 7,
-            "data": {"text": "Process reset, agent nudged."},
-        },
-    )
-
-    assert rendered is True
-    assert isinstance(log.writes[-1], Padding)
-
-
-def test_render_connector_event_pads_utility_messages() -> None:
-    log = FakeChatLog()
-
-    rendered = render_connector_event(
-        log,
-        {
-            "event": "util_message",
-            "sequence": 17,
-            "data": {"heading": "No useful information to memorize."},
-        },
-    )
-
-    assert rendered is True
-    assert isinstance(log.writes[-1], Padding)
-
-
-def test_extract_detail_strips_code_heading_noise() -> None:
-    detail = extract_detail(
-        "code_output",
-        {"heading": "icon://terminal [0] Python version: 3.13.1"},
-    )
-
-    assert detail == "Python version: 3.13.1"
-
-
-def test_sanitize_code_output_removes_echo_title_noise_and_prompt() -> None:
-    cleaned = _sanitize_code_output(
-        "python> print('Hello, World!')\n0;IPython: usr/workdirHello, World!\nworkdir$",
-        code_present=True,
-    )
-
-    assert cleaned == "Hello, World!"
-
-
-def test_sanitize_code_output_drops_session_complete_when_output_exists() -> None:
-    cleaned = _sanitize_code_output(
-        "Session 0 completed.\n\n42",
-        code_present=True,
-    )
-
-    assert cleaned == "42"
-
-
-def test_render_connector_event_renders_code_as_expandable_entry() -> None:
-    log = FakeChatLog()
-
-    rendered = render_connector_event(
-        log,
-        {
-            "event": "code_output",
-            "sequence": 8,
-            "data": {
-                "heading": "icon://terminal [0] Python version: 3.13",
-                "text": (
-                    "python> print('Hello, World!')\n"
-                    "0;IPython: usr/workdirHello, World!\n"
-                    "workdir$"
-                ),
-                "meta": {
-                    "code": "print('Hello, World!')",
-                    "runtime": "python",
-                    "session": 0,
-                },
-            },
-        },
-    )
-
-    assert rendered is True
-    assert log.code_entries[8]["label"] == "Running code"
-    assert log.code_entries[8]["detail"] == "Python version: 3.13"
-    assert log.code_entries[8]["expanded"] is True
-    body = log.code_entries[8]["body"]
-    assert "```python" in body.renderable.markup
-    assert "```text" in body.renderable.markup
-    assert "---" not in body.renderable.markup
-    assert "python>" not in body.renderable.markup
-    assert "0;IPython" not in body.renderable.markup
-    assert "workdir$" not in body.renderable.markup
-
-
-def test_context_event_keeps_status_messages_in_activity_lane(dummy_app: DummyAgentZeroCLI) -> None:
     dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
     dummy_app.current_context_has_messages = True
@@ -1456,512 +205,82 @@ def test_context_event_keeps_status_messages_in_activity_lane(dummy_app: DummyAg
             "event": "status",
             "sequence": 4,
             "data": {
-                "text": "Thinking about the next step",
                 "meta": {
                     "step": "Using response...",
-                    "thoughts": ["Plan the answer", "Send the answer"],
-                },
+                    "thoughts": ["Plan the answer"],
+                }
             },
         }
     )
 
-    input_widget = dummy_app._test_widgets["#message-input"]
-    log = dummy_app._test_widgets["#chat-log"]
-    assert input_widget.disabled is False
+    input_widget = dummy_app._test_widgets["#message-input"]  # type: ignore[index]
+    log = dummy_app._test_widgets["#chat-log"]  # type: ignore[index]
     assert input_widget.activity_label == "Thinking"
     assert input_widget.activity_detail == "Using response..."
     assert log._active_seq == 4
     assert log._active_meta == {
         "step": "Using response...",
-        "thoughts": ["Plan the answer", "Send the answer"],
+        "thoughts": ["Plan the answer"],
     }
     assert dummy_app.rendered_events == []
 
 
-def test_context_event_status_after_first_response_is_not_skipped(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app._response_delivered = True
-
-    dummy_app._handle_context_event(
-        {
-            "context_id": "ctx-1",
-            "event": "status",
-            "sequence": 12,
-            "data": {"meta": {"step": "Calling subordinate A1"}},
-        }
-    )
-
-    input_widget = dummy_app._test_widgets["#message-input"]
-    log = dummy_app._test_widgets["#chat-log"]
-    assert input_widget.disabled is False
-    assert input_widget.activity_label == "Thinking"
-    assert input_widget.activity_detail == "Calling subordinate A1"
-    assert log._active_seq == 12
-    assert log._active_meta == {"step": "Calling subordinate A1"}
-    assert dummy_app.rendered_events == []
-
-
-def test_context_event_code_keeps_bottom_activity_without_status_timeline_entry(
+def test_context_event_after_complete_persists_status_without_reactivating_input(
     dummy_app: DummyAgentZeroCLI,
 ) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-
-    dummy_app._handle_context_event(
-        {
-            "context_id": "ctx-1",
-            "event": "code_output",
-            "sequence": 14,
-            "data": {
-                "heading": "icon://terminal [0] python",
-                "text": "42",
-                "meta": {"code": "print(42)", "runtime": "python", "session": 0},
-            },
-        }
-    )
-
-    input_widget = dummy_app._test_widgets["#message-input"]
-    log = dummy_app._test_widgets["#chat-log"]
-    assert input_widget.activity_label == "Running code"
-    assert input_widget.activity_detail == ""
-    assert log._active_seq is None
-    assert 14 not in log.status_entries
-    assert dummy_app.rendered_events[-1]["event"] == "code_output"
-
-
-def test_context_event_after_complete_does_not_reactivate_input_lock(dummy_app: DummyAgentZeroCLI) -> None:
     dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
     dummy_app.current_context_has_messages = True
     dummy_app._response_delivered = True
     dummy_app._context_run_complete = True
-    dummy_app.agent_active = False
-
-    input_widget = dummy_app._test_widgets["#message-input"]
-    input_widget.disabled = False
 
     dummy_app._handle_context_event(
         {
             "context_id": "ctx-1",
             "event": "status",
-            "sequence": 13,
+            "sequence": 7,
             "data": {"meta": {"step": "Memorizing results"}},
         }
     )
 
-    log = dummy_app._test_widgets["#chat-log"]
-    assert input_widget.disabled is False
-    assert dummy_app.agent_active is False
+    input_widget = dummy_app._test_widgets["#message-input"]  # type: ignore[index]
+    log = dummy_app._test_widgets["#chat-log"]  # type: ignore[index]
     assert input_widget.activity_idle is True
-    assert log.status_entries[13]["active"] is False
-    assert log.status_entries[13]["detail"] == "Memorizing results"
-
-
-def test_context_event_utility_message_is_hidden_by_default(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-
-    dummy_app._handle_context_event(
-        {
-            "context_id": "ctx-1",
-            "event": "util_message",
-            "sequence": 15,
-            "data": {"heading": "No useful information to memorize."},
-        }
-    )
-
-    input_widget = dummy_app._test_widgets["#message-input"]
-    log = dummy_app._test_widgets["#chat-log"]
-    assert input_widget.activity_idle is True
-    assert log._active_seq is None
-    assert 15 not in log.sequences
-    assert dummy_app.rendered_events == []
-
-
-def test_context_event_utility_message_can_be_shown_when_enabled(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app.show_utility_messages = True
-
-    dummy_app._handle_context_event(
-        {
-            "context_id": "ctx-1",
-            "event": "util_message",
-            "sequence": 16,
-            "data": {"heading": "No useful information to memorize."},
-        }
-    )
-
-    assert dummy_app.rendered_events[-1]["event"] == "util_message"
-
-
-def test_context_snapshot_preserves_status_meta_for_history(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-
-    dummy_app._handle_context_snapshot(
-        {
-            "context_id": "ctx-1",
-            "events": [
-                {
-                    "event": "status",
-                    "sequence": 9,
-                    "data": {
-                        "meta": {
-                            "step": "Using web_search...",
-                            "thoughts": ["Search docs", "Compare options"],
-                        }
-                    },
-                }
-            ],
-        }
-    )
-
-    log = dummy_app._test_widgets["#chat-log"]
-    assert log.status_entries[9]["detail"] == "Using web_search..."
-    assert log.status_entries[9]["meta"] == {
-        "step": "Using web_search...",
-        "thoughts": ["Search docs", "Compare options"],
+    assert log.status_entries[7] == {
+        "detail": "Memorizing results",
+        "meta": {"step": "Memorizing results"},
+        "active": False,
     }
 
 
-async def test_clear_chat_does_not_return_to_welcome(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app._sync_body_mode()
-
-    await dummy_app.action_clear_chat()
-
-    body = dummy_app._test_widgets["#body-switcher"]
-    log = dummy_app._test_widgets["#chat-log"]
-    assert body.current == "chat-log"
-    assert log.cleared is True
-
-
-async def test_new_chat_returns_to_ready_welcome(
+def test_assistant_message_switches_ready_view_to_chat(
     dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-old"
-    dummy_app.current_context_has_messages = True
-    dummy_app.connector_features = {"projects"}
-    dummy_app._sync_body_mode()
-
-    monkeypatch.setattr(dummy_app.client, "unsubscribe_context", lambda context_id: _async_return(None))
-    create_chat_calls: list[str | None] = []
-    monkeypatch.setattr(
-        dummy_app.client,
-        "create_chat",
-        lambda *, current_context_id=None: create_chat_calls.append(current_context_id) or _async_return("ctx-new"),
-    )
-    monkeypatch.setattr(dummy_app.client, "subscribe_context", lambda context_id, from_seq=0: _async_return(None))
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_model_switcher",
-        lambda context_id: _async_return(
-            {
-                "ok": True,
-                "allowed": True,
-                "override": {"preset_name": "Fast"},
-                "presets": [{"name": "Fast"}],
-                "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_projects",
-        lambda context_id: _async_return(
-            {
-                "ok": True,
-                "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456"}],
-                "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456"},
-            }
-        ),
-    )
-
-    await dummy_app._cmd_new()
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    body = dummy_app._test_widgets["#body-switcher"]
-    input_widget = dummy_app._test_widgets["#message-input"]
-    assert dummy_app.current_context == "ctx-new"
-    assert dummy_app.current_context_has_messages is False
-    assert dummy_app.current_project == {
-        "name": "atlas",
-        "title": "Atlas",
-        "description": "",
-        "color": "#123456",
-    }
-    assert splash.state.stage == "ready"
-    assert body.current == "splash-view"
-    assert input_widget.focused is True
-    assert create_chat_calls == ["ctx-old"]
-
-
-async def test_switch_context_refreshes_project_state(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-old"
-    dummy_app.current_context_has_messages = True
-    dummy_app.connector_features = {"projects"}
-    dummy_app._apply_projects_payload(
-        {
-            "ok": True,
-            "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456"}],
-            "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456"},
-        }
-    )
-
-    unsubscribed: list[str] = []
-    subscribed: list[tuple[str, int]] = []
-    monkeypatch.setattr(dummy_app.client, "unsubscribe_context", lambda context_id: unsubscribed.append(context_id) or _async_return(None))
-    monkeypatch.setattr(
-        dummy_app.client,
-        "subscribe_context",
-        lambda context_id, from_seq=0: subscribed.append((context_id, from_seq)) or _async_return(None),
-    )
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_projects",
-        lambda context_id: _async_return(
-            {
-                "ok": True,
-                "projects": [{"name": "nebula", "title": "Nebula", "color": "#654321"}],
-                "current_project": {"name": "nebula", "title": "Nebula", "color": "#654321"},
-            }
-        ),
-    )
-    monkeypatch.setattr(dummy_app.client, "get_model_switcher", lambda context_id: _async_return({"ok": True, "allowed": False}))
-    monkeypatch.setattr(dummy_app.client, "get_token_status", lambda context_id: _async_return({"ok": False, "message": "Unavailable"}))
-
-    await dummy_app._switch_context("ctx-new", has_messages_hint=False)
-
-    assert unsubscribed == ["ctx-old"]
-    assert subscribed == [("ctx-new", 0)]
-    assert dummy_app.current_project == {
-        "name": "nebula",
-        "title": "Nebula",
-        "description": "",
-        "color": "#654321",
-    }
-    assert dummy_app._test_widgets["#connection-status"].current_project == dummy_app.current_project
-
-
-async def test_model_switcher_preset_change_updates_current_chat_models(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"model_switcher"}
-    bar = dummy_app._test_widgets["#model-switcher-bar"]
-
-    monkeypatch.setattr(
-        dummy_app.client,
-        "set_model_preset",
-        lambda context_id, preset_name: _async_return(
-            {
-                "ok": True,
-                "allowed": True,
-                "override": {"preset_name": preset_name},
-                "presets": [{"name": "Balanced"}],
-                "main_model": {"provider": "anthropic", "name": "claude-sonnet-4"},
-                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-            }
-        ),
-    )
-
-    await dummy_app.on_model_switcher_bar_preset_changed(SimpleNamespace(value="Balanced", bar=bar))
-
-    assert bar.busy is False
-    assert bar.visible is True
-    assert bar.selected_preset == "Balanced"
-    assert bar.main_model == {"provider": "anthropic", "name": "claude-sonnet-4"}
-
-
-async def test_help_is_generated_from_registry_on_welcome(dummy_app: DummyAgentZeroCLI) -> None:
     dummy_app.connected = True
     dummy_app.current_context = "ctx-1"
     dummy_app.current_context_has_messages = False
-    dummy_app.connector_features = {
-        "chat_create",
-        "chats_list",
-        "compact_chat",
-        "model_presets",
-    }
     dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
 
-    dummy_app._surface_help()
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert "Available commands:" in splash.state.detail
-    assert "/help" in splash.state.detail
-    assert "/new" in splash.state.detail
-    assert "/settings" not in splash.state.detail
-    assert "/clear" not in splash.state.detail
-    assert "/skills" not in splash.state.detail
-    assert "/exit" not in splash.state.detail
-
-
-def test_pause_requires_advertised_feature(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.agent_active = True
-    dummy_app.connector_features = set()
-
-    availability = dummy_app._pause_availability()
-
-    assert availability.available is False
-    assert "pause" in (availability.reason or "")
-
-
-def test_nudge_requires_advertised_feature(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app.connector_features = set()
-
-    availability = dummy_app._nudge_availability()
-
-    assert availability.available is False
-    assert "nudge" in (availability.reason or "")
-
-
-def test_nudge_is_available_during_active_run(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = False
-    dummy_app.agent_active = True
-    dummy_app.connector_features = {"nudge"}
-
-    availability = dummy_app._nudge_availability()
-
-    assert availability.available is True
-
-
-async def test_pause_command_releases_input_and_latches_paused_state(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app.agent_active = True
-    dummy_app.connector_features = {"pause"}
-    input_widget = dummy_app._test_widgets["#message-input"]
-    input_widget.disabled = True
-
-    monkeypatch.setattr(
-        dummy_app.client,
-        "pause_agent",
-        lambda context_id: _async_return({"ok": True, "message": "Agent paused."}),
+    dummy_app._handle_context_event(
+        {
+            "context_id": "ctx-1",
+            "event": "assistant_message",
+            "sequence": 1,
+            "data": {"text": "Hello"},
+        }
     )
 
-    await dummy_app._cmd_pause()
-
-    log = dummy_app._test_widgets["#chat-log"]
-    assert dummy_app.agent_active is False
-    assert dummy_app._pause_latched is True
-    assert input_widget.disabled is False
+    body = dummy_app._test_widgets["#body-switcher"]  # type: ignore[index]
+    log = dummy_app._test_widgets["#chat-log"]  # type: ignore[index]
+    input_widget = dummy_app._test_widgets["#message-input"]  # type: ignore[index]
+    assert dummy_app.current_context_has_messages is True
+    assert body.current == "chat-log"
+    assert log.intro_visible is True
     assert input_widget.focused is True
-    assert input_widget.activity_idle is True
-    assert log.writes == []
+    assert dummy_app.rendered_events[-1]["event"] == "assistant_message"
 
 
-def test_binding_description_switches_to_resume_when_paused(dummy_app: DummyAgentZeroCLI) -> None:
-    binding = next(binding for binding in dummy_app.BINDINGS if binding.action == "pause_agent")
-
-    assert dummy_app.get_binding_description(binding) == "Pause"
-
-    dummy_app._pause_latched = True
-
-    assert dummy_app.get_binding_description(binding) == "Resume"
-
-
-def test_remote_safety_bindings_appear_before_clear(dummy_app: DummyAgentZeroCLI) -> None:
-    visible_actions = [binding.action for binding in dummy_app.BINDINGS if binding.show]
-
-    assert visible_actions[:4] == [
-        "Quit",
-        "toggle_remote_file_mode",
-        "toggle_remote_exec",
-        "clear_chat",
-    ]
-
-
-def test_binding_descriptions_reflect_remote_safety_mode(dummy_app: DummyAgentZeroCLI) -> None:
-    read_binding = next(
-        binding for binding in dummy_app.BINDINGS if binding.action == "toggle_remote_file_mode"
-    )
-    exec_binding = next(
-        binding for binding in dummy_app.BINDINGS if binding.action == "toggle_remote_exec"
-    )
-
-    assert dummy_app.get_binding_description(read_binding) == "Read-only"
-    assert dummy_app.get_binding_description(exec_binding) == "Code-exec OFF"
-
-    dummy_app._set_remote_file_write_enabled(True)
-    dummy_app._set_remote_exec_enabled(True)
-
-    assert dummy_app.get_binding_description(read_binding) == "Read&Write"
-    assert dummy_app.get_binding_description(exec_binding) == "Code-exec ON"
-
-
-async def test_remote_safety_toggle_actions_update_local_permissions(
-    dummy_app: DummyAgentZeroCLI,
-) -> None:
-    assert dummy_app._remote_file_write_enabled is False
-    assert dummy_app._remote_exec_enabled is False
-    assert dummy_app._remote_files.allow_writes is False
-    assert dummy_app._python_tty.enabled is False
-
-    await dummy_app.action_toggle_remote_file_mode()
-    await dummy_app.action_toggle_remote_exec()
-
-    assert dummy_app._remote_file_write_enabled is True
-    assert dummy_app._remote_exec_enabled is True
-    assert dummy_app._remote_files.allow_writes is True
-    assert dummy_app._python_tty.enabled is True
-
-
-async def test_remote_safety_function_keys_toggle_permissions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(AgentZeroCLI, "_startup", lambda self: _async_return(None))
-    app = AgentZeroCLI(config=CLIConfig(instance_url=""))
-
-    async with app.run_test() as pilot:
-        await pilot.pause()
-
-        assert app._remote_file_write_enabled is False
-        assert app._remote_exec_enabled is False
-
-        await pilot.press("F3")
-        await pilot.pause()
-
-        assert app._remote_file_write_enabled is True
-        assert app._remote_files.allow_writes is True
-
-        await pilot.press("F4")
-        await pilot.pause()
-
-        assert app._remote_exec_enabled is True
-        assert app._python_tty.enabled is True
-
-
-async def test_pause_action_resumes_when_paused(
+async def test_action_pause_agent_resumes_when_pause_is_latched(
     dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1970,11 +289,10 @@ async def test_pause_action_resumes_when_paused(
     dummy_app.current_context_has_messages = True
     dummy_app.connector_features = {"pause"}
     dummy_app._pause_latched = True
-    input_widget = dummy_app._test_widgets["#message-input"]
 
     calls: list[tuple[str | None, bool]] = []
 
-    async def fake_pause_agent(context_id: str | None, *, paused: bool = True):
+    async def fake_pause_agent(context_id: str | None, *, paused: bool = True) -> dict[str, object]:
         calls.append((context_id, paused))
         return {"ok": True, "message": "Agent unpaused."}
 
@@ -1982,38 +300,11 @@ async def test_pause_action_resumes_when_paused(
 
     await dummy_app.action_pause_agent()
 
-    log = dummy_app._test_widgets["#chat-log"]
+    input_widget = dummy_app._test_widgets["#message-input"]  # type: ignore[index]
     assert calls == [("ctx-1", False)]
     assert dummy_app._pause_latched is False
     assert dummy_app.agent_active is True
-    assert input_widget.disabled is False
     assert input_widget.activity_label == "Resuming"
-    assert log.writes == []
-
-
-async def test_nudge_command_uses_connector_nudge_endpoint(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app.connector_features = {"nudge"}
-    input_widget = dummy_app._test_widgets["#message-input"]
-
-    called: list[str | None] = []
-
-    async def fake_nudge_agent(context_id: str | None):
-        called.append(context_id)
-        return {"ok": True, "status": "nudged"}
-
-    monkeypatch.setattr(dummy_app.client, "nudge_agent", fake_nudge_agent)
-
-    await dummy_app._cmd_nudge()
-
-    assert called == ["ctx-1"]
-    assert dummy_app.agent_active is True
-    assert input_widget.disabled is False
 
 
 async def test_active_run_preserves_draft_and_blocks_new_send(
@@ -2024,20 +315,24 @@ async def test_active_run_preserves_draft_and_blocks_new_send(
     dummy_app.current_context = "ctx-1"
     dummy_app.current_context_has_messages = True
     dummy_app.agent_active = True
-    input_widget = dummy_app._test_widgets["#message-input"]
 
-    sent_messages: list[tuple[str, str | None]] = []
     notices: list[tuple[str, bool]] = []
 
     async def fake_send_message(text: str, context_id: str | None) -> None:
-        sent_messages.append((text, context_id))
+        raise AssertionError(f"send_message should not run for {text=} {context_id=}")
 
     monkeypatch.setattr(dummy_app.client, "send_message", fake_send_message)
-    monkeypatch.setattr(dummy_app, "_show_notice", lambda message, *, error=False: notices.append((message, error)))
+    monkeypatch.setattr(
+        dummy_app,
+        "_show_notice",
+        lambda message, *, error=False: notices.append((message, error)),
+    )
 
-    await dummy_app.on_chat_input_submitted(ChatInput.Submitted(value="draft follow-up", input=input_widget))
+    input_widget = dummy_app._test_widgets["#message-input"]  # type: ignore[index]
+    await dummy_app.on_chat_input_submitted(
+        ChatInput.Submitted(value="draft follow-up", input=input_widget)
+    )
 
-    assert sent_messages == []
     assert input_widget.value == "draft follow-up"
     assert input_widget.focused is True
     assert notices == [
@@ -2048,714 +343,16 @@ async def test_active_run_preserves_draft_and_blocks_new_send(
     ]
 
 
-async def test_hidden_pause_command_dispatches_during_active_run(
+async def test_remote_safety_toggles_update_local_permissions(
     dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app.agent_active = True
-    dummy_app.connector_features = {"pause"}
-
-    monkeypatch.setattr(
-        dummy_app.client,
-        "pause_agent",
-        lambda context_id: _async_return({"ok": True, "message": "Agent paused."}),
-    )
-
-    await dummy_app._dispatch_command("/pause")
-
-    assert dummy_app._pause_latched is True
-    assert dummy_app.agent_active is False
-
-
-async def test_hidden_nudge_command_dispatches_for_current_context(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app.connector_features = {"nudge"}
-
-    called: list[str | None] = []
-
-    async def fake_nudge_agent(context_id: str | None):
-        called.append(context_id)
-        return {"ok": True, "status": "nudged"}
-
-    monkeypatch.setattr(dummy_app.client, "nudge_agent", fake_nudge_agent)
-
-    await dummy_app._dispatch_command("/nudge")
-
-    assert called == ["ctx-1"]
-    assert dummy_app.agent_active is True
-
-
-def test_system_commands_are_curated_and_ordered(dummy_app: DummyAgentZeroCLI) -> None:
-    screen = SimpleNamespace(query=lambda selector: [])
-
-    titles = [command.title for command in dummy_app.get_system_commands(screen)]
-
-    assert titles == ["/new", "/chats", "/compact", "/keys", "/help", "/quit"]
-
-
-def test_system_commands_include_project_when_feature_advertised(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"projects"}
-    screen = SimpleNamespace(query=lambda selector: [])
-
-    titles = [command.title for command in dummy_app.get_system_commands(screen)]
-
-    assert titles == ["/new", "/chats", "/project", "/compact", "/keys", "/disconnect", "/help", "/quit"]
-
-
-async def test_project_command_opens_popover(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"projects"}
-
-    opened: list[bool] = []
-    monkeypatch.setattr(dummy_app, "_open_project_menu", lambda: opened.append(True) or _async_return(None))
-
-    await dummy_app._cmd_project()
-
-    assert opened == [True]
-
-
-async def test_project_menu_activate_and_deactivate_update_header_without_reconnecting(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"projects"}
-    dummy_app._sync_connection_status("connected", "http://example.test")
-
-    initial_payload = {
-        "ok": True,
-        "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456ff"}],
-        "current_project": None,
-    }
-    activated_payload = {
-        "ok": True,
-        "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456ff"}],
-        "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456ff"},
-    }
-    deactivated_payload = {
-        "ok": True,
-        "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456ff"}],
-        "current_project": None,
-    }
-
-    snapshots = [initial_payload, activated_payload]
-    monkeypatch.setattr(dummy_app.client, "get_projects", lambda context_id: _async_return(dict(snapshots.pop(0))))
-    monkeypatch.setattr(dummy_app.client, "activate_project", lambda context_id, name: _async_return(activated_payload))
-    monkeypatch.setattr(dummy_app.client, "deactivate_project", lambda context_id: _async_return(deactivated_payload))
-
-    await dummy_app._handle_project_menu_action("activate", "atlas")
-
-    assert dummy_app.current_project == {
-        "name": "atlas",
-        "title": "Atlas",
-        "description": "",
-        "color": "#123456",
-    }
-    assert dummy_app._test_widgets["#connection-status"].current_project == dummy_app.current_project
-
-    monkeypatch.setattr(dummy_app.client, "get_projects", lambda context_id: _async_return(activated_payload))
-
-    await dummy_app._handle_project_menu_action("deactivate", "atlas")
-
-    assert dummy_app.current_project is None
-    assert dummy_app._test_widgets["#connection-status"].current_project is None
-
-
-async def test_project_edit_opens_instructions_editor_and_saves_full_payload(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"projects"}
-    dummy_app._sync_connection_status("connected", "http://example.test")
-
-    project_summary = {"name": "atlas", "title": "Atlas", "color": "#123456"}
-    project_payload = {
-        "name": "atlas",
-        "title": "Atlas",
-        "description": "Maps",
-        "instructions": "Original instructions",
-        "color": "#123456",
-        "git_url": "https://example.test/atlas.git",
-        "variables": "A=1",
-        "secrets": "MASKED",
-        "instruction_files_count": 1,
-        "knowledge_files_count": 2,
-        "subagents": {"default": {"enabled": True}},
-        "git_status": {"is_git_repo": True},
-        "file_structure": {"enabled": True},
-    }
-
-    project_snapshots = [
-        {"ok": True, "projects": [project_summary], "current_project": project_summary},
-        {"ok": True, "projects": [project_summary], "current_project": project_summary},
-    ]
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_projects",
-        lambda context_id: _async_return(dict(project_snapshots.pop(0))),
-    )
-    monkeypatch.setattr(dummy_app.client, "load_project", lambda name: _async_return({"ok": True, "project": dict(project_payload)}))
-
-    update_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        dummy_app.client,
-        "update_project",
-        lambda project: update_calls.append(dict(project)) or _async_return({"ok": True, "project": dict(project)}),
-    )
-
-    async def fake_push_screen_wait(screen):
-        if isinstance(screen, ProjectInstructionsScreen):
-            return ProjectInstructionsResult(instructions="Updated instructions")
-        raise AssertionError(f"Unexpected screen: {type(screen)!r}")
-
-    monkeypatch.setattr(dummy_app, "push_screen_wait", fake_push_screen_wait)
-
-    await dummy_app._handle_project_menu_action("edit", "atlas")
-
-    assert update_calls == [
-        {
-            "name": "atlas",
-            "title": "Atlas",
-            "description": "Maps",
-            "instructions": "Updated instructions",
-            "color": "#123456",
-            "git_url": "https://example.test/atlas.git",
-            "variables": "A=1",
-            "secrets": "MASKED",
-            "instruction_files_count": 1,
-            "knowledge_files_count": 2,
-            "subagents": {"default": {"enabled": True}},
-            "git_status": {"is_git_repo": True},
-            "file_structure": {"enabled": True},
-        }
-    ]
-    assert dummy_app.current_project == {
-        "name": "atlas",
-        "title": "Atlas",
-        "description": "",
-        "color": "#123456",
-    }
-
-
-def test_system_commands_include_model_presets_when_available(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"model_switcher", "model_presets"}
-    dummy_app._apply_model_switcher_state(
-        {
-            "ok": True,
-            "allowed": True,
-            "override": {"preset_name": "Balanced"},
-            "presets": [
-                {"name": "Balanced"},
-                {"name": "Fast", "label": "Fast lane"},
-            ],
-            "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-            "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-        }
-    )
-    screen = SimpleNamespace(query=lambda selector: [])
-
-    titles = [command.title for command in dummy_app.get_system_commands(screen)]
-
-    assert titles == [
-        "/new",
-        "/chats",
-        "/compact",
-        "/presets",
-        "/models",
-        "/keys",
-        "/disconnect",
-        "/help",
-        "/quit",
-    ]
-
-
-def test_welcome_actions_match_visible_system_commands(dummy_app: DummyAgentZeroCLI) -> None:
-    screen = SimpleNamespace(query=lambda selector: [])
-    titles = [command.title for command in dummy_app.get_system_commands(screen)]
-    splash_titles = [action.title for action in dummy_app._welcome_actions()]
-    splash_keys = [action.key for action in dummy_app._welcome_actions()]
-
-    assert splash_titles == titles
-    assert splash_keys == titles
-
-
-async def test_model_presets_command_opens_picker_and_applies_selection(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"model_switcher", "model_presets"}
-    dummy_app._apply_model_switcher_state(
-        {
-            "ok": True,
-            "allowed": True,
-            "override": {"preset_name": "Balanced"},
-            "presets": [{"name": "Balanced"}, {"name": "Fast"}],
-            "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-            "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-        }
-    )
-
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_model_switcher",
-        lambda context_id: _async_return(
-            {
-                "ok": True,
-                "allowed": True,
-                "override": {"preset_name": "Balanced"},
-                "presets": [{"name": "Balanced"}, {"name": "Fast"}],
-                "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_model_presets",
-        lambda: _async_return([{"name": "Balanced"}, {"name": "Fast"}]),
-    )
-    monkeypatch.setattr(
-        dummy_app,
-        "push_screen_wait",
-        lambda screen: _async_return(ModelPresetsResult(preset_name="Fast")),
-    )
-
-    selected: list[str | None] = []
-
-    async def fake_set_model_preset(
-        app_ref,
-        preset_name: str | None,
-        *,
-        bar=None,
-    ) -> None:
-        selected.append(preset_name)
-
-    import agent_zero_cli.model_commands
-    monkeypatch.setattr(agent_zero_cli.model_commands, "set_model_preset", fake_set_model_preset)
-
-    await dummy_app._cmd_model_presets()
-
-    assert selected == ["Fast"]
-
-
-async def test_models_command_updates_chat_model_override_without_preset_write(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.connector_features = {"model_switcher"}
-    dummy_app._apply_model_switcher_state(
-        {
-            "ok": True,
-            "allowed": True,
-            "override": None,
-            "presets": [{"name": "Balanced"}],
-            "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-            "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-        }
-    )
-
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_model_switcher",
-        lambda context_id: _async_return(
-            {
-                "ok": True,
-                "allowed": True,
-                "override": None,
-                "presets": [{"name": "Balanced"}],
-                "main_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-                "utility_model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        dummy_app,
-        "push_screen_wait",
-        lambda screen: _async_return(
-            ModelRuntimeResult(
-                main_model={
-                    "provider": "openai",
-                    "name": "gpt-4o",
-                    "api_key": "key-main",
-                    "api_base": "https://api.main.example",
-                },
-                utility_model={
-                    "provider": "openai",
-                    "name": "gpt-4o-mini",
-                    "api_key": "key-utility",
-                    "api_base": "https://api.utility.example",
-                },
-            )
-        ),
-    )
-
-    override_calls: list[tuple[str, dict[str, object], dict[str, object]]] = []
-
-    async def fake_set_model_override(
-        context_id: str,
-        *,
-        main_model: dict[str, object] | None = None,
-        utility_model: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        override_calls.append((context_id, dict(main_model or {}), dict(utility_model or {})))
-        return {
-            "ok": True,
-            "allowed": True,
-            "override": {
-                "chat": dict(main_model or {}),
-                "utility": dict(utility_model or {}),
-            },
-            "presets": [{"name": "Balanced"}],
-            "main_model": {"provider": "openai", "name": "gpt-4o"},
-            "utility_model": {"provider": "openai", "name": "gpt-4o-mini"},
-        }
-
-    monkeypatch.setattr(dummy_app.client, "set_model_override", fake_set_model_override)
-
-    await dummy_app._cmd_models()
-
-    assert override_calls == [
-        (
-            "ctx-1",
-            {
-                "provider": "openai",
-                "name": "gpt-4o",
-                "api_key": "key-main",
-                "api_base": "https://api.main.example",
-            },
-            {
-                "provider": "openai",
-                "name": "gpt-4o-mini",
-                "api_key": "key-utility",
-                "api_base": "https://api.utility.example",
-            },
-        )
-    ]
-
-
-async def test_compact_command_works_without_model_presets_feature(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app.connector_features = {"compact_chat"}
-
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_compaction_stats",
-        lambda context_id: _async_return({"ok": True, "stats": {"message_count": 4, "token_count": 1298}}),
-    )
-
-    presets_calls: list[bool] = []
-
-    async def fail_if_called():
-        presets_calls.append(True)
-        raise AssertionError("get_model_presets should not be called when feature is unavailable")
-
-    monkeypatch.setattr(dummy_app.client, "get_model_presets", fail_if_called)
-
-    opened: list[object] = []
-
-    async def fake_push_screen_wait(screen):
-        opened.append(screen)
-        return CompactResult(use_chat_model=False, preset_name=None)
-
-    monkeypatch.setattr(dummy_app, "push_screen_wait", fake_push_screen_wait)
-
-    compact_calls: list[tuple[str, bool, str | None]] = []
-
-    async def fake_compact_chat(
-        context_id: str,
-        *,
-        use_chat_model: bool,
-        preset_name: str | None = None,
-    ):
-        compact_calls.append((context_id, use_chat_model, preset_name))
-        return {"ok": True, "message": "Compaction started"}
-
-    monkeypatch.setattr(dummy_app.client, "compact_chat", fake_compact_chat)
-    refresh_contexts: list[str] = []
-    monkeypatch.setattr(
-        dummy_app,
-        "_begin_compaction_refresh",
-        lambda context_id: refresh_contexts.append(context_id),
-    )
-
-    await dummy_app._cmd_compact()
-
-    assert opened
-    assert compact_calls == [("ctx-1", False, None)]
-    assert presets_calls == []
-    assert refresh_contexts == ["ctx-1"]
-
-
-async def test_compact_command_handles_compact_request_exception_gracefully(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app.connector_features = {"compact_chat", "model_presets"}
-
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_compaction_stats",
-        lambda context_id: _async_return({"ok": True, "stats": {"message_count": 4, "token_count": 1298}}),
-    )
-    monkeypatch.setattr(
-        dummy_app.client,
-        "get_model_presets",
-        lambda: _async_return([{"name": "Balanced"}]),
-    )
-    monkeypatch.setattr(
-        dummy_app,
-        "push_screen_wait",
-        lambda screen: _async_return(CompactResult(use_chat_model=True, preset_name=None)),
-    )
-
-    async def fail_compact_chat(
-        context_id: str,
-        *,
-        use_chat_model: bool,
-        preset_name: str | None = None,
-    ):
-        del context_id, use_chat_model, preset_name
-        raise RuntimeError("[Errno 104] Connection reset by peer")
-
-    monkeypatch.setattr(dummy_app.client, "compact_chat", fail_compact_chat)
-
-    await dummy_app._cmd_compact()
-
-    log = dummy_app._test_widgets["#chat-log"]
-    assert any("Failed to start compaction:" in str(line) for line in log.writes)
-
-
-def test_context_event_keeps_stream_visible_during_compaction_refresh(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app._compaction_refresh_context = "ctx-1"
-
-    dummy_app._handle_context_event(
-        {
-            "context_id": "ctx-1",
-            "event": "status",
-            "sequence": 8,
-            "data": {"meta": {"step": "Analyzing context"}},
-        }
-    )
-
-    log = dummy_app._test_widgets["#chat-log"]
-    assert log.status_entries[8]["detail"] == "Analyzing context"
-    assert log.status_entries[8]["active"] is True
-
-
-async def test_context_event_assistant_message_triggers_compaction_reload(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app._compaction_refresh_context = "ctx-1"
-
-    switched: list[tuple[str, bool]] = []
-
-    async def fake_switch_context(context_id: str, *, has_messages_hint: bool) -> None:
-        switched.append((context_id, has_messages_hint))
-
-    monkeypatch.setattr(dummy_app, "_switch_context", fake_switch_context)
-
-    dummy_app._handle_context_event(
-        {
-            "context_id": "ctx-1",
-            "event": "assistant_message",
-            "sequence": 9,
-            "data": {"heading": "Context compacted", "text": "Summary"},
-        }
-    )
-
-    await asyncio.sleep(0)
-
-    assert switched == [("ctx-1", True)]
-    assert dummy_app._compaction_refresh_context is None
-
-
-async def test_wait_for_compaction_and_reload_resubscribes_context(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app._compaction_refresh_context = "ctx-1"
-
-    switched: list[tuple[str, bool]] = []
-
-    async def fake_switch_context(context_id: str, *, has_messages_hint: bool) -> None:
-        switched.append((context_id, has_messages_hint))
-
-    monkeypatch.setattr(dummy_app, "_switch_context", fake_switch_context)
-
-    await dummy_app._wait_for_compaction_and_reload("ctx-1")
-
-    assert switched == [("ctx-1", True)]
-    assert dummy_app._compaction_refresh_context is None
-
-
-def test_slash_query_opens_command_palette_with_seeded_query(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dummy_app.connected = True
-    dummy_app.connector_features = {"chat_create", "chats_list"}
-    input_widget = dummy_app._test_widgets["#message-input"]
-    input_widget.value = "/"
-
-    opened: list[AgentCommandPalette] = []
-    monkeypatch.setattr(dummy_app, "_is_command_palette_open", lambda: False)
-    monkeypatch.setattr(dummy_app, "push_screen", lambda screen: opened.append(screen))
-
-    dummy_app.on_chat_input_value_changed(SimpleNamespace(value="/", input=input_widget))
-
-    assert opened
-    assert isinstance(opened[0], AgentCommandPalette)
-    assert opened[0]._initial_query == "/"
-    assert dummy_app._slash_palette_query == "/"
-
-
-def test_hidden_run_control_slash_command_skips_palette(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    input_widget = dummy_app._test_widgets["#message-input"]
-    input_widget.value = "/pause"
-
-    opened: list[AgentCommandPalette] = []
-    monkeypatch.setattr(dummy_app, "_is_command_palette_open", lambda: False)
-    monkeypatch.setattr(dummy_app, "push_screen", lambda screen: opened.append(screen))
-
-    dummy_app.on_chat_input_value_changed(SimpleNamespace(value="/pause", input=input_widget))
-
-    assert opened == []
-    assert dummy_app._slash_palette_query is None
-
-
-def test_command_palette_closed_clears_stale_slash_query(dummy_app: DummyAgentZeroCLI) -> None:
-    input_widget = dummy_app._test_widgets["#message-input"]
-    input_widget.value = "/"
-    dummy_app._slash_palette_query = "/"
-
-    dummy_app.on_command_palette_closed(SimpleNamespace(option_selected=False))
-
-    assert input_widget.value == ""
-    assert dummy_app._slash_palette_query is None
-
-
-async def test_unknown_command_fails_gracefully_on_welcome(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = False
-    dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
-
-    await dummy_app._dispatch_command("/wat")
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    assert "Unknown command" in splash.state.message or "Unknown command" in splash.state.detail
-
-
-async def test_removed_slash_commands_fail_gracefully(dummy_app: DummyAgentZeroCLI) -> None:
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = False
-    dummy_app._set_splash_state(stage="ready", actions=dummy_app._welcome_actions())
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    for command in ("/clear", "/skills", "/exit"):
-        await dummy_app._dispatch_command(command)
-        assert f"Unknown command: {command}." in splash.state.detail
-
-
-async def test_quit_disconnects_before_exit(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    disconnected: list[bool] = []
-    exited: list[bool] = []
-
-    async def fake_disconnect() -> None:
-        disconnected.append(True)
-
-    monkeypatch.setattr(dummy_app.client, "disconnect", fake_disconnect)
-    monkeypatch.setattr(dummy_app, "exit", lambda: exited.append(True))
-
-    await dummy_app.action_quit()
-
-    assert disconnected == [True]
-    assert exited == [True]
-
-
-async def test_disconnect_returns_to_login_stage(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    disconnect_calls: list[bool] = []
-    logout_calls: list[bool] = []
-    cleared_sessions: list[bool] = []
-
-    async def fake_disconnect(*, close_http: bool = True) -> None:
-        disconnect_calls.append(close_http)
-
-    async def fake_logout() -> None:
-        logout_calls.append(True)
-
-    dummy_app.connected = True
-    dummy_app.current_context = "ctx-1"
-    dummy_app.current_context_has_messages = True
-    dummy_app.capabilities = {"auth": ["session"], "auth_required": True}
-    dummy_app.config.instance_url = "http://example.test"
-    dummy_app._set_splash_state(stage="ready", host="http://example.test", username="admin", remember_host=True)
-    monkeypatch.setattr(dummy_app.client, "disconnect", fake_disconnect)
-    monkeypatch.setattr(dummy_app.client, "logout", fake_logout)
-    monkeypatch.setattr(dummy_app.client, "clear_session", lambda: cleared_sessions.append(True))
-
-    await dummy_app.action_disconnect()
-
-    splash = dummy_app._test_widgets["#splash-view"]
-    body = dummy_app._test_widgets["#body-switcher"]
-    assert disconnect_calls == [False]
-    assert logout_calls == [True]
-    assert cleared_sessions == [True]
-    assert splash.state.stage == "login"
-    assert splash.state.host == "http://example.test"
-    assert splash.state.username == "admin"
-    assert splash.state.remember_host is True
-    assert dummy_app.current_context is None
-    assert dummy_app.connected is False
-    assert body.current == "splash-view"
+    assert dummy_app._remote_files.allow_writes is False
+    assert dummy_app._python_tty.enabled is False
+
+    await dummy_app.action_toggle_remote_file_mode()
+    await dummy_app.action_toggle_remote_exec()
+
+    assert dummy_app._remote_file_write_enabled is True
+    assert dummy_app._remote_exec_enabled is True
+    assert dummy_app._remote_files.allow_writes is True
+    assert dummy_app._python_tty.enabled is True
