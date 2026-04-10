@@ -1,61 +1,992 @@
+Screen {
+    background: #17181a;
+    layers: base status;
+}
+
+#body-switcher {
+    height: 1fr;
+}
+
 #chat-log {
     height: 1fr;
-    border: solid $primary;
-    padding: 1;
+    padding: 0;
+    background: #17181a;
+    overflow-x: hidden;
+    scrollbar-size: 1 1;
+}
+
+#chat-log > Static {
+    margin-top: 1;
+}
+
+#chat-log > StatusEntry {
+    margin-top: 1;
+}
+
+.status-entry:focus {
+    background: #1b232d;
+}
+
+.agent-zero-banner {
+    margin-top: 0;
+}
+
+.workspace-context {
+    margin-top: 1;
+    color: #7f8c98;
 }
 
 #message-input {
-    dock: bottom;
+    margin-top: 0;
+    margin-bottom: 0;
+    border: round #0f6db8;
+    background: #101820;
+    padding: 0 1;
+}
+
+/* Subtle highlight while progress placeholder is shown (see WebUI .progress-active). */
+#message-input.progress-active {
+    border: round #1886c9;
+}
+
+#message-input:focus {
+    border: round #00b4ff;
+}
+
+#model-switcher-bar {
+    height: auto;
+    min-height: 1;
     margin-top: 1;
-    margin-bottom: 1;
-    border: solid $primary;
+    padding: 0 1;
+    align: left middle;
+    background: #101820;
 }
 
-#login-box {
-    width: 60%;
-    min-width: 40;
-    border: solid $primary;
-    padding: 2;
-    background: $panel;
+#model-switcher-summary {
+    width: 1fr;
+    height: auto;
+    min-height: 1;
+    layout: horizontal;
+    align: left middle;
 }
 
-#login-title {
-    content-align: center middle;
-    text-style: bold;
-    margin-bottom: 1;
-}
-
-#login-error {
-    color: $error;
+.model-switcher-chip {
+    width: auto;
+    min-width: 10;
+    max-width: 100%;
     height: 1;
+    min-height: 1;
+    margin-right: 1;
+    padding: 0 1;
+    background: transparent;
+    border: none;
+    color: #9aa7b4;
+    content-align: left middle;
+    text-style: bold;
+}
+
+.model-switcher-chip:focus {
+    background: #172533;
+    color: #d9e2ec;
+    border: none;
+}
+
+#model-switcher-preset {
+    width: auto;
+    min-width: 18;
+    max-width: 34;
+    margin-left: 2;
+    background: transparent;
+}
+
+#model-switcher-preset > SelectCurrent {
+    color: #9aa7b4;
+    background: #101820;
+}
+
+#model-switcher-preset:focus > SelectCurrent {
+    color: #d9e2ec;
+}
+
+ModelPresetsScreen {
+    align: center middle;
+}
+
+#model-presets-box {
+    width: 84%;
+    max-width: 108;
+    max-height: 88%;
+    border: round #0f6db8;
+    background: #101820;
+    padding: 1 2;
+}
+
+#model-presets-title {
+    text-style: bold;
+}
+
+#model-presets-description {
+    margin-bottom: 1;
+    color: #9aa7b4;
+}
+
+#model-presets-select {
+    width: 100%;
+}
+
+#model-presets-details {
     margin-top: 1;
+    border: round #2a3a4a;
+    background: #111820;
+    padding: 1;
+    min-height: 5;
+}
+
+#model-presets-status {
+    margin-top: 1;
+    min-height: 1;
+    color: #9aa7b4;
+}
+
+#model-presets-actions {
+    margin-top: 1;
+    align: right middle;
+    height: auto;
+}
+
+#model-presets-actions Button {
+    min-width: 12;
+    margin-left: 1;
+}
+
+ModelRuntimeScreen {
+    align: left top;
+}
+
+#model-runtime-box {
+    width: 100%;
+    height: 1fr;
+    border: none;
+    background: transparent;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#model-runtime-title {
+    text-style: bold;
+}
+
+#model-runtime-description {
+    margin-bottom: 1;
+    color: #9aa7b4;
+}
+
+.model-runtime-section {
+    width: 100%;
+    height: auto;
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin-bottom: 1;
+}
+
+.model-runtime-section-title {
+    text-style: bold;
+    color: #d9e2ec;
+    margin-top: 0;
+}
+
+.model-runtime-current {
+    color: #7f8c98;
+}
+
+.model-runtime-label {
+    margin-top: 1;
+    color: #9aa7b4;
+}
+
+#model-runtime-box Input {
+    width: 100%;
+    background: #17181a;
+    border: round #2a3a4a;
+    color: #f5f7fa;
+}
+
+#model-runtime-box Input:focus {
+    border: round #00b4ff;
+}
+
+#model-runtime-box Select {
+    width: 100%;
+}
+
+#model-runtime-box Select > SelectCurrent {
+    color: #d9e2ec;
+    background: #17181a;
+    border: round #2a3a4a;
+}
+
+#model-runtime-box Select:focus > SelectCurrent {
+    border: round #00b4ff;
+}
+
+#model-runtime-status {
+    margin-top: 1;
+    min-height: 1;
+    color: #9aa7b4;
+}
+
+#model-runtime-actions {
+    margin-top: 1;
+    align: right middle;
+    height: auto;
+}
+
+#model-runtime-actions Button {
+    min-width: 12;
+    margin-left: 1;
+}
+
+CompactScreen {
+    align: center middle;
+}
+
+#compact-box {
+    width: 84%;
+    max-width: 108;
+    max-height: 94%;
+    border: round #0f6db8;
+    background: #101820;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#compact-title {
+    text-style: bold;
+}
+
+#compact-description {
+    margin-bottom: 1;
+    color: #9aa7b4;
+}
+
+#compact-metrics {
+    height: 6;
+    margin-bottom: 1;
+}
+
+.compact-metric-card {
+    width: 1fr;
+    border: round #2a3a4a;
+    background: #111820;
+    padding: 0 1;
+    height: 6;
+    min-height: 6;
+    max-height: 6;
+    content-align: center middle;
+}
+
+#compact-messages-card {
+    margin-right: 1;
+}
+
+.compact-metric-label {
+    color: #9aa7b4;
+    text-style: bold;
+    content-align: center middle;
+    width: 100%;
+}
+
+.compact-metric-value {
+    color: #e8f1fb;
+    text-style: bold;
+    content-align: center middle;
+    width: 100%;
+}
+
+#compact-model-field {
+    margin-top: 1;
+    height: 5;
+    width: 1fr;
+    margin-right: 1;
+}
+
+#compact-model-label {
+    color: #9aa7b4;
+}
+
+#compact-mode-toggle {
+    margin-top: 1;
+    height: auto;
+}
+
+#compact-mode-toggle Button {
+    min-width: 12;
+    margin-right: 1;
+    background: #111820;
+    color: #9aa7b4;
+}
+
+#compact-mode-toggle Button.is-active {
+    background: #1b2f46;
+    color: #d9e2ec;
+    border: round #1886c9;
+}
+
+#compact-model-preview {
+    margin-top: 1;
+    color: #9aa7b4;
+}
+
+#compact-model-and-note {
+    margin-top: 1;
+    height: auto;
+}
+
+#compact-note-field {
+    width: 1fr;
+    height: auto;
+}
+
+#compact-note {
+    border: round #2b6a42;
+    background: #123324;
+    color: #78d7a2;
+    padding: 0 1;
+    min-height: 3;
+    height: auto;
+    max-height: 6;
+    overflow-y: auto;
+    text-wrap: wrap;
+    content-align: left top;
+}
+
+CompactScreen.compact-narrow #compact-model-and-note {
+    layout: vertical;
+}
+
+CompactScreen.compact-narrow #compact-model-field {
+    margin-right: 0;
+    margin-bottom: 1;
+}
+
+CompactScreen.compact-narrow #compact-note {
+    min-height: 3;
+    height: auto;
+    max-height: 5;
+}
+
+CompactScreen.compact-narrow #compact-note-field {
+    height: auto;
+}
+
+/*
+ * Legacy selector kept intentionally empty to avoid accidental style carryover
+ * from older screenshots/branches.
+ */
+#compact-info {
+    margin-top: 1;
+    display: none;
+}
+
+#compact-stats {
+    margin-top: 1;
+    display: none;
+}
+
+#compact-status {
+    margin-top: 1;
+    min-height: 1;
+    color: #9aa7b4;
+}
+
+#compact-actions {
+    margin-top: 1;
+    align: right middle;
+    height: auto;
+}
+
+#compact-actions Button {
+    min-width: 12;
+    margin-left: 1;
+}
+
+#connection-status {
+    layer: status;
+    width: 100%;
+    height: 1;
+    layout: horizontal;
+    align: right middle;
+    padding: 0 2 0 0;
+    background: transparent;
+}
+
+#connection-status-spacer {
+    width: 1fr;
+}
+
+#connection-status-budget,
+#connection-status-endpoint {
+    height: 1;
+    min-width: 0;
+    background: transparent;
+    color: #7f8c98;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+#connection-status-budget {
+    width: auto;
+    margin-right: 2;
+}
+
+#connection-status-project {
+    width: auto;
+    min-width: 0;
+    max-width: 36;
+    height: 1;
+    margin-right: 2;
+    padding: 0 1;
+    background: transparent;
+    border: none;
+    color: #d9e2ec;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+#connection-status-project:hover {
+    background: #172533;
+}
+
+#connection-status-endpoint {
+    width: auto;
+    max-width: 36;
+}
+
+Footer {
+    background: #101820;
 }
 
 ChatListScreen {
     align: center middle;
+    background: transparent;
 }
 
-#chat-list-panel {
-    width: 80%;
-    min-width: 40;
-    max-height: 70%;
-    border: solid $primary;
-    padding: 1;
-    background: $panel;
+#chat-list-box {
+    width: 84%;
+    max-width: 108;
+    max-height: 88%;
+    border: round #0f6db8;
+    background: #101820;
+    padding: 1 2;
 }
 
 #chat-list-title {
     text-style: bold;
+}
+
+#chat-list-description {
     margin-bottom: 1;
+    color: #7f8c98;
 }
 
 #chat-list-empty {
-    color: $text-muted;
+    color: #7f8c98;
     height: 3;
     content-align: center middle;
 }
 
 #chat-list {
     height: 1fr;
-    border: solid $primary;
+    border: round #2a3a4a;
+    background: #111820;
+    padding: 0 1;
+}
+
+#chat-list > ListItem {
+    margin: 0;
+    padding: 0;
+    border-bottom: solid #1d2a36;
+}
+
+#chat-list > ListItem.-highlight,
+#chat-list > ListItem.-hovered {
+    background: #172533;
+}
+
+.chat-list-item-body {
+    width: 100%;
+    height: auto;
+    padding: 1 1 0 1;
+    background: transparent;
+}
+
+.chat-list-item-title {
+    width: 100%;
+    color: #d9e2ec;
+    text-style: bold;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-list-item-meta {
+    width: 100%;
+    color: #7f8c98;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-list-item-preview {
+    width: 100%;
+    margin-bottom: 1;
+    color: #b8c4cf;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+#chat-list > ListItem.-highlight .chat-list-item-title {
+    color: #f5f7fa;
+}
+
+#chat-list > ListItem.-highlight .chat-list-item-meta,
+#chat-list > ListItem.-highlight .chat-list-item-preview {
+    color: #9ecfff;
+}
+
+#project-menu-popover {
+    layer: status;
+    overlay: screen;
+    width: 38;
+    height: auto;
+    min-height: 0;
+    max-height: 16;
+    border: round #0f6db8;
+    background: #101820;
+    padding: 1;
+}
+
+.project-menu-item {
+    width: 100%;
+    height: 1;
+    min-height: 1;
+    margin: 0;
+    padding: 0 1;
+    background: transparent;
+    border: none;
+    color: #d9e2ec;
+    content-align: left middle;
+}
+
+.project-menu-item:hover,
+.project-menu-item:focus {
+    background: #172533;
+}
+
+.project-menu-item.-disabled {
+    background: #111820;
+    color: #7f8c98;
+    opacity: 1;
+}
+
+.project-menu-section {
+    height: 1;
+    min-height: 1;
+    margin-top: 1;
+    color: #7f8c98;
+}
+
+#project-menu-items {
+    height: auto;
+    max-height: 8;
+    margin-top: 0;
+}
+
+#project-menu-empty {
+    color: #7f8c98;
+    min-height: 3;
+    content-align: center middle;
+}
+
+ProjectInstructionsScreen {
+    align: left top;
+}
+
+#project-instructions-box {
+    width: 100%;
+    height: 1fr;
+    padding: 1 2;
+    background: transparent;
+}
+
+#project-instructions-title {
+    text-style: bold;
+}
+
+#project-instructions-subtitle {
+    margin-top: 0;
+    color: #7f8c98;
+}
+
+#project-instructions-description {
+    margin-top: 1;
+    color: #9aa7b4;
+}
+
+#project-instructions-input {
+    width: 100%;
+    height: 1fr;
+    margin-top: 1;
+    background: #17181a;
+    border: round #2a3a4a;
+}
+
+#project-instructions-input:focus {
+    border: round #00b4ff;
+}
+
+#project-instructions-actions {
+    margin-top: 1;
+    align: right middle;
+    height: auto;
+}
+
+#project-instructions-actions Button {
+    min-width: 12;
+    margin-left: 1;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Splash / welcome surface                                                   */
+/* -------------------------------------------------------------------------- */
+
+SplashView {
+    height: 1fr;
+    padding: 1;
+    background: #17181a;
+}
+
+#splash-hero {
+    margin-bottom: 0;
+}
+
+#splash-workspace {
+    margin-top: 1;
+    color: #7f8c98;
+}
+
+#splash-stage-label {
+    margin-top: 1;
+    text-style: bold;
+    color: #00b4ff;
+}
+
+#splash-message {
+    text-style: bold;
+    margin-top: 0;
+}
+
+#splash-detail {
+    color: #9aa7b4;
+    margin-bottom: 0;
+}
+
+SplashView.stage-host #splash-stage-label {
+    color: #88bfff;
+}
+
+SplashView.stage-login #splash-stage-label {
+    color: #80d0ff;
+}
+
+SplashView.stage-connecting #splash-stage-label {
+    color: #f5c35a;
+}
+
+SplashView.stage-ready #splash-stage-label {
+    color: #79d18a;
+}
+
+SplashView.stage-error #splash-stage-label {
+    color: #ff8b6b;
+}
+
+SplashHostPanel,
+SplashLoginPanel,
+SplashStatusPanel {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    border: round #0f6db8;
+    background: #101820;
+    padding: 1 2;
+    margin-top: 1;
+}
+
+.splash-panel-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.splash-panel-copy,
+.splash-panel-hint,
+.splash-action-description,
+.splash-action-reason {
+    color: #9aa7b4;
+}
+
+.splash-panel-hint,
+.splash-action-reason {
+    margin-top: 1;
+}
+
+#splash-login-target-summary {
+    margin-top: 1;
+}
+
+#splash-login-target-url {
+    width: 1fr;
+    color: #9aa7b4;
+}
+
+#splash-login-target-row {
+    width: 100%;
+    height: auto;
+    min-height: 1;
+    margin-top: 0;
+    layout: horizontal;
+    align: left middle;
+}
+
+#splash-host-loading,
+#splash-host-status,
+#splash-host-list-mount {
+    margin-top: 1;
+}
+
+#splash-host-status {
+    color: #9aa7b4;
+}
+
+#splash-host-list-mount {
+    width: 100%;
+    border: round #2a3a4a;
+    background: #111820;
+    padding: 0 1;
+    overflow-y: auto;
+}
+
+.splash-host-row {
+    width: 100%;
+    height: 4;
+    min-height: 4;
+    margin: 0;
+    padding: 0;
+    border-bottom: solid #1d2a36;
+    overflow: hidden;
+}
+
+.splash-host-row.-highlight,
+.splash-host-row:hover {
+    background: #172533;
+}
+
+.splash-host-row-body {
+    width: 100%;
+    height: 4;
+    min-height: 4;
+    padding: 1 1 0 1;
+    background: transparent;
+    overflow: hidden;
+}
+
+.splash-host-row-title {
+    width: 100%;
+    color: #d9e2ec;
+    text-style: bold;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+.splash-host-row-meta {
+    width: 100%;
+    margin-bottom: 1;
+    color: #7f8c98;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+.splash-host-row.-highlight .splash-host-row-title,
+.splash-host-row:focus .splash-host-row-title {
+    color: #f5f7fa;
+}
+
+.splash-host-row.-highlight .splash-host-row-meta,
+.splash-host-row:focus .splash-host-row-meta {
+    color: #9ecfff;
+}
+
+#splash-host-validation {
+    margin-top: 1;
+    min-height: 1;
+}
+
+#splash-host-secondary-actions {
+    width: 100%;
+    height: auto;
+    layout: horizontal;
+    margin-top: 1;
+}
+
+#splash-host-refresh,
+#splash-host-toggle-manual {
+    width: 1fr;
+    background: transparent;
+    color: #80d0ff;
+    border: round #2a3a4a;
+    text-style: bold;
+}
+
+#splash-host-refresh {
+    margin-right: 1;
+}
+
+#splash-host-refresh:focus,
+#splash-host-toggle-manual:focus {
+    background: #172533;
+    color: #f5f7fa;
+    border: round #00b4ff;
+}
+
+#splash-host-refresh:disabled,
+#splash-host-toggle-manual:disabled {
+    color: #7f8b97;
+    border: round #2a3a4a;
+}
+
+#splash-login-back {
+    width: auto;
+    height: auto;
+    margin-top: 0;
+    min-width: 14;
+    margin-left: 1;
+    background: transparent;
+    color: #80d0ff;
+    border: none;
+    text-style: bold;
+}
+
+#splash-login-back:focus {
+    background: #172533;
+    color: #f5f7fa;
+    border: round #00b4ff;
+}
+
+#splash-host-input,
+#splash-login-username,
+#splash-login-password {
+    width: 100%;
+    margin-top: 1;
+    background: #17181a;
+    border: round #2a3a4a;
+    color: #f5f7fa;
+}
+
+#splash-host-input:focus,
+#splash-login-username:focus,
+#splash-login-password:focus {
+    border: round #00b4ff;
+}
+
+#splash-host-submit,
+#splash-login-submit,
+#splash-status-retry {
+    width: 100%;
+    margin-top: 1;
+    background: #0f6db8;
+    color: #f5f7fa;
+    border: round #0f6db8;
+    text-style: bold;
+}
+
+#splash-host-submit:focus,
+#splash-login-submit:focus,
+#splash-status-retry:focus {
+    background: #00b4ff;
+    color: #08131d;
+    border: round #8ad7ff;
+}
+
+#splash-host-submit:disabled,
+#splash-login-submit:disabled,
+#splash-status-retry:disabled {
+    background: #1c2732;
+    color: #7f8b97;
+    border: round #2a3a4a;
+}
+
+#splash-manual-section {
+    width: 100%;
+    height: auto;
+    margin-top: 1;
+    padding-top: 1;
+    border-top: solid #1d2a36;
+}
+
+#splash-manual-title {
+    margin-bottom: 0;
+}
+
+#splash-save-credentials {
+    margin-top: 1;
+    padding: 0 1;
+    color: #c7d2dd;
+}
+
+#splash-save-credentials:focus {
+    background: #172533;
+    color: #f5f7fa;
+    border: round #00b4ff;
+}
+
+#splash-status-spinner {
+    margin-bottom: 1;
+}
+
+#splash-status-title {
+    text-style: bold;
+}
+
+#splash-status-detail {
+    color: #9aa7b4;
+    margin-top: 1;
+}
+
+#splash-actions-grid {
+    margin-top: 1;
+    layout: grid;
+    grid-size: 2;
+    grid-gutter: 1 1;
+}
+
+.splash-action-card {
+    border: round #2a3a4a;
+    background: #111820;
+    padding: 1;
+    min-height: 6;
+}
+
+.splash-action-card Button {
+    width: 100%;
+}
+
+.splash-action-card Button:disabled {
+    color: #7f8b97;
+}
+
+.splash-action-card .splash-action-description {
+    margin-top: 1;
+}
+
+.splash-action-card .splash-action-reason {
+    color: #f0b54d;
 }

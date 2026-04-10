@@ -1,0 +1,32 @@
+# TUI frontend file map
+
+This note lists files that define the **Textual** terminal UI (layout, widgets, styles, and modal screens) for the Agent Zero CLI under `src/agent_zero_cli/`.
+
+## IDE embedded terminal
+
+When you run the CLI inside Cursor or VS Code, it appears in the **integrated terminal** at the bottom of the window. You get the same full-screen TUI as in an external terminal: chat log, multiline input (placeholder shows normal help when idle; while the agent works it shows in-input progress text like the core WebUI), and a footer with shortcuts (for example `F3` read-mode toggle, `F4` remote-exec toggle, `F5` Clear, `F6` Chats, `F7` Nudge, `F8` Pause, `^P` Commands).
+
+## Files that are mainly “frontend”
+
+| Path | Role |
+|------|------|
+| `src/agent_zero_cli/styles/app.tcss` | Global TUI styling (colors, borders, splash surface, `#chat-log`, `#message-input`, footer). |
+| `src/agent_zero_cli/widgets/chat_input.py` | Multiline input (Enter to send, grows up to a few lines; agent progress as placeholder inside the field when empty). |
+| `src/agent_zero_cli/widgets/__init__.py` | Re-exports widgets (small; part of the UI package). |
+| `src/agent_zero_cli/widgets/splash_view.py` | Staged connection surface for Docker-backed local instance picking, single-instance auto-connect, manual URL fallback, login with detected-instance context, refreshed `Change URL` back-navigation, connecting/error states, and empty ready-state actions. |
+| `src/agent_zero_cli/screens/chat_list.py` | Chat list picker (TUI overlay). |
+
+## Where UI meets logic
+
+These are not “layout only,” but they drive or support what you see:
+
+| Path | Role |
+|------|------|
+| `src/agent_zero_cli/app.py` | Main `App`: composes the main screen (`RichLog`, `ChatInput`, `Footer`) and owns WebSocket handling, commands, and most state. |
+| `src/agent_zero_cli/__main__.py` | Entry point that starts the app. |
+| `src/agent_zero_cli/client.py` | HTTP/WebSocket client (no widgets). |
+| `src/agent_zero_cli/config.py` | Configuration and env (no widgets). |
+
+## Tests
+
+`tests/test_app.py` exercises application behavior (including UI-adjacent flows), not the `.tcss` file directly.

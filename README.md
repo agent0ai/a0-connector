@@ -1,64 +1,102 @@
 # a0-connector
 
-CLI connector for the current Agent Zero runtime.
+Terminal connector for [Agent Zero](https://github.com/frdel/agent-zero). It pairs a Textual CLI with a small Agent Zero plugin so you can chat from the terminal, follow streaming events, and use the connector-specific remote editing/runtime features.
 
-This repository holds the terminal client and the documentation for the connector plugin contract. The supported runtime is the sibling `agent-zero` checkout, with the connector plugin installed into:
+## Components
 
-```text
-agent-zero/usr/plugins/a0_connector
-```
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| CLI (`agent-zero-cli`) | `src/agent_zero_cli/` | Terminal UI and session-aware transport client |
+| Plugin (`_a0_connector`) | `plugin/_a0_connector/` | Builtin Agent Zero Core plugin that exposes the connector HTTP + Socket.IO surface |
 
-The connector model is:
+The CLI requires an Agent Zero build that includes the builtin `_a0_connector` plugin.
 
-1. HTTP requests go to the plugin API under `/api/plugins/a0_connector/v1/...`
-2. Protected HTTP endpoints use `X-API-KEY`
-3. Socket.IO connects on `/ws`
-4. Connector websocket activation is sent through `auth.handlers = ["plugins/a0_connector/ws_connector"]`
-5. The connector secret is the Agent Zero `mcp_server_token`
+## Install
 
-## Ubuntu / Bash Setup
-
-These commands match the supported local development flow.
+### 1. Install the CLI
 
 ```bash
-cd ~/src/agent-zero
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install -r requirements2.txt
-mkdir -p usr/plugins
-ln -sfn ~/src/a0-connector/plugin/a0_connector usr/plugins/a0_connector
-A0_SET_mcp_server_token=dev-a0-connector python run_ui.py --host=127.0.0.1 --port=50001
-```
-
-In a second shell:
-
-```bash
-cd ~/src/a0-connector
-git fetch origin
-git checkout origin/development
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
-pip install pytest
-cat > .cli-config.json <<'JSON'
-{
-  "instance_url": "http://127.0.0.1:50001",
-  "api_key": "dev-a0-connector",
-  "theme": "dark"
-}
-JSON
+```
+
+### 2. Use Agent Zero Core with builtin `_a0_connector`
+
+No separate plugin install is required for users once Agent Zero Core ships `_a0_connector` as a builtin plugin.
+
+For Core development, keep this repo's mirror in sync with the builtin plugin directory and restart Agent Zero after changes:
+
+```bash
+cd /path/to/agent-zero
+mkdir -p plugins/_a0_connector
+rsync -a /path/to/a0-connector/plugin/_a0_connector/ plugins/_a0_connector/
+```
+
+For Docker-based Agent Zero setups, the same builtin plugin path is `/a0/plugins/_a0_connector`.
+
+### 3. Connect
+
+```bash
 agentzero
 ```
 
-## Connector contract
+On every launch the CLI opens the host picker first. It checks Docker for local Agent Zero containers, lists any detected WebUI endpoints as friendly URLs such as `http://localhost:50001`, and lets you connect explicitly with Enter or the `Connect` button.
 
-The connector is intentionally narrow:
+If Docker finds exactly one local Agent Zero endpoint and there is no conflicting saved manual host, the CLI auto-enters that instance:
+- open instance: it connects immediately
+- protected instance: it advances directly to the login stage
 
-- `capabilities` is public
-- all other HTTP handlers require an API key
-- the websocket handler uses the shared `/ws` namespace, not a custom namespace
-- the plugin emits connector-prefixed events so it can coexist with other `/ws` handlers
-- `text_editor_remote` round-trips file operations by `op_id` rather than assuming a transport-level ack primitive
+Manual URL entry is available from the same panel for remote hosts or anything Docker cannot see. `AGENT_ZERO_HOST` still seeds the picker/manual URL instead of forcing an immediate connection.
 
-The goal is to keep the CLI and plugin aligned with the current Agent Zero architecture while avoiding session-cookie and login-screen coupling.
+Protected instances use the same web login as Agent Zero itself. The CLI posts to `/login`, keeps the resulting session cookie in memory for the current process, and forwards that session to `/ws`. Open instances skip the login stage entirely.
+
+If you want to prefill a host, export it before starting the CLI:
+
+```bash
+export AGENT_ZERO_HOST=http://localhost:50001
+agentzero
+```
+
+You can optionally remember only the chosen host in `~/.agent-zero/.env` from inside the app. The CLI never stores usernames, passwords, session cookies, or connector tokens.
+
+## Usage
+
+### Key bindings
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+C` | Quit |
+| `F5` | Clear chat |
+| `F6` | List chats |
+| `F7` | Nudge agent |
+| `F8` | Pause / resume |
+| `Ctrl+P` | Command palette |
+
+### Slash commands
+
+| Command | Action |
+|---------|--------|
+| `/help` | Show available commands |
+| `/chats` | Switch chats |
+| `/new` | Start a new chat |
+| `/compact` | Compact the current chat when supported |
+| `/presets` | Pick a model preset |
+| `/models` | Override runtime models for the current chat |
+| `/disconnect` | Disconnect and return to the current host connection flow |
+| `/keys` | Toggle key help |
+| `/quit` | Exit |
+
+## Troubleshooting
+
+- `404` on `/api/plugins/_a0_connector/v1/capabilities`: the running Agent Zero build does not include the builtin `_a0_connector` plugin, or the local Core checkout/runtime copy is out of sync.
+- Browser UI works but `agentzero` does not: the core web UI can run without the connector plugin; the CLI cannot.
+- `Connector contract mismatch`: the server is advertising an older connector auth contract. Update Agent Zero Core so its builtin `_a0_connector` plugin matches the CLI.
+- WebSocket connection rejected: ensure proxies forward both `/socket.io` and `/api/plugins/` unchanged, and that `AGENT_ZERO_HOST` exactly matches the real host seen by Agent Zero. If Docker discovery shows `localhost`, prefer `localhost` over `127.0.0.1`.
+
+## Docs
+
+- [Configuration](docs/configuration.md)
+- [Architecture](docs/architecture.md)
+- [Development](docs/development.md)
+- [TUI frontend](docs/tui-frontend.md)
