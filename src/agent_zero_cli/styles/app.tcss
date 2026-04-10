@@ -415,10 +415,52 @@ CompactScreen.compact-narrow #compact-note-field {
     layer: status;
     width: 100%;
     height: 1;
-    content-align: right top;
-    padding-right: 2;
+    layout: horizontal;
+    align: right middle;
+    padding: 0 2 0 0;
     background: transparent;
-    color: #444444;
+}
+
+#connection-status-spacer {
+    width: 1fr;
+}
+
+#connection-status-budget,
+#connection-status-endpoint {
+    height: 1;
+    min-width: 0;
+    background: transparent;
+    color: #7f8c98;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+#connection-status-budget {
+    width: auto;
+    margin-right: 2;
+}
+
+#connection-status-project {
+    width: auto;
+    min-width: 0;
+    max-width: 36;
+    height: 1;
+    margin-right: 2;
+    padding: 0 1;
+    background: transparent;
+    border: none;
+    color: #d9e2ec;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+#connection-status-project:hover {
+    background: #172533;
+}
+
+#connection-status-endpoint {
+    width: auto;
+    max-width: 36;
 }
 
 Footer {
@@ -451,6 +493,116 @@ ChatListScreen {
 #chat-list {
     height: 1fr;
     border: solid $primary;
+}
+
+ProjectMenuScreen {
+    align: right top;
+}
+
+#project-menu-box {
+    width: 44;
+    max-height: 85%;
+    margin-top: 1;
+    margin-right: 2;
+    border: round #0f6db8;
+    background: #101820;
+    padding: 1;
+}
+
+#project-menu-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.project-menu-action,
+.project-menu-project {
+    width: 100%;
+    margin-top: 1;
+    background: transparent;
+    border: round transparent;
+    color: #d9e2ec;
+    content-align: left middle;
+}
+
+.project-menu-action:hover,
+.project-menu-project:hover {
+    background: #172533;
+}
+
+.project-menu-action:focus,
+.project-menu-project:focus {
+    border: round #00b4ff;
+}
+
+.project-menu-project:disabled {
+    background: #111820;
+    color: #7f8c98;
+    opacity: 1;
+}
+
+.project-menu-section {
+    margin-top: 1;
+    color: #7f8c98;
+}
+
+#project-menu-items {
+    height: auto;
+    max-height: 18;
+    margin-top: 1;
+}
+
+#project-menu-empty {
+    color: #7f8c98;
+    min-height: 3;
+    content-align: center middle;
+}
+
+ProjectInstructionsScreen {
+    align: left top;
+}
+
+#project-instructions-box {
+    width: 100%;
+    height: 1fr;
+    padding: 1 2;
+    background: transparent;
+}
+
+#project-instructions-title {
+    text-style: bold;
+}
+
+#project-instructions-subtitle {
+    margin-top: 0;
+    color: #7f8c98;
+}
+
+#project-instructions-description {
+    margin-top: 1;
+    color: #9aa7b4;
+}
+
+#project-instructions-input {
+    width: 100%;
+    height: 1fr;
+    margin-top: 1;
+    background: #17181a;
+    border: round #2a3a4a;
+}
+
+#project-instructions-input:focus {
+    border: round #00b4ff;
+}
+
+#project-instructions-actions {
+    margin-top: 1;
+    align: right middle;
+    height: auto;
+}
+
+#project-instructions-actions Button {
+    min-width: 12;
+    margin-left: 1;
 }
 
 /* -------------------------------------------------------------------------- */

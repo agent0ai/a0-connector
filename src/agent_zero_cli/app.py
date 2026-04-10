@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
@@ -17,6 +17,7 @@ from agent_zero_cli import (
     compaction,
     connection,
     event_handlers,
+    project_commands,
     splash_helpers,
 )
 from agent_zero_cli.client import A0Client, DEFAULT_HOST
@@ -24,6 +25,7 @@ from agent_zero_cli.commands import CommandAvailability, CommandSpec
 from agent_zero_cli.config import CLIConfig, load_config
 from agent_zero_cli.remote_exec import PythonTTYManager
 from agent_zero_cli.remote_files import RemoteFileUtility
+from agent_zero_cli.project_utils import normalize_project_list, normalize_project_summary
 from agent_zero_cli.widgets.command_palette import (
     AgentCommandPalette,
     OrderedSystemCommandsProvider,
@@ -97,6 +99,8 @@ class AgentZeroCLI(App):
         self.client = A0Client(base_url, api_key=self.config.api_key)
         self.capabilities: dict[str, Any] = {}
         self.connector_features: set[str] = set()
+        self.project_list: list[dict[str, str]] = []
+        self.current_project: dict[str, str] | None = None
         self.current_context: str | None = None
         self.current_context_has_messages = False
         self._response_delivered = False
@@ -150,6 +154,7 @@ class AgentZeroCLI(App):
         self.query_one("#splash-view", SplashView).set_state(self._splash_state)
         self._sync_workspace_widgets()
         self.query_one("#connection-status", ConnectionStatus).clear_token_usage()
+        self._clear_project_state()
         self._sync_composer_visibility()
 
         log = self.query_one("#chat-log", ChatLog)
@@ -189,6 +194,13 @@ class AgentZeroCLI(App):
                 "List previous chats and switch contexts.",
                 lambda app: availability.require_features(app, "chats_list"),
                 lambda app: chat_commands.cmd_chats(app),
+            ),
+            CommandSpec(
+                "/project",
+                ("/projects",),
+                "Open the project menu and edit current project instructions.",
+                lambda app: availability.project_availability(app),
+                lambda app: project_commands.cmd_project(app),
             ),
             CommandSpec(
                 "/compact",
@@ -260,7 +272,7 @@ class AgentZeroCLI(App):
         rows: list[tuple[CommandSpec, CommandAvailability]] = []
         for spec in self._command_registry:
             availability = spec.availability(self)
-            if spec.canonical_name in {"/presets", "/models"} and not availability.available:
+            if spec.canonical_name in {"/presets", "/models", "/project"} and not availability.available:
                 continue
             rows.append((spec, availability))
         return tuple(rows)
@@ -270,12 +282,36 @@ class AgentZeroCLI(App):
         widget.status = status
         if url is not None:
             widget.url = url
+        widget.set_project_enabled(
+            self.connected and bool(self.current_context) and "projects" in self.connector_features
+        )
 
     def _set_token_usage(self, token_count: object, token_limit: object = None) -> None:
         self.query_one("#connection-status", ConnectionStatus).set_token_usage(token_count, token_limit)
 
     def _clear_token_usage(self) -> None:
         self.query_one("#connection-status", ConnectionStatus).clear_token_usage()
+
+    def _apply_projects_payload(self, payload: Mapping[str, Any] | None) -> None:
+        if not isinstance(payload, Mapping):
+            self._clear_project_state()
+            return
+
+        self.project_list = normalize_project_list(payload.get("projects"))
+        self.current_project = normalize_project_summary(payload.get("current_project"))
+        self._sync_project_header()
+
+    def _clear_project_state(self) -> None:
+        self.project_list = []
+        self.current_project = None
+        self._sync_project_header()
+
+    def _sync_project_header(self) -> None:
+        widget = self.query_one("#connection-status", ConnectionStatus)
+        widget.set_project_state(
+            self.current_project,
+            enabled=self.connected and bool(self.current_context) and "projects" in self.connector_features,
+        )
 
     def _stop_token_refresh(self) -> None:
         stop_token_refresh(self)
@@ -285,6 +321,30 @@ class AgentZeroCLI(App):
 
     async def _refresh_token_usage(self, *, context_id: str | None = None, silent: bool = True) -> None:
         await refresh_token_usage(self, context_id=context_id, silent=silent)
+
+    async def _refresh_projects(self, *, context_id: str | None = None, silent: bool = True) -> None:
+        target_context = context_id or self.current_context
+        if "projects" not in self.connector_features or not target_context:
+            self._clear_project_state()
+            return
+
+        try:
+            payload = await self.client.get_projects(target_context)
+        except Exception as exc:
+            if not silent:
+                self._show_notice(f"Failed to refresh projects: {exc}", error=True)
+            return
+
+        if not isinstance(payload, Mapping):
+            self._clear_project_state()
+            return
+        if not payload.get("ok"):
+            if not silent:
+                self._show_notice(str(payload.get("error") or "Project state unavailable."), error=True)
+            self._clear_project_state()
+            return
+
+        self._apply_projects_payload(payload)
 
     async def _refresh_workspace_from_settings(self) -> None:
         await splash_helpers.refresh_workspace_from_settings(self)
@@ -467,6 +527,9 @@ class AgentZeroCLI(App):
 
     def _nudge_availability(self) -> CommandAvailability:
         return availability.nudge_availability(self)
+
+    def _project_availability(self) -> CommandAvailability:
+        return availability.project_availability(self)
 
     def _model_presets_availability(self) -> CommandAvailability:
         return availability.model_presets_availability(self)
@@ -682,6 +745,10 @@ class AgentZeroCLI(App):
         worker_name = f"splash-{event.action.lstrip('/').replace('/', '-')}"
         self.run_worker(self._dispatch_command(event.action), exclusive=True, name=worker_name)
 
+    def on_connection_status_project_requested(self, event: ConnectionStatus.ProjectRequested) -> None:
+        del event
+        self.run_worker(self._cmd_project(), exclusive=True, name="cmd-project")
+
     async def _cmd_clear(self) -> None:
         await chat_commands.cmd_clear(self)
 
@@ -705,6 +772,9 @@ class AgentZeroCLI(App):
 
     async def _cmd_new(self) -> None:
         await chat_commands.cmd_new(self)
+
+    async def _cmd_project(self) -> None:
+        await project_commands.cmd_project(self)
 
     async def _cmd_model_presets(self) -> None:
         await cmd_model_presets(self)

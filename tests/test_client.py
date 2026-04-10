@@ -521,6 +521,102 @@ async def test_get_chat_uses_context_id_payload() -> None:
     )
 
 
+async def test_get_projects_posts_list_action_with_context_id() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={
+                "ok": True,
+                "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456"}],
+                "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456"},
+            },
+        )
+    )
+
+    result = await client.get_projects("ctx-1")
+
+    assert result["current_project"] == {"name": "atlas", "title": "Atlas", "color": "#123456"}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/projects",
+        json={"action": "list", "context_id": "ctx-1"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_activate_project_posts_activate_action() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=200, json_data={"ok": True, "projects": []})
+    )
+
+    result = await client.activate_project("ctx-1", "atlas")
+
+    assert result == {"ok": True, "projects": []}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/projects",
+        json={"action": "activate", "context_id": "ctx-1", "name": "atlas"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_deactivate_project_posts_deactivate_action() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=200, json_data={"ok": True, "projects": []})
+    )
+
+    result = await client.deactivate_project("ctx-1")
+
+    assert result == {"ok": True, "projects": []}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/projects",
+        json={"action": "deactivate", "context_id": "ctx-1"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_load_project_posts_load_action() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(status_code=200, json_data={"ok": True, "project": {"name": "atlas"}})
+    )
+
+    result = await client.load_project("atlas")
+
+    assert result == {"ok": True, "project": {"name": "atlas"}}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/projects",
+        json={"action": "load", "name": "atlas"},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
+async def test_update_project_posts_full_project_payload() -> None:
+    client = A0Client("http://localhost:5080", api_key="secret")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            json_data={"ok": True, "project": {"name": "atlas", "instructions": "Updated"}},
+        )
+    )
+    payload = {"name": "atlas", "instructions": "Updated", "color": "#123456"}
+
+    result = await client.update_project(payload)
+
+    assert result == {"ok": True, "project": {"name": "atlas", "instructions": "Updated"}}
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/a0_connector/v1/projects",
+        json={"action": "update", "project": payload},
+        headers={"X-API-KEY": "secret"},
+    )
+
+
 async def test_pause_agent_posts_pause_request_and_normalizes_success() -> None:
     client = A0Client("http://localhost:5080", api_key="secret")
     client.http = Mock()

@@ -75,6 +75,7 @@ async def begin_connection(
     app._stop_remote_tree_publisher()
     app._stop_token_refresh()
     app._clear_token_usage()
+    app._clear_project_state()
     app._last_remote_tree_hash = ""
     normalized_host = app._normalize_host(host)
     app.config.instance_url = normalized_host
@@ -291,6 +292,7 @@ async def begin_connection(
     )
     await app._refresh_model_switcher()
     await app._refresh_workspace_from_settings()
+    await app._refresh_projects(context_id=context_id)
     await app._refresh_token_usage(context_id=context_id)
     app._start_token_refresh()
     app._sync_body_mode()
@@ -308,6 +310,7 @@ def set_connected(app: AgentZeroCLI, value: bool) -> None:
         app._stop_remote_tree_publisher()
         app._stop_token_refresh()
         app._clear_token_usage()
+        app._clear_project_state()
         app._set_workspace_context(remote_workspace="")
         asyncio.create_task(app._python_tty.close())
         app._clear_model_switcher()

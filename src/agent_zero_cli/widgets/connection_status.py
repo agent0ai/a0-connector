@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from typing import Mapping
+
 from rich.text import Text
-from textual.app import RenderResult
+from textual.app import ComposeResult
+from textual.containers import Horizontal
+from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Static
 
 from agent_zero_cli.model_config import coerce_positive_int
+from agent_zero_cli.project_utils import display_project_title, normalize_project_summary, project_color
 
 
 def _format_token_count(value: int) -> str:
@@ -18,21 +23,69 @@ def _format_token_count(value: int) -> str:
     return str(value)
 
 
-class ConnectionStatus(Static):
-    """A subtle connection status indicator at the top right."""
+class ConnectionStatus(Horizontal):
+    """Top-right header with token usage, project state, and endpoint status."""
+
+    class ProjectTrigger(Static):
+        class Requested(Message):
+            def __init__(self, trigger: "ConnectionStatus.ProjectTrigger") -> None:
+                super().__init__()
+                self.trigger = trigger
+
+        enabled = reactive(False)
+
+        def on_click(self) -> None:
+            if self.enabled:
+                self.post_message(self.Requested(self))
+
+    class ProjectRequested(Message):
+        def __init__(self, status_bar: "ConnectionStatus") -> None:
+            super().__init__()
+            self.status_bar = status_bar
 
     status = reactive("connecting")
     url = reactive("")
     token_count = reactive(None)
     token_limit = reactive(None)
-    _tick_count = reactive(0)
+    current_project = reactive(None)
+    project_enabled = reactive(False)
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="connection-status-spacer")
+        yield Static("", id="connection-status-budget")
+        yield self.ProjectTrigger("", id="connection-status-project")
+        yield Static("", id="connection-status-endpoint")
 
     def on_mount(self) -> None:
-        self.set_interval(0.1, self._tick)
+        self._sync_segments()
 
-    def _tick(self) -> None:
-        if self.status == "connecting":
-            self._tick_count += 1
+    def watch_status(self, status: str) -> None:
+        del status
+        self._sync_segments()
+
+    def watch_url(self, url: str) -> None:
+        del url
+        self._sync_segments()
+
+    def watch_token_count(self, token_count: object) -> None:
+        del token_count
+        self._sync_segments()
+
+    def watch_token_limit(self, token_limit: object) -> None:
+        del token_limit
+        self._sync_segments()
+
+    def watch_current_project(self, project: object) -> None:
+        del project
+        self._sync_segments()
+
+    def watch_project_enabled(self, enabled: bool) -> None:
+        del enabled
+        self._sync_segments()
+
+    def on_project_trigger_requested(self, event: ProjectTrigger.Requested) -> None:
+        if event.trigger.id == "connection-status-project" and event.trigger.enabled:
+            self.post_message(self.ProjectRequested(self))
 
     def set_token_usage(self, token_count: object, token_limit: object = None) -> None:
         self.token_count = coerce_positive_int(token_count)
@@ -41,6 +94,22 @@ class ConnectionStatus(Static):
     def clear_token_usage(self) -> None:
         self.token_count = None
         self.token_limit = None
+
+    def set_project_state(
+        self,
+        project: Mapping[str, object] | None,
+        *,
+        enabled: bool = False,
+    ) -> None:
+        self.current_project = normalize_project_summary(project)
+        self.project_enabled = enabled
+
+    def set_project_enabled(self, enabled: bool) -> None:
+        self.project_enabled = enabled
+
+    def clear_project_state(self) -> None:
+        self.current_project = None
+        self.project_enabled = False
 
     def _render_token_budget(self) -> Text:
         count = self.token_count
@@ -78,38 +147,50 @@ class ConnectionStatus(Static):
             budget.append(gauge, style=gauge_color)
         return budget
 
-    def render(self) -> RenderResult:
-        token_budget = self._render_token_budget()
-        has_budget = bool(token_budget.plain.strip())
+    def _render_project_trigger(self) -> Text:
+        project = normalize_project_summary(self.current_project)
+        color = project_color(project)
+        label = display_project_title(project, default="No project")
+        dot = "●" if color else "○"
 
+        trigger = Text()
+        trigger.append(dot, style=color or "#7f8c98")
+        trigger.append(f" {label}", style="#d9e2ec" if project is not None else "#9aa7b4")
+        return trigger
+
+    def _render_endpoint_indicator(self) -> Text:
         label = self.url.strip()
-        prefix = Text()
-        if has_budget:
-            prefix.append_text(token_budget)
-            if label:
-                prefix.append("  ", style="dim")
-        if label:
-            prefix.append(label, style="dim")
-            prefix.append(" ", style="dim")
+        if not label:
+            label = {
+                "connected": "Connected",
+                "connecting": "Connecting",
+            }.get(self.status, "Disconnected")
 
-        if self.status == "connected":
-            return Text.assemble(
-                prefix,
-                ("•", "green")
-            )
-        elif self.status == "connecting":
-            return Text.assemble(
-                prefix,
-                ("•", "yellow")
-            )
-        else:
-            disconnected = Text("Disconnected ", style="dim")
-            if has_budget:
-                disconnected.append_text(token_budget)
-                disconnected.append("  ", style="dim")
-            if label:
-                disconnected.append(f"({label}) ", style="dim")
-            return Text.assemble(
-                disconnected,
-                ("•", "red")
-            )
+        dot_color = {
+            "connected": "green",
+            "connecting": "yellow",
+        }.get(self.status, "red")
+
+        return Text.assemble(
+            (label, "dim"),
+            (" ", "dim"),
+            ("•", dot_color),
+        )
+
+    def _sync_segments(self) -> None:
+        try:
+            budget = self.query_one("#connection-status-budget", Static)
+            project = self.query_one("#connection-status-project", self.ProjectTrigger)
+            endpoint = self.query_one("#connection-status-endpoint", Static)
+        except Exception:
+            return
+
+        budget_text = self._render_token_budget()
+        budget.update(budget_text)
+        budget.display = bool(budget_text.plain.strip())
+
+        project.display = self.project_enabled
+        project.enabled = self.project_enabled
+        project.update(self._render_project_trigger())
+
+        endpoint.update(self._render_endpoint_indicator())

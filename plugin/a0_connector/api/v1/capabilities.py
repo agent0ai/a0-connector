@@ -18,7 +18,7 @@ _BASE_FEATURES = [
     "nudge",
     "message_send",
     "log_tail",
-    "projects_list",
+    "projects",
     "text_editor_remote",
     "code_execution_remote",
     "remote_file_tree",

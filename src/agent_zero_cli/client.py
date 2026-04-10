@@ -513,6 +513,59 @@ class A0Client:
         response.raise_for_status()
         return self._json(response)
 
+    async def get_projects(self, context_id: str) -> dict[str, Any]:
+        response = await self._post(
+            "projects",
+            {"action": "list", "context_id": context_id},
+        )
+        response.raise_for_status()
+        return self._json(response)
+
+    async def activate_project(self, context_id: str, name: str) -> dict[str, Any]:
+        response = await self._post(
+            "projects",
+            {
+                "action": "activate",
+                "context_id": context_id,
+                "name": name,
+            },
+        )
+        response.raise_for_status()
+        return self._json(response)
+
+    async def deactivate_project(self, context_id: str) -> dict[str, Any]:
+        response = await self._post(
+            "projects",
+            {
+                "action": "deactivate",
+                "context_id": context_id,
+            },
+        )
+        response.raise_for_status()
+        return self._json(response)
+
+    async def load_project(self, name: str) -> dict[str, Any]:
+        response = await self._post(
+            "projects",
+            {
+                "action": "load",
+                "name": name,
+            },
+        )
+        response.raise_for_status()
+        return self._json(response)
+
+    async def update_project(self, project: dict[str, Any]) -> dict[str, Any]:
+        response = await self._post(
+            "projects",
+            {
+                "action": "update",
+                "project": project,
+            },
+        )
+        response.raise_for_status()
+        return self._json(response)
+
     async def pause_agent(
         self,
         context_id: str | None,

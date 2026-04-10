@@ -15,6 +15,11 @@ from agent_zero_cli.rendering import render_connector_event
 from agent_zero_cli.screens.compact_modal import CompactResult
 from agent_zero_cli.screens.model_runtime import ModelRuntimeResult
 from agent_zero_cli.screens.model_presets import ModelPresetsResult
+from agent_zero_cli.screens.project_instructions import (
+    ProjectInstructionsResult,
+    ProjectInstructionsScreen,
+)
+from agent_zero_cli.screens.project_menu import ProjectMenuResult, ProjectMenuScreen
 from agent_zero_cli.widgets.command_palette import AgentCommandPalette
 from agent_zero_cli.widgets.chat_log import (
     _AGENT_ZERO_BANNER,
@@ -22,7 +27,7 @@ from agent_zero_cli.widgets.chat_log import (
     _AGENT_ZERO_BANNER_TINY,
     _select_agent_zero_banner,
 )
-from agent_zero_cli.widgets import DynamicFooter, SplashState
+from agent_zero_cli.widgets import ConnectionStatus, DynamicFooter, SplashState
 from agent_zero_cli.widgets.splash_view import (
     SplashHostPanel,
     SplashLoginPanel,
@@ -164,6 +169,8 @@ class FakeConnectionStatus:
         self.url = ""
         self.token_count = None
         self.token_limit = None
+        self.current_project = None
+        self.project_enabled = False
 
     def set_token_usage(self, token_count: object, token_limit: object = None) -> None:
         self.token_count = token_count
@@ -172,6 +179,17 @@ class FakeConnectionStatus:
     def clear_token_usage(self) -> None:
         self.token_count = None
         self.token_limit = None
+
+    def set_project_state(self, project: object, *, enabled: bool = False) -> None:
+        self.current_project = project
+        self.project_enabled = enabled
+
+    def set_project_enabled(self, enabled: bool) -> None:
+        self.project_enabled = enabled
+
+    def clear_project_state(self) -> None:
+        self.current_project = None
+        self.project_enabled = False
 
 
 class FakeFooter:
@@ -253,6 +271,11 @@ class DummyAgentZeroCLI(AgentZeroCLI):
 class SplashHarnessApp(App[None]):
     def compose(self) -> ComposeResult:
         yield SplashView()
+
+
+class ConnectionStatusHarnessApp(App[None]):
+    def compose(self) -> ComposeResult:
+        yield ConnectionStatus(id="connection-status")
 
 
 @pytest.fixture
@@ -418,6 +441,44 @@ async def test_splash_view_preserves_login_error_during_state_credentials_sync()
         assert len(view.query("#splash-login-error")) == 0
 
 
+async def test_connection_status_shows_no_project_but_keeps_trigger_enabled() -> None:
+    app = ConnectionStatusHarnessApp()
+
+    async with app.run_test(size=(100, 8)) as pilot:
+        status = app.query_one(ConnectionStatus)
+        status.status = "connected"
+        status.url = "http://example.test:5080"
+        status.set_project_state(None, enabled=True)
+        await pilot.pause(0.1)
+
+        trigger = app.query_one("#connection-status-project", ConnectionStatus.ProjectTrigger)
+        assert trigger.enabled is True
+        assert trigger.display is True
+        assert trigger.render().plain == "○ No project"
+
+
+async def test_project_menu_accepts_core_rgba_hex_colors() -> None:
+    app = ConnectionStatusHarnessApp()
+
+    async with app.run_test(size=(100, 20)) as pilot:
+        screen = ProjectMenuScreen(
+            [
+                {
+                    "name": "project_1",
+                    "title": "Project #1",
+                    "description": "",
+                    "color": "#002975ff",
+                }
+            ],
+            current_project=None,
+        )
+        app.push_screen(screen)
+        await pilot.pause(0.1)
+
+        button = screen.query_one("#project-menu-switch-project_1", Button)
+        assert button.label.plain == "● Project #1  /project_1"
+
+
 def test_connection_target_summary_handles_invalid_port() -> None:
     label, normalized, secure = _connection_target_summary("http://bad:abc")
 
@@ -512,7 +573,7 @@ async def test_begin_connection_with_saved_login_persists_host_and_api_key(
     async def fake_fetch_capabilities():
         return {
             "auth": ["api_key", "login"],
-            "features": ["chat_create", "chats_list", "model_switcher"],
+            "features": ["chat_create", "chats_list", "model_switcher", "projects"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
             "websocket_handlers": ["plugins/a0_connector/ws_connector"],
@@ -540,6 +601,17 @@ async def test_begin_connection_with_saved_login_persists_host_and_api_key(
         ),
     )
     monkeypatch.setattr(
+        dummy_app.client,
+        "get_projects",
+        lambda context_id: _async_return(
+            {
+                "ok": True,
+                "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456"}],
+                "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456"},
+            }
+        ),
+    )
+    monkeypatch.setattr(
         "agent_zero_cli.app.save_env",
         lambda key, value: saved.__setitem__(key, value),
         raising=False,
@@ -563,6 +635,13 @@ async def test_begin_connection_with_saved_login_persists_host_and_api_key(
     assert input_widget.focused is True
     assert model_switcher.visible is True
     assert model_switcher.selected_preset == "Fast"
+    assert dummy_app.current_project == {
+        "name": "atlas",
+        "title": "Atlas",
+        "description": "",
+        "color": "#123456",
+    }
+    assert dummy_app._test_widgets["#connection-status"].project_enabled is True
     assert saved == {
         "AGENT_ZERO_HOST": "http://example.test",
         "AGENT_ZERO_API_KEY": "api-key-123",
@@ -601,6 +680,28 @@ async def test_invalid_api_key_returns_to_login_stage(
     assert splash.state.stage == "login"
     assert app.config.api_key == ""
     assert app.client.api_key == ""
+
+
+async def test_disconnect_clears_project_state(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"projects"}
+    dummy_app._apply_projects_payload(
+        {
+            "ok": True,
+            "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456"}],
+            "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456"},
+        }
+    )
+
+    await dummy_app._python_tty.close()
+    dummy_app._set_connected(False)
+    await asyncio.sleep(0)
+
+    assert dummy_app.current_project is None
+    assert dummy_app.project_list == []
+    assert dummy_app._test_widgets["#connection-status"].current_project is None
+    assert dummy_app._test_widgets["#connection-status"].project_enabled is False
 
 
 async def test_rejected_login_shows_inline_retry_copy(
@@ -879,6 +980,7 @@ async def test_new_chat_returns_to_ready_welcome(
     dummy_app.connected = True
     dummy_app.current_context = "ctx-old"
     dummy_app.current_context_has_messages = True
+    dummy_app.connector_features = {"projects"}
     dummy_app._sync_body_mode()
 
     monkeypatch.setattr(dummy_app.client, "unsubscribe_context", lambda context_id: _async_return(None))
@@ -903,6 +1005,17 @@ async def test_new_chat_returns_to_ready_welcome(
             }
         ),
     )
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_projects",
+        lambda context_id: _async_return(
+            {
+                "ok": True,
+                "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456"}],
+                "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456"},
+            }
+        ),
+    )
 
     await dummy_app._cmd_new()
 
@@ -911,10 +1024,67 @@ async def test_new_chat_returns_to_ready_welcome(
     input_widget = dummy_app._test_widgets["#message-input"]
     assert dummy_app.current_context == "ctx-new"
     assert dummy_app.current_context_has_messages is False
+    assert dummy_app.current_project == {
+        "name": "atlas",
+        "title": "Atlas",
+        "description": "",
+        "color": "#123456",
+    }
     assert splash.state.stage == "ready"
     assert body.current == "splash-view"
     assert input_widget.focused is True
     assert create_chat_calls == ["ctx-old"]
+
+
+async def test_switch_context_refreshes_project_state(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-old"
+    dummy_app.current_context_has_messages = True
+    dummy_app.connector_features = {"projects"}
+    dummy_app._apply_projects_payload(
+        {
+            "ok": True,
+            "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456"}],
+            "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456"},
+        }
+    )
+
+    unsubscribed: list[str] = []
+    subscribed: list[tuple[str, int]] = []
+    monkeypatch.setattr(dummy_app.client, "unsubscribe_context", lambda context_id: unsubscribed.append(context_id) or _async_return(None))
+    monkeypatch.setattr(
+        dummy_app.client,
+        "subscribe_context",
+        lambda context_id, from_seq=0: subscribed.append((context_id, from_seq)) or _async_return(None),
+    )
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_projects",
+        lambda context_id: _async_return(
+            {
+                "ok": True,
+                "projects": [{"name": "nebula", "title": "Nebula", "color": "#654321"}],
+                "current_project": {"name": "nebula", "title": "Nebula", "color": "#654321"},
+            }
+        ),
+    )
+    monkeypatch.setattr(dummy_app.client, "get_model_switcher", lambda context_id: _async_return({"ok": True, "allowed": False}))
+    monkeypatch.setattr(dummy_app.client, "get_token_status", lambda context_id: _async_return({"ok": False, "message": "Unavailable"}))
+
+    await dummy_app._switch_context("ctx-new", has_messages_hint=False)
+
+    assert unsubscribed == ["ctx-old"]
+    assert subscribed == [("ctx-new", 0)]
+    assert dummy_app.current_project == {
+        "name": "nebula",
+        "title": "Nebula",
+        "description": "",
+        "color": "#654321",
+    }
+    assert dummy_app._test_widgets["#connection-status"].current_project == dummy_app.current_project
 
 
 async def test_model_switcher_preset_change_updates_current_chat_models(
@@ -1103,13 +1273,13 @@ async def test_remote_safety_function_keys_toggle_permissions() -> None:
         assert app._remote_file_write_enabled is False
         assert app._remote_exec_enabled is False
 
-        await pilot.press("f3")
+        await pilot.press("F3")
         await pilot.pause()
 
         assert app._remote_file_write_enabled is True
         assert app._remote_files.allow_writes is True
 
-        await pilot.press("f4")
+        await pilot.press("F4")
         await pilot.pause()
 
         assert app._remote_exec_enabled is True
@@ -1177,6 +1347,157 @@ def test_system_commands_are_curated_and_ordered(dummy_app: DummyAgentZeroCLI) -
     titles = [command.title for command in dummy_app.get_system_commands(screen)]
 
     assert titles == ["/new", "/chats", "/compact", "/keys", "/help", "/quit"]
+
+
+def test_system_commands_include_project_when_feature_advertised(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"projects"}
+    screen = SimpleNamespace(query=lambda selector: [])
+
+    titles = [command.title for command in dummy_app.get_system_commands(screen)]
+
+    assert titles == ["/new", "/chats", "/project", "/compact", "/keys", "/help", "/quit"]
+
+
+async def test_project_command_activate_and_deactivate_update_header_without_reconnecting(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"projects"}
+    dummy_app._sync_connection_status("connected", "http://example.test")
+
+    initial_payload = {
+        "ok": True,
+        "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456ff"}],
+        "current_project": None,
+    }
+    activated_payload = {
+        "ok": True,
+        "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456ff"}],
+        "current_project": {"name": "atlas", "title": "Atlas", "color": "#123456ff"},
+    }
+    deactivated_payload = {
+        "ok": True,
+        "projects": [{"name": "atlas", "title": "Atlas", "color": "#123456ff"}],
+        "current_project": None,
+    }
+
+    snapshots = [initial_payload, activated_payload]
+    monkeypatch.setattr(dummy_app.client, "get_projects", lambda context_id: _async_return(dict(snapshots.pop(0))))
+    monkeypatch.setattr(dummy_app.client, "activate_project", lambda context_id, name: _async_return(activated_payload))
+    monkeypatch.setattr(dummy_app.client, "deactivate_project", lambda context_id: _async_return(deactivated_payload))
+
+    async def activate_menu(screen):
+        assert isinstance(screen, ProjectMenuScreen)
+        return ProjectMenuResult(action="activate", project_name="atlas")
+
+    monkeypatch.setattr(dummy_app, "push_screen_wait", activate_menu)
+
+    await dummy_app._cmd_project()
+
+    assert dummy_app.current_project == {
+        "name": "atlas",
+        "title": "Atlas",
+        "description": "",
+        "color": "#123456",
+    }
+    assert dummy_app._test_widgets["#connection-status"].current_project == dummy_app.current_project
+
+    monkeypatch.setattr(dummy_app.client, "get_projects", lambda context_id: _async_return(activated_payload))
+
+    async def deactivate_menu(screen):
+        assert isinstance(screen, ProjectMenuScreen)
+        return ProjectMenuResult(action="deactivate", project_name="atlas")
+
+    monkeypatch.setattr(dummy_app, "push_screen_wait", deactivate_menu)
+
+    await dummy_app._cmd_project()
+
+    assert dummy_app.current_project is None
+    assert dummy_app._test_widgets["#connection-status"].current_project is None
+
+
+async def test_project_edit_opens_instructions_editor_and_saves_full_payload(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"projects"}
+    dummy_app._sync_connection_status("connected", "http://example.test")
+
+    project_summary = {"name": "atlas", "title": "Atlas", "color": "#123456"}
+    project_payload = {
+        "name": "atlas",
+        "title": "Atlas",
+        "description": "Maps",
+        "instructions": "Original instructions",
+        "color": "#123456",
+        "git_url": "https://example.test/atlas.git",
+        "variables": "A=1",
+        "secrets": "MASKED",
+        "instruction_files_count": 1,
+        "knowledge_files_count": 2,
+        "subagents": {"default": {"enabled": True}},
+        "git_status": {"is_git_repo": True},
+        "file_structure": {"enabled": True},
+    }
+
+    project_snapshots = [
+        {"ok": True, "projects": [project_summary], "current_project": project_summary},
+        {"ok": True, "projects": [project_summary], "current_project": project_summary},
+    ]
+    monkeypatch.setattr(
+        dummy_app.client,
+        "get_projects",
+        lambda context_id: _async_return(dict(project_snapshots.pop(0))),
+    )
+    monkeypatch.setattr(dummy_app.client, "load_project", lambda name: _async_return({"ok": True, "project": dict(project_payload)}))
+
+    update_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        dummy_app.client,
+        "update_project",
+        lambda project: update_calls.append(dict(project)) or _async_return({"ok": True, "project": dict(project)}),
+    )
+
+    async def fake_push_screen_wait(screen):
+        if isinstance(screen, ProjectMenuScreen):
+            return ProjectMenuResult(action="edit", project_name="atlas")
+        if isinstance(screen, ProjectInstructionsScreen):
+            return ProjectInstructionsResult(instructions="Updated instructions")
+        raise AssertionError(f"Unexpected screen: {type(screen)!r}")
+
+    monkeypatch.setattr(dummy_app, "push_screen_wait", fake_push_screen_wait)
+
+    await dummy_app._cmd_project()
+
+    assert update_calls == [
+        {
+            "name": "atlas",
+            "title": "Atlas",
+            "description": "Maps",
+            "instructions": "Updated instructions",
+            "color": "#123456",
+            "git_url": "https://example.test/atlas.git",
+            "variables": "A=1",
+            "secrets": "MASKED",
+            "instruction_files_count": 1,
+            "knowledge_files_count": 2,
+            "subagents": {"default": {"enabled": True}},
+            "git_status": {"is_git_repo": True},
+            "file_structure": {"enabled": True},
+        }
+    ]
+    assert dummy_app.current_project == {
+        "name": "atlas",
+        "title": "Atlas",
+        "description": "",
+        "color": "#123456",
+    }
 
 
 def test_system_commands_include_model_presets_when_available(dummy_app: DummyAgentZeroCLI) -> None:

@@ -175,8 +175,7 @@ def show_notice(app: AgentZeroCLI, message: str, *, error: bool = False) -> None
 def available_help_lines(app: AgentZeroCLI) -> tuple[list[str], list[str]]:
     available: list[str] = []
     unavailable: list[str] = []
-    for spec in app._command_registry:
-        availability = spec.availability(app)
+    for spec, availability in app._iter_ui_commands():
         line = f"{app._command_display(spec)} - {spec.description}"
         if availability.available:
             available.append(line)

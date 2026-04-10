@@ -68,6 +68,17 @@ def nudge_availability(app: AgentZeroCLI) -> CommandAvailability:
     return CommandAvailability(True)
 
 
+def project_availability(app: AgentZeroCLI) -> CommandAvailability:
+    base = app._require_features("projects")
+    if not base.available:
+        return base
+    if not app.current_context:
+        return CommandAvailability(False, "Open or create a chat context first.")
+    if app.agent_active:
+        return CommandAvailability(False, "Wait for the current run to finish before changing projects.")
+    return CommandAvailability(True)
+
+
 def model_presets_availability(app: AgentZeroCLI) -> CommandAvailability:
     base = app._require_features("model_switcher", "model_presets")
     if not base.available:

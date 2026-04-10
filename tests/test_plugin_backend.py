@@ -577,6 +577,109 @@ def _install_fake_core_chat_modules(state: dict[str, object]) -> None:
     sys.modules["api.chat_remove"] = chat_remove_mod
 
 
+def _install_fake_core_projects_module(
+    state: dict[str, object],
+    *,
+    projects: list[dict[str, object]] | None = None,
+    project_payload: dict[str, object] | None = None,
+) -> None:
+    api_pkg = sys.modules.get("api")
+    if api_pkg is None:
+        api_pkg = types.ModuleType("api")
+        sys.modules["api"] = api_pkg
+
+    projects_mod = types.ModuleType("api.projects")
+    state["core_projects_calls"] = []
+    state["core_projects_list"] = list(projects or [])
+    state["core_project_payload"] = dict(
+        project_payload
+        or {
+            "name": "atlas",
+            "title": "Atlas",
+            "description": "Mapping and planning",
+            "instructions": "Follow the stars",
+            "color": "#123456",
+            "git_url": "https://example.test/atlas.git",
+            "variables": "A=1",
+            "secrets": "MASKED",
+            "instruction_files_count": 1,
+            "knowledge_files_count": 2,
+            "subagents": {"default": {"enabled": True}},
+            "git_status": {"is_git_repo": True},
+            "file_structure": {"enabled": True},
+        }
+    )
+
+    class Projects:
+        def __init__(self, app=None, thread_lock=None) -> None:
+            self.app = app
+            self.thread_lock = thread_lock
+
+        async def process(self, input: dict, request) -> dict[str, object]:
+            calls = state["core_projects_calls"]
+            assert isinstance(calls, list)
+            calls.append(
+                {
+                    "input": dict(input),
+                    "request": request,
+                    "app": self.app,
+                    "thread_lock": self.thread_lock,
+                }
+            )
+
+            action = str(input.get("action") or "").strip()
+            if action == "list":
+                return {"ok": True, "data": list(state["core_projects_list"])}
+
+            if action == "load":
+                return {"ok": True, "data": dict(state["core_project_payload"])}
+
+            if action == "update":
+                payload = dict(input.get("project") or {})
+                state["core_project_payload"] = dict(payload)
+                return {"ok": True, "data": dict(payload)}
+
+            if action == "activate":
+                context_cls = state["AgentContext"]
+                assert callable(context_cls)
+                context = context_cls.get(str(input.get("context_id") or ""))
+                if context is None:
+                    return {"ok": False, "error": "Context not found"}
+                project_name = str(input.get("name") or "").strip()
+                project_list = state["core_projects_list"]
+                assert isinstance(project_list, list)
+                project = next(
+                    (item for item in project_list if item.get("name") == project_name),
+                    {"name": project_name, "title": project_name, "color": ""},
+                )
+                context.set_data("project", project_name)
+                context.set_output_data(
+                    "project",
+                    {
+                        "name": project_name,
+                        "title": str(project.get("title") or project_name),
+                        "color": str(project.get("color") or ""),
+                    },
+                )
+                return {"ok": True, "data": None}
+
+            if action == "deactivate":
+                context_cls = state["AgentContext"]
+                assert callable(context_cls)
+                context = context_cls.get(str(input.get("context_id") or ""))
+                if context is None:
+                    return {"ok": False, "error": "Context not found"}
+                context.set_data("project", None)
+                context.set_output_data("project", None)
+                return {"ok": True, "data": None}
+
+            return {"ok": False, "error": f"Invalid action: {action}"}
+
+    projects_mod.Projects = Projects
+    setattr(api_pkg, "projects", projects_mod)
+    sys.modules["api.projects"] = projects_mod
+
+
 def test_capabilities_advertise_current_ws_contract() -> None:
     _install_fake_helpers()
 
@@ -596,6 +699,8 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert "code_execution_remote" in payload["features"]
     assert "pause" in payload["features"]
     assert "nudge" in payload["features"]
+    assert "projects" in payload["features"]
+    assert "projects_list" not in payload["features"]
     assert "settings_get" in payload["features"]
     assert "settings_set" in payload["features"]
     assert "agents_list" in payload["features"]
@@ -651,7 +756,7 @@ def test_protected_handlers_require_api_key_only() -> None:
         "usr.plugins.a0_connector.api.v1.compact_chat",
         "usr.plugins.a0_connector.api.v1.log_tail",
         "usr.plugins.a0_connector.api.v1.message_send",
-        "usr.plugins.a0_connector.api.v1.projects_list",
+        "usr.plugins.a0_connector.api.v1.projects",
         "usr.plugins.a0_connector.api.v1.token_status",
     ]
     class_names = [
@@ -672,7 +777,7 @@ def test_protected_handlers_require_api_key_only() -> None:
         "CompactChat",
         "LogTail",
         "MessageSend",
-        "ProjectsList",
+        "Projects",
         "TokenStatus",
     ]
 
@@ -682,6 +787,134 @@ def test_protected_handlers_require_api_key_only() -> None:
         assert handler_cls.requires_auth() is False
         assert handler_cls.requires_csrf() is False
         assert handler_cls.requires_api_key() is True
+
+
+def test_projects_action_list_returns_colors_and_current_project_from_context_output_data() -> None:
+    state = _install_fake_connector_chat_env()
+    _install_fake_core_projects_module(
+        state,
+        projects=[
+            {"name": "atlas", "title": "Atlas", "description": "Maps", "color": "#123456"},
+            {"name": "nebula", "title": "Nebula", "description": "Research", "color": "#654321"},
+        ],
+    )
+
+    projects_mod = _reload("usr.plugins.a0_connector.api.v1.projects")
+    context_cls = state["AgentContext"]
+    config_cls = state["make_config"]
+    assert callable(context_cls)
+    assert callable(config_cls)
+
+    context = context_cls(config=config_cls(), id="ctx-projects", set_current=True)
+    context.set_data("project", "nebula")
+    context.set_output_data("project", {"name": "nebula", "title": "Nebula", "color": "#654321"})
+
+    payload = asyncio.run(
+        projects_mod.Projects(None, None).process({"action": "list", "context_id": "ctx-projects"}, object())
+    )
+
+    assert payload == {
+        "ok": True,
+        "projects": [
+            {"name": "atlas", "title": "Atlas", "description": "Maps", "color": "#123456"},
+            {"name": "nebula", "title": "Nebula", "description": "Research", "color": "#654321"},
+        ],
+        "current_project": {"name": "nebula", "title": "Nebula", "description": "", "color": "#654321"},
+    }
+
+
+def test_projects_action_activate_and_deactivate_return_refreshed_state() -> None:
+    state = _install_fake_connector_chat_env()
+    _install_fake_core_projects_module(
+        state,
+        projects=[
+            {"name": "atlas", "title": "Atlas", "description": "Maps", "color": "#123456"},
+            {"name": "nebula", "title": "Nebula", "description": "Research", "color": "#654321"},
+        ],
+    )
+
+    projects_mod = _reload("usr.plugins.a0_connector.api.v1.projects")
+    context_cls = state["AgentContext"]
+    config_cls = state["make_config"]
+    assert callable(context_cls)
+    assert callable(config_cls)
+
+    context = context_cls(config=config_cls(), id="ctx-projects", set_current=True)
+    request = object()
+    handler = projects_mod.Projects(app="app", thread_lock="lock")
+
+    activated = asyncio.run(
+        handler.process(
+            {"action": "activate", "context_id": "ctx-projects", "name": "atlas"},
+            request,
+        )
+    )
+    assert activated == {
+        "ok": True,
+        "projects": [
+            {"name": "atlas", "title": "Atlas", "description": "Maps", "color": "#123456"},
+            {"name": "nebula", "title": "Nebula", "description": "Research", "color": "#654321"},
+        ],
+        "current_project": {"name": "atlas", "title": "Atlas", "description": "", "color": "#123456"},
+    }
+    assert context.get_output_data("project") == {"name": "atlas", "title": "Atlas", "color": "#123456"}
+
+    deactivated = asyncio.run(
+        handler.process(
+            {"action": "deactivate", "context_id": "ctx-projects"},
+            request,
+        )
+    )
+    assert deactivated == {
+        "ok": True,
+        "projects": [
+            {"name": "atlas", "title": "Atlas", "description": "Maps", "color": "#123456"},
+            {"name": "nebula", "title": "Nebula", "description": "Research", "color": "#654321"},
+        ],
+        "current_project": None,
+    }
+    assert context.get_output_data("project") is None
+
+    calls = state["core_projects_calls"]
+    assert isinstance(calls, list)
+    assert [call["input"]["action"] for call in calls] == ["activate", "list", "deactivate", "list"]
+
+
+def test_projects_action_load_and_update_proxy_core_payloads_without_dropping_fields() -> None:
+    state = _install_fake_connector_chat_env()
+    full_project = {
+        "name": "atlas",
+        "title": "Atlas",
+        "description": "Maps",
+        "instructions": "Walk the terrain",
+        "color": "#123456",
+        "git_url": "https://example.test/atlas.git",
+        "variables": "A=1",
+        "secrets": "MASKED",
+        "instruction_files_count": 1,
+        "knowledge_files_count": 2,
+        "subagents": {"default": {"enabled": True}},
+        "git_status": {"is_git_repo": True},
+        "file_structure": {"enabled": True},
+    }
+    _install_fake_core_projects_module(state, project_payload=full_project)
+
+    projects_mod = _reload("usr.plugins.a0_connector.api.v1.projects")
+    handler = projects_mod.Projects(app="app", thread_lock="lock")
+    request = object()
+
+    loaded = asyncio.run(handler.process({"action": "load", "name": "atlas"}, request))
+    assert loaded == {"ok": True, "project": full_project}
+
+    updated_project = dict(full_project)
+    updated_project["instructions"] = "Updated instructions"
+    updated = asyncio.run(handler.process({"action": "update", "project": updated_project}, request))
+    assert updated == {"ok": True, "project": updated_project}
+
+    calls = state["core_projects_calls"]
+    assert isinstance(calls, list)
+    assert calls[0]["input"] == {"action": "load", "context_id": "", "name": "atlas", "project": None}
+    assert calls[1]["input"] == {"action": "update", "context_id": "", "name": "", "project": updated_project}
 
 
 def test_chat_create_inherits_project_and_model_override_from_current_context() -> None:
