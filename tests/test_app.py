@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from rich.padding import Padding
 from textual.app import App, ComposeResult
+from textual.geometry import Offset
 from textual.widgets import Button, Input, LoadingIndicator, Static
 
 from agent_zero_cli.app import AgentZeroCLI
@@ -665,6 +666,52 @@ async def test_project_menu_overlay_does_not_shift_connection_status(
         assert trigger.region == before_trigger_region
         assert popover.region.x == app.screen.size.width - popover.region.width - 2
         assert popover.region.y == status.region.y + status.region.height
+
+
+async def test_project_menu_overlay_positions_on_first_render_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = ProjectMenuOverlayHarnessApp(
+        config=CLIConfig(
+            instance_url="http://example.test",
+        )
+    )
+
+    monkeypatch.setattr(
+        app.client,
+        "get_projects",
+        lambda context_id: _async_return(
+            {
+                "ok": True,
+                "projects": [
+                    {"name": "project_1", "title": "Project #1", "color": "#002975ff"},
+                    {"name": "project_2", "title": "Project #2", "color": "#ff5b00ff"},
+                ],
+                "current_project": None,
+            }
+        ),
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause(0.1)
+        app.connected = True
+        app.current_context = "ctx-1"
+        app.connector_features = {"projects"}
+        app._sync_project_header()
+        await pilot.pause(0.1)
+
+        status = app.query_one("#connection-status", ConnectionStatus)
+
+        await app._open_project_menu()
+        popover = app.query_one("#project-menu-popover", ProjectMenuPopover)
+        expected = Offset(80, status.region.y + status.region.height)
+
+        assert popover.absolute_offset == expected
+
+        await pilot.pause(0)
+
+        assert popover.region.x == expected.x
+        assert popover.region.y == expected.y
 
 
 def test_connection_target_summary_handles_invalid_port() -> None:

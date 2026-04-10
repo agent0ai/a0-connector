@@ -406,6 +406,9 @@ class AgentZeroCLI(App):
             id="project-menu-popover",
         )
         self._project_menu_popover = popover
+        offset = self._project_menu_popover_offset(popover)
+        if offset is not None:
+            popover.absolute_offset = offset
         await self.mount(popover)
         self.call_after_refresh(self._position_project_menu_popover)
         self.call_after_refresh(popover.focus_first_item)
@@ -423,21 +426,35 @@ class AgentZeroCLI(App):
             return
         await popover.remove()
 
+    def _project_menu_popover_offset(self, popover: ProjectMenuPopover | None = None) -> Offset | None:
+        popover = popover or self._project_menu_popover
+        if popover is None:
+            return None
+
+        try:
+            status = self.query_one("#connection-status", ConnectionStatus)
+        except NoMatches:
+            return None
+
+        screen_width = self.screen.size.width
+        if screen_width <= 0:
+            return None
+
+        menu_width = popover.region.width or popover.outer_size.width or 38
+        x = max(0, screen_width - menu_width - 2)
+        y = max(0, status.region.y + status.region.height)
+        return Offset(x, y)
+
     def _position_project_menu_popover(self) -> None:
         popover = self._project_menu_popover
         if popover is None:
             return
 
-        try:
-            status = self.query_one("#connection-status", ConnectionStatus)
-        except NoMatches:
+        offset = self._project_menu_popover_offset(popover)
+        if offset is None:
             return
 
-        menu_width = popover.region.width or popover.outer_size.width or 38
-        screen_width = self.screen.size.width
-        x = max(0, screen_width - menu_width - 2)
-        y = max(0, status.region.y + status.region.height)
-        popover.absolute_offset = Offset(x, y)
+        popover.absolute_offset = offset
         popover.refresh(layout=True)
 
     async def _handle_project_menu_action(self, action: str, project_name_value: str | None = None) -> None:
