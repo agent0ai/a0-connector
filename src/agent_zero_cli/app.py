@@ -527,9 +527,9 @@ class AgentZeroCLI(App):
 
     def get_binding_description(self, binding: Binding) -> str:
         if binding.action == "toggle_remote_file_mode":
-            return "Read" if self._remote_file_write_enabled else "Read&Write"
+            return "Read&Write" if self._remote_file_write_enabled else "Read-only"
         if binding.action == "toggle_remote_exec":
-            return "Code-exec OFF" if self._remote_exec_enabled else "Code-exec ON"
+            return "Code-exec ON" if self._remote_exec_enabled else "Code-exec OFF"
         if binding.action == "pause_agent":
             return "Resume" if self._pause_latched else "Pause"
         return binding.description
