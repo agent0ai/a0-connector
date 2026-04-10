@@ -5,22 +5,22 @@
 ```
 ┌─────────────────┐     HTTP POST /login + session cookie     ┌────────────────────────────┐
 │  agentzero CLI  │ ────────────────────────────────────────► │  Agent Zero                │
-│                 │                                           │  + a0_connector plugin     │
+│                 │                                           │  + _a0_connector plugin     │
 │                 │     Socket.IO /ws namespace               │                            │
 │                 │ ◄──────────────────────────────────────── │                            │
 └─────────────────┘     connector_* events                   └────────────────────────────┘
 ```
 
 - **CLI** (`agent-zero-cli`): Textual TUI, installed via `pip install -e .`
-- **Plugin** (`a0_connector`): source in `plugin/a0_connector/`, deployed into Agent Zero `usr/plugins/a0_connector`
+- **Plugin** (`_a0_connector`): builtin Agent Zero Core plugin, mirrored in this repo under `plugin/_a0_connector/`
 
 ## Startup flow
 
-1. **Discover** — `POST /api/plugins/a0_connector/v1/capabilities`
+1. **Discover** — `POST /api/plugins/_a0_connector/v1/capabilities`
 2. **Validate** — confirm protocol, `/ws`, handler activation, `auth == ["session"]`, and boolean `auth_required`
 3. **Authenticate if needed** — for protected instances, reuse any valid in-memory session or `POST /login` with form data
 4. **Verify** — probe `chats_list` to confirm the session is valid
-5. **Connect** — Socket.IO to `/ws` with `auth: {handlers: ["plugins/a0_connector/ws_connector"]}` and the current session cookie forwarded in headers
+5. **Connect** — Socket.IO to `/ws` with `auth: {handlers: ["plugins/_a0_connector/ws_connector"]}` and the current session cookie forwarded in headers
 6. **Chat** — create context, subscribe, stream events
 
 Open instances (`AUTH_LOGIN` unset) skip step 3 entirely.
@@ -31,11 +31,11 @@ Open instances (`AUTH_LOGIN` unset) skip step 3 entirely.
 - **Transport:** Engine.IO at `/socket.io`, Socket.IO namespace `/ws`
 - **Auth contract:** `auth == ["session"]`
 - **Capability flag:** `auth_required: bool` derived from Agent Zero core web-auth state
-- **WebSocket activation:** `auth.handlers` contains `plugins/a0_connector/ws_connector`
+- **WebSocket activation:** `auth.handlers` contains `plugins/_a0_connector/ws_connector`
 
 ## HTTP routes
 
-All routes: `POST /api/plugins/a0_connector/v1/<endpoint>`
+All routes: `POST /api/plugins/_a0_connector/v1/<endpoint>`
 
 | Endpoint | Auth | Purpose |
 |----------|------|---------|

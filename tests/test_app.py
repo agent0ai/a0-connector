@@ -1001,7 +1001,7 @@ async def test_begin_connection_with_login_persists_only_host_and_cleans_stale_a
             "features": ["chat_create", "chats_list", "model_switcher", "projects"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
-            "websocket_handlers": ["plugins/a0_connector/ws_connector"],
+            "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
         }, False, ""
 
     monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)
@@ -1077,7 +1077,7 @@ async def test_open_manual_host_connects_without_login(
             "features": ["chat_create", "chats_list"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
-            "websocket_handlers": ["plugins/a0_connector/ws_connector"],
+            "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
         }, False, ""
 
     monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)
@@ -1123,7 +1123,7 @@ async def test_protected_host_without_session_returns_to_login_stage(
             "features": ["chat_create", "chats_list"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
-            "websocket_handlers": ["plugins/a0_connector/ws_connector"],
+            "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
         }, False, ""
 
     monkeypatch.setattr(app, "_fetch_capabilities", fake_fetch_capabilities)
@@ -1168,7 +1168,7 @@ async def test_rejected_login_shows_inline_retry_copy(
             "features": ["chat_create", "chats_list"],
             "protocol": "a0-connector.v1",
             "websocket_namespace": "/ws",
-            "websocket_handlers": ["plugins/a0_connector/ws_connector"],
+            "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
         }, False, ""
 
     monkeypatch.setattr(dummy_app, "_fetch_capabilities", fake_fetch_capabilities)

@@ -280,7 +280,7 @@ async def test_verify_session_returns_true_on_200() -> None:
 
     assert result is True
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/chats_list",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/chats_list",
         json={},
     )
 
@@ -345,7 +345,7 @@ async def test_connect_websocket_forwards_session_cookie_and_handler_auth() -> N
                     "Referer": "http://127.0.0.1:50001/",
                 },
                 "auth": {
-                    "handlers": ["plugins/a0_connector/ws_connector"],
+                    "handlers": ["plugins/_a0_connector/ws_connector"],
                 },
             },
         )
@@ -451,7 +451,7 @@ async def test_connect_websocket_patches_old_aiohttp_before_connect(
     await client.connect_websocket()
 
     assert aiohttp.ClientWSTimeout(ws_close=7.0) == 7.0
-    assert fake_sio.connect_calls[0][1]["auth"] == {"handlers": ["plugins/a0_connector/ws_connector"]}
+    assert fake_sio.connect_calls[0][1]["auth"] == {"handlers": ["plugins/_a0_connector/ws_connector"]}
 
 
 async def test_send_message_uses_prefixed_ws_event() -> None:
@@ -490,7 +490,7 @@ async def test_create_chat_posts_current_context_when_provided() -> None:
 
     assert result == "ctx-new"
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/chat_create",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/chat_create",
         json={"current_context": "ctx-current"},
     )
 
@@ -509,7 +509,7 @@ async def test_get_settings_posts_to_connector_endpoint() -> None:
 
     assert result == {"settings": {"agent_profile": "default"}}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/settings_get",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/settings_get",
         json={},
     )
 
@@ -528,7 +528,7 @@ async def test_set_settings_posts_curated_payload() -> None:
 
     assert result == {"settings": {"agent_profile": "researcher"}}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/settings_set",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/settings_set",
         json={"settings": {"agent_profile": "researcher"}},
     )
 
@@ -544,7 +544,7 @@ async def test_get_chat_uses_context_id_payload() -> None:
 
     assert result == {"context_id": "ctx-1"}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/chat_get",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/chat_get",
         json={"context_id": "ctx-1"},
     )
 
@@ -567,7 +567,7 @@ async def test_get_projects_posts_list_action_with_context_id() -> None:
 
     assert result["current_project"] == {"name": "atlas", "title": "Atlas", "color": "#123456"}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/projects",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/projects",
         json={"action": "list", "context_id": "ctx-1"},
     )
 
@@ -583,7 +583,7 @@ async def test_activate_project_posts_activate_action() -> None:
 
     assert result == {"ok": True, "projects": []}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/projects",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/projects",
         json={"action": "activate", "context_id": "ctx-1", "name": "atlas"},
     )
 
@@ -599,7 +599,7 @@ async def test_deactivate_project_posts_deactivate_action() -> None:
 
     assert result == {"ok": True, "projects": []}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/projects",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/projects",
         json={"action": "deactivate", "context_id": "ctx-1"},
     )
 
@@ -615,7 +615,7 @@ async def test_load_project_posts_load_action() -> None:
 
     assert result == {"ok": True, "project": {"name": "atlas"}}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/projects",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/projects",
         json={"action": "load", "name": "atlas"},
     )
 
@@ -635,7 +635,7 @@ async def test_update_project_posts_full_project_payload() -> None:
 
     assert result == {"ok": True, "project": {"name": "atlas", "instructions": "Updated"}}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/projects",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/projects",
         json={"action": "update", "project": payload},
     )
 
@@ -654,7 +654,7 @@ async def test_pause_agent_posts_pause_request_and_normalizes_success() -> None:
 
     assert result == {"ok": True, "paused": True, "message": "Agent paused."}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/pause",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/pause",
         json={"context_id": "ctx-1", "paused": True},
     )
 
@@ -673,7 +673,7 @@ async def test_pause_agent_can_resume_with_paused_false() -> None:
 
     assert result == {"ok": True, "paused": False, "message": "Agent unpaused."}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/pause",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/pause",
         json={"context_id": "ctx-1", "paused": False},
     )
 
@@ -708,7 +708,7 @@ async def test_nudge_agent_posts_nudge_request_and_normalizes_success() -> None:
 
     assert result == {"ok": True, "status": "nudged", "message": "Process reset, agent nudged."}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/nudge",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/nudge",
         json={"context_id": "ctx-1"},
     )
 
@@ -743,7 +743,7 @@ async def test_get_model_presets_returns_preset_list() -> None:
 
     assert result == [{"name": "Balanced"}]
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/model_presets",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/model_presets",
         json={},
     )
 
@@ -769,7 +769,7 @@ async def test_get_model_switcher_returns_current_models_and_override() -> None:
 
     assert result["override"] == {"preset_name": "Balanced"}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/model_switcher",
         json={"action": "get", "context_id": "ctx-1"},
     )
 
@@ -785,7 +785,7 @@ async def test_set_model_preset_posts_set_preset_action() -> None:
 
     assert result["override"] == {"preset_name": "Fast"}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/model_switcher",
         json={"context_id": "ctx-1", "action": "set_preset", "preset_name": "Fast"},
     )
 
@@ -801,7 +801,7 @@ async def test_set_model_preset_can_clear_override() -> None:
 
     assert result["override"] is None
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/model_switcher",
         json={"context_id": "ctx-1", "action": "clear"},
     )
 
@@ -830,7 +830,7 @@ async def test_set_model_override_posts_direct_chat_override_payload() -> None:
 
     assert result["override"]["chat"]["name"] == "gpt-4o"
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/model_switcher",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/model_switcher",
         json={
             "action": "set_override",
             "context_id": "ctx-1",
@@ -855,7 +855,7 @@ async def test_get_compaction_stats_normalizes_http_failure() -> None:
         "status_code": 409,
     }
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/compact_chat",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/compact_chat",
         json={"context_id": "ctx-1", "action": "stats"},
     )
 
@@ -884,7 +884,7 @@ async def test_get_token_status_returns_connector_payload() -> None:
         "context_window": 128000,
     }
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/token_status",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/token_status",
         json={"context_id": "ctx-1"},
     )
 
@@ -904,7 +904,7 @@ async def test_get_token_status_normalizes_http_failure() -> None:
         "status_code": 404,
     }
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/token_status",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/token_status",
         json={"context_id": "ctx-1"},
     )
 
@@ -924,7 +924,7 @@ async def test_compact_chat_posts_selected_model_and_preset() -> None:
 
     assert result == {"ok": True, "message": "Compaction started"}
     client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/plugins/a0_connector/v1/compact_chat",
+        "http://localhost:5080/api/plugins/_a0_connector/v1/compact_chat",
         json={
             "context_id": "ctx-1",
             "action": "compact",
@@ -958,7 +958,7 @@ async def test_file_op_requests_are_returned_via_result_event() -> None:
     handler = fake_sio.handlers[("/ws", "connector_file_op")]
     await handler(
         {
-            "handlerId": "plugins.a0_connector.api.ws_connector.WsConnector",
+            "handlerId": "plugins._a0_connector.api.ws_connector.WsConnector",
             "eventId": "evt-1",
             "correlationId": "corr-1",
             "ts": "2026-04-01T00:00:00Z",
@@ -1008,7 +1008,7 @@ async def test_exec_op_requests_are_returned_via_result_event() -> None:
     handler = fake_sio.handlers[("/ws", "connector_exec_op")]
     await handler(
         {
-            "handlerId": "plugins.a0_connector.api.ws_connector.WsConnector",
+            "handlerId": "plugins._a0_connector.api.ws_connector.WsConnector",
             "eventId": "evt-2",
             "correlationId": "corr-2",
             "ts": "2026-04-01T00:00:00Z",

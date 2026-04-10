@@ -4,8 +4,8 @@
 
 Port the connector to the current Agent Zero runtime model:
 
-- plugin installed at `agent-zero/usr/plugins/a0_connector`
-- HTTP API under `/api/plugins/a0_connector/v1/...`
+- plugin installed at `agent-zero/plugins/_a0_connector`
+- HTTP API under `/api/plugins/_a0_connector/v1/...`
 - websocket integration on the shared `/ws` namespace
 - Socket.IO auth payload includes `api_key` and `handlers`
 - `mcp_server_token` is the v1 connector secret
@@ -35,7 +35,7 @@ The capabilities response should advertise:
 - `protocol: "a0-connector.v1"`
 - `auth: ["api_key", "login"]`
 - `websocket_namespace: "/ws"`
-- `websocket_handlers: ["plugins/a0_connector/ws_connector"]`
+- `websocket_handlers: ["plugins/_a0_connector/ws_connector"]`
 
 ### WebSocket
 
@@ -46,7 +46,7 @@ Client auth payload:
 ```json
 {
   "api_key": "dev-a0-connector",
-  "handlers": ["plugins/a0_connector/ws_connector"]
+  "handlers": ["plugins/_a0_connector/ws_connector"]
 }
 ```
 
@@ -79,7 +79,7 @@ The plugin stays in the current repository layout and is installed by symlink or
 
 ### Manifest
 
-`plugin/a0_connector/plugin.yaml` should keep `name: a0_connector` and describe the actual connector target: HTTP plus `/ws`, API-key auth, and current Agent Zero compatibility.
+`plugin/_a0_connector/plugin.yaml` should keep `name: _a0_connector` and describe the actual connector target: HTTP plus `/ws`, API-key auth, and current Agent Zero compatibility.
 
 ### CLI
 
@@ -108,8 +108,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements2.txt
-mkdir -p usr/plugins
-ln -sfn ~/src/a0-connector/plugin/a0_connector usr/plugins/a0_connector
+mkdir -p plugins
+ln -sfn ~/src/a0-connector/plugin/_a0_connector plugins/_a0_connector
 A0_SET_mcp_server_token=dev-a0-connector python run_ui.py --host=127.0.0.1 --port=50001
 ```
 

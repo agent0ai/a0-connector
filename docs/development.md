@@ -5,15 +5,15 @@
 ```
 a0-connector/
 ├── src/agent_zero_cli/     # CLI (Textual, httpx, python-socketio)
-├── plugin/a0_connector/    # Plugin source for deployment to Agent Zero usr/plugins/a0_connector
+├── plugin/_a0_connector/    # Builtin plugin source mirrored into Agent Zero Core plugins/_a0_connector
 ├── tests/                  # pytest
 └── docs/                   # You are here
 ```
 
 ## Runtime setup options
 
-- Local Agent Zero checkout: deploy to `<agent-zero>/usr/plugins/a0_connector`
-- Dockerized Agent Zero: deploy to `/a0/usr/plugins/a0_connector`
+- Local Agent Zero checkout: builtin plugin path `<agent-zero>/plugins/_a0_connector`
+- Dockerized Agent Zero: builtin plugin path `/a0/plugins/_a0_connector`
 
 ## Setup
 
@@ -21,10 +21,12 @@ a0-connector/
 
 ```bash
 cd /path/to/agent-zero
-mkdir -p usr/plugins/a0_connector
-rsync -a /path/to/a0-connector/plugin/a0_connector/ usr/plugins/a0_connector/
+mkdir -p plugins/_a0_connector
+rsync -a /path/to/a0-connector/plugin/_a0_connector/ plugins/_a0_connector/
 python run_ui.py --host=127.0.0.1 --port=50001
 ```
+
+This sync step is for Core development only. End users should get `_a0_connector` from Agent Zero Core as a builtin plugin.
 
 To test a protected instance, start Agent Zero with `AUTH_LOGIN` and `AUTH_PASSWORD` configured in its runtime `.env`.
 
@@ -41,10 +43,10 @@ When you are developing against a Docker-detected local Agent Zero instance, pre
 
 ### Mirroring backend changes back into this repo
 
-If you edit an external runtime copy of the plugin, mirror changes back into this repo copy before testing or committing:
+If you edit an external Core/runtime copy of the plugin, mirror changes back into this repo copy before testing or committing:
 
 ```bash
-rsync -a --delete /path/to/agent-zero/usr/plugins/a0_connector/ plugin/a0_connector/
+rsync -a --delete /path/to/agent-zero/plugins/_a0_connector/ plugin/_a0_connector/
 ```
 
 ## Tests
@@ -67,10 +69,10 @@ pytest -p anyio --anyio-backends=asyncio
 Agent Zero loads plugins by file path. All imports use the full path:
 
 ```python
-import usr.plugins.a0_connector.api.v1.base as connector_base
+import plugins._a0_connector.api.v1.base as connector_base
 ```
 
-`test_plugin_backend.py` stubs the `usr.plugins` namespace to validate these imports work.
+`test_plugin_backend.py` stubs the `plugins` namespace to validate these imports work.
 
 ### Lazy imports
 

@@ -13,12 +13,12 @@ import socketio
 
 from agent_zero_cli import __version__
 
-_PLUGIN_API = "/api/plugins/a0_connector/v1"
+_PLUGIN_API = "/api/plugins/_a0_connector/v1"
 DEFAULT_HOST = "http://127.0.0.1:5080"
 PROTOCOL_VERSION = "a0-connector.v1"
 _SOCKET_IO_PATH = "/socket.io"
 WS_NAMESPACE = "/ws"
-WS_HANDLER = "plugins/a0_connector/ws_connector"
+WS_HANDLER = "plugins/_a0_connector/ws_connector"
 
 _EVENT_HELLO = "connector_hello"
 _EVENT_SUBSCRIBE = "connector_subscribe_context"
@@ -43,7 +43,7 @@ class A0ProtocolError(RuntimeError):
 
 
 class A0ConnectorPluginMissingError(RuntimeError):
-    """HTTP 404 on the connector API — the a0_connector plugin is not loaded on Agent Zero."""
+    """HTTP 404 on the connector API — the _a0_connector plugin is not loaded on Agent Zero."""
 
 
 class A0WebSocketConnectionError(RuntimeError):
@@ -419,13 +419,13 @@ class A0Client:
         response = await self._post("capabilities")
         if response.status_code == 404:
             raise A0ConnectorPluginMissingError(
-                "HTTP 404 — the a0_connector plugin is not installed on this Agent Zero server.\n"
+                "HTTP 404 — the builtin _a0_connector plugin is not available on this Agent Zero server.\n"
                 "\n"
                 "The web UI can work while this endpoint is missing: the CLI needs the plugin.\n"
-                "For this workspace, the authoritative runtime plugin copy is:\n"
-                "  /home/eclypso/agentdocker/usr/plugins/a0_connector\n"
-                "Ensure Agent Zero is running with that plugin mounted at /a0/usr/plugins/a0_connector,\n"
-                "then restart Agent Zero. On a remote host, install the same plugin there before retrying."
+                "For this workspace, the intended builtin plugin path is:\n"
+                "  /home/eclypso/agentdocker/plugins/_a0_connector\n"
+                "Ensure Agent Zero Core includes that builtin plugin at /a0/plugins/_a0_connector,\n"
+                "then restart Agent Zero. On a remote host, update Agent Zero Core before retrying."
             )
         response.raise_for_status()
         return self._json(response)

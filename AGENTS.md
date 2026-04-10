@@ -10,7 +10,7 @@ Run TUI: `agentzero` (or `python -m agent_zero_cli`)
 Run tests: `pytest tests/ -v`
 Docs: `docs/` | Architecture: `docs/architecture.md` | TUI: `docs/tui-frontend.md`
 Workspace root: this repository (`a0-connector`)
-Plugin runtime path: `usr/plugins/a0_connector` (or `/a0/usr/plugins/a0_connector` in Docker)
+Plugin runtime path: `plugins/_a0_connector` (or `/a0/plugins/_a0_connector` in Docker)
 
 ---
 
@@ -37,10 +37,10 @@ Plugin runtime path: `usr/plugins/a0_connector` (or `/a0/usr/plugins/a0_connecto
    instance, streams live agent events, and lets the user chat via a WebSocket
    protocol (`a0-connector.v1`).
 
-2. **`a0_connector` plugin backend** — source lives in this repo under
-   `plugin/a0_connector/`, and is deployed to Agent Zero at
-   `usr/plugins/a0_connector` (or `/a0/usr/plugins/a0_connector` for Dockerized
-   deployments).
+2. **`_a0_connector` plugin backend** — this is now a builtin Agent Zero Core
+   plugin. Its mirrored source lives in this repo under `plugin/_a0_connector/`
+   and maps to Agent Zero `plugins/_a0_connector` (or
+   `/a0/plugins/_a0_connector` for Dockerized deployments).
 
 Both must be running for a live end-to-end session. For **UI-only work** the
 browser preview (see below) launches just the CLI against any available backend
@@ -51,18 +51,18 @@ browser preview (see below) launches just the CLI against any available backend
 ## Runtime Setup
 
 Use two running pieces:
-- an Agent Zero instance with `a0_connector` plugin deployed in `usr/plugins/a0_connector`
+- an Agent Zero instance whose Core build includes builtin `_a0_connector` support
 - this connector CLI (`agentzero`)
 
 Recommended dev flow for backend changes:
-1. Keep plugin source in this repo at `plugin/a0_connector/`.
-2. Sync/deploy that folder into your target Agent Zero runtime copy.
+1. Keep plugin source in this repo at `plugin/_a0_connector/`.
+2. Mirror that folder into your target Agent Zero Core/runtime copy.
 3. Restart Agent Zero and run connector tests from this repo:
    `./.venv/bin/python -m pytest tests/ -v`
 
 Deployment targets:
-- Local Agent Zero checkout: `<agent-zero>/usr/plugins/a0_connector`
-- Dockerized Agent Zero: `/a0/usr/plugins/a0_connector` via your mapped volume
+- Local Agent Zero checkout: `<agent-zero>/plugins/_a0_connector`
+- Dockerized Agent Zero: `/a0/plugins/_a0_connector` via your mapped volume
 
 ---
 
@@ -134,7 +134,7 @@ a0-connector/
 │   │   └── chat_list.py         # ChatListScreen — switch between contexts
 │   └── styles/
 │       └── app.tcss             # All TUI CSS (colors, borders, layout, .progress-active)
-├── plugin/a0_connector/         # Plugin backend source (deploy to Agent Zero usr/plugins/a0_connector)
+├── plugin/_a0_connector/         # Builtin plugin source mirrored into Agent Zero Core
 ├── devtools/                    # UI development tools (browser preview, snapshots)
 │   ├── serve.py                 # textual-serve wrapper → browser at :8566
 │   ├── snapshot.py              # SVG snapshot capture
@@ -230,11 +230,11 @@ separate modal screens:
 
 ## Plugin Backend
 
-The plugin source lives in this repo at `plugin/a0_connector/` and should be
-deployed into Agent Zero at `usr/plugins/a0_connector` (or
-`/a0/usr/plugins/a0_connector` in Docker). It provides:
+The plugin source lives in this repo at `plugin/_a0_connector/` as a mirror of
+the builtin Agent Zero Core plugin at `plugins/_a0_connector` (or
+`/a0/plugins/_a0_connector` in Docker). It provides:
 
-- HTTP handlers under `/api/plugins/a0_connector/v1/`
+- HTTP handlers under `/api/plugins/_a0_connector/v1/`
 - Socket.IO events on the `/ws` namespace (all prefixed `connector_`)
 - `helpers/event_bridge.py` — maps Agent Zero log types to connector events
 - `helpers/ws_runtime.py` — SID/context subscription state, file-op futures
@@ -377,8 +377,8 @@ Tests use `anyio` with the asyncio backend. Async test fixtures use
 
 ### Ask before doing
 - `pip install` (new dependencies not already in `.venv`).
-- Editing backend files in `plugin/a0_connector/` or in a separately deployed
-  runtime copy under Agent Zero `usr/plugins/a0_connector`.
+- Editing backend files in `plugin/_a0_connector/` or in a mirrored runtime
+  copy under Agent Zero `plugins/_a0_connector`.
 - Deleting files outside of the above allowed paths.
 - Making git commits or pushes.
 

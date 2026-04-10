@@ -7,9 +7,9 @@ Terminal connector for [Agent Zero](https://github.com/frdel/agent-zero). It pai
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | CLI (`agent-zero-cli`) | `src/agent_zero_cli/` | Terminal UI and session-aware transport client |
-| Plugin (`a0_connector`) | `plugin/a0_connector/` | Agent Zero plugin that exposes the connector HTTP + Socket.IO surface |
+| Plugin (`_a0_connector`) | `plugin/_a0_connector/` | Builtin Agent Zero Core plugin that exposes the connector HTTP + Socket.IO surface |
 
-Both parts are required for a live session.
+The CLI requires an Agent Zero build that includes the builtin `_a0_connector` plugin.
 
 ## Install
 
@@ -21,17 +21,19 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-### 2. Install the plugin into Agent Zero
+### 2. Use Agent Zero Core with builtin `_a0_connector`
 
-Copy `plugin/a0_connector/` into the Agent Zero runtime at `usr/plugins/a0_connector`, then restart Agent Zero.
+No separate plugin install is required for users once Agent Zero Core ships `_a0_connector` as a builtin plugin.
+
+For Core development, keep this repo's mirror in sync with the builtin plugin directory and restart Agent Zero after changes:
 
 ```bash
 cd /path/to/agent-zero
-mkdir -p usr/plugins/a0_connector
-rsync -a /path/to/a0-connector/plugin/a0_connector/ usr/plugins/a0_connector/
+mkdir -p plugins/_a0_connector
+rsync -a /path/to/a0-connector/plugin/_a0_connector/ plugins/_a0_connector/
 ```
 
-For Docker-based Agent Zero setups, mount the same plugin directory at `/a0/usr/plugins/a0_connector` inside the container.
+For Docker-based Agent Zero setups, the same builtin plugin path is `/a0/plugins/_a0_connector`.
 
 ### 3. Connect
 
@@ -87,9 +89,9 @@ You can optionally remember only the chosen host in `~/.agent-zero/.env` from in
 
 ## Troubleshooting
 
-- `404` on `/api/plugins/a0_connector/v1/capabilities`: the plugin is not loaded in the target Agent Zero runtime.
+- `404` on `/api/plugins/_a0_connector/v1/capabilities`: the running Agent Zero build does not include the builtin `_a0_connector` plugin, or the local Core checkout/runtime copy is out of sync.
 - Browser UI works but `agentzero` does not: the core web UI can run without the connector plugin; the CLI cannot.
-- `Connector contract mismatch`: the server is advertising an older connector auth contract. Update the installed `a0_connector` plugin to the session-only v1 version.
+- `Connector contract mismatch`: the server is advertising an older connector auth contract. Update Agent Zero Core so its builtin `_a0_connector` plugin matches the CLI.
 - WebSocket connection rejected: ensure proxies forward both `/socket.io` and `/api/plugins/` unchanged, and that `AGENT_ZERO_HOST` exactly matches the real host seen by Agent Zero. If Docker discovery shows `localhost`, prefer `localhost` over `127.0.0.1`.
 
 ## Docs

@@ -9,16 +9,15 @@
 
 ## Troubleshooting
 
-**404 on `/api/plugins/a0_connector/v1/capabilities`**
-The plugin isn't loaded in the target Agent Zero instance.
-For local development, place this repo's plugin into:
-`<agent-zero>/usr/plugins/a0_connector`, then restart Agent Zero.
-For Docker, place it in the mapped `/a0/usr/plugins/a0_connector` path and restart the container.
+**404 on `/api/plugins/_a0_connector/v1/capabilities`**
+The running Agent Zero build does not currently expose the builtin `_a0_connector` plugin.
+Update Agent Zero Core to a version that includes it, or for local Core development sync this repo's mirror into
+`<agent-zero>/plugins/_a0_connector` (Docker: `/a0/plugins/_a0_connector`) and restart Agent Zero.
 
 ```bash
 cd /path/to/agent-zero
-mkdir -p usr/plugins/a0_connector
-rsync -a /path/to/a0-connector/plugin/a0_connector/ usr/plugins/a0_connector/
+mkdir -p plugins/_a0_connector
+rsync -a /path/to/a0-connector/plugin/_a0_connector/ plugins/_a0_connector/
 # restart Agent Zero
 ```
 

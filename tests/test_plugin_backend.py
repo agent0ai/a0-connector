@@ -13,8 +13,8 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DOCKERVOLUME_ROOT = PROJECT_ROOT.parent / "dockervolume"
 PLUGIN_ROOT = PROJECT_ROOT / "plugin"
-if not (PLUGIN_ROOT / "a0_connector").exists():
-    PLUGIN_ROOT = DOCKERVOLUME_ROOT / "usr" / "plugins"
+if not (PLUGIN_ROOT / "_a0_connector").exists():
+    PLUGIN_ROOT = DOCKERVOLUME_ROOT / "plugins"
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -23,13 +23,9 @@ if DOCKERVOLUME_ROOT.exists() and str(DOCKERVOLUME_ROOT) not in sys.path:
 
 
 def _install_test_plugin_namespace() -> None:
-    usr_pkg = types.ModuleType("usr")
-    usr_pkg.__path__ = [str(DOCKERVOLUME_ROOT)]
-    usr_plugins_pkg = types.ModuleType("usr.plugins")
-    usr_plugins_pkg.__path__ = [str(PLUGIN_ROOT)]
-
-    sys.modules["usr"] = usr_pkg
-    sys.modules["usr.plugins"] = usr_plugins_pkg
+    plugins_pkg = types.ModuleType("plugins")
+    plugins_pkg.__path__ = [str(PLUGIN_ROOT), str(DOCKERVOLUME_ROOT / "plugins")]
+    sys.modules["plugins"] = plugins_pkg
 
 
 def _install_fake_helpers(
@@ -336,7 +332,7 @@ def _install_fake_helpers(
     sys.modules["helpers.state_monitor_integration"] = state_monitor_mod
 
     plugins_pkg = types.ModuleType("plugins")
-    plugins_pkg.__path__ = [str(DOCKERVOLUME_ROOT / "plugins")]
+    plugins_pkg.__path__ = [str(PLUGIN_ROOT), str(DOCKERVOLUME_ROOT / "plugins")]
     model_config_pkg = types.ModuleType("plugins._model_config")
     model_config_pkg.__path__ = [str(DOCKERVOLUME_ROOT / "plugins" / "_model_config")]
     model_config_helpers_pkg = types.ModuleType("plugins._model_config.helpers")
@@ -686,8 +682,8 @@ def _install_fake_core_projects_module(
 def test_capabilities_advertise_current_ws_contract() -> None:
     _install_fake_helpers()
 
-    _reload("usr.plugins.a0_connector.api.v1.base")
-    capabilities_mod = _reload("usr.plugins.a0_connector.api.v1.capabilities")
+    _reload("plugins._a0_connector.api.v1.base")
+    capabilities_mod = _reload("plugins._a0_connector.api.v1.capabilities")
     handler = capabilities_mod.Capabilities(None, None)
 
     payload = asyncio.run(handler.process({}, object()))
@@ -696,7 +692,7 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert payload["auth"] == ["session"]
     assert payload["auth_required"] is False
     assert payload["websocket_namespace"] == "/ws"
-    assert payload["websocket_handlers"] == ["plugins/a0_connector/ws_connector"]
+    assert payload["websocket_handlers"] == ["plugins/_a0_connector/ws_connector"]
     assert "connector_login" not in payload["features"]
     assert "token_status" in payload["features"]
     assert "remote_file_tree" in payload["features"]
@@ -719,8 +715,8 @@ def test_capabilities_advertise_current_ws_contract() -> None:
 def test_capabilities_report_auth_required_when_core_login_is_enabled() -> None:
     _install_fake_helpers(auth_login="admin", auth_password="secret")
 
-    _reload("usr.plugins.a0_connector.api.v1.base")
-    capabilities_mod = _reload("usr.plugins.a0_connector.api.v1.capabilities")
+    _reload("plugins._a0_connector.api.v1.base")
+    capabilities_mod = _reload("plugins._a0_connector.api.v1.capabilities")
 
     payload = asyncio.run(capabilities_mod.Capabilities(None, None).process({}, object()))
 
@@ -730,8 +726,8 @@ def test_capabilities_report_auth_required_when_core_login_is_enabled() -> None:
 def test_capabilities_hide_unsupported_optional_features(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_helpers()
 
-    _reload("usr.plugins.a0_connector.api.v1.base")
-    capabilities_mod = _reload("usr.plugins.a0_connector.api.v1.capabilities")
+    _reload("plugins._a0_connector.api.v1.base")
+    capabilities_mod = _reload("plugins._a0_connector.api.v1.capabilities")
 
     def fake_module_available(module_name: str) -> bool:
         return module_name not in {
@@ -752,27 +748,27 @@ def test_capabilities_hide_unsupported_optional_features(monkeypatch: pytest.Mon
 def test_protected_handlers_require_session_auth_without_api_keys() -> None:
     _install_fake_helpers()
 
-    _reload("usr.plugins.a0_connector.api.v1.base")
+    _reload("plugins._a0_connector.api.v1.base")
     modules = [
-        "usr.plugins.a0_connector.api.v1.chat_create",
-        "usr.plugins.a0_connector.api.v1.chat_delete",
-        "usr.plugins.a0_connector.api.v1.chat_get",
-        "usr.plugins.a0_connector.api.v1.chat_reset",
-        "usr.plugins.a0_connector.api.v1.chats_list",
-        "usr.plugins.a0_connector.api.v1.pause",
-        "usr.plugins.a0_connector.api.v1.nudge",
-        "usr.plugins.a0_connector.api.v1.settings_get",
-        "usr.plugins.a0_connector.api.v1.settings_set",
-        "usr.plugins.a0_connector.api.v1.agents_list",
-        "usr.plugins.a0_connector.api.v1.skills_list",
-        "usr.plugins.a0_connector.api.v1.skills_delete",
-        "usr.plugins.a0_connector.api.v1.model_presets",
-        "usr.plugins.a0_connector.api.v1.model_switcher",
-        "usr.plugins.a0_connector.api.v1.compact_chat",
-        "usr.plugins.a0_connector.api.v1.log_tail",
-        "usr.plugins.a0_connector.api.v1.message_send",
-        "usr.plugins.a0_connector.api.v1.projects",
-        "usr.plugins.a0_connector.api.v1.token_status",
+        "plugins._a0_connector.api.v1.chat_create",
+        "plugins._a0_connector.api.v1.chat_delete",
+        "plugins._a0_connector.api.v1.chat_get",
+        "plugins._a0_connector.api.v1.chat_reset",
+        "plugins._a0_connector.api.v1.chats_list",
+        "plugins._a0_connector.api.v1.pause",
+        "plugins._a0_connector.api.v1.nudge",
+        "plugins._a0_connector.api.v1.settings_get",
+        "plugins._a0_connector.api.v1.settings_set",
+        "plugins._a0_connector.api.v1.agents_list",
+        "plugins._a0_connector.api.v1.skills_list",
+        "plugins._a0_connector.api.v1.skills_delete",
+        "plugins._a0_connector.api.v1.model_presets",
+        "plugins._a0_connector.api.v1.model_switcher",
+        "plugins._a0_connector.api.v1.compact_chat",
+        "plugins._a0_connector.api.v1.log_tail",
+        "plugins._a0_connector.api.v1.message_send",
+        "plugins._a0_connector.api.v1.projects",
+        "plugins._a0_connector.api.v1.token_status",
     ]
     class_names = [
         "ChatCreate",
@@ -807,7 +803,7 @@ def test_protected_handlers_require_session_auth_without_api_keys() -> None:
 def test_ws_connector_requires_session_auth_without_api_key() -> None:
     _install_fake_helpers()
 
-    ws_connector_mod = _reload("usr.plugins.a0_connector.api.ws_connector")
+    ws_connector_mod = _reload("plugins._a0_connector.api.ws_connector")
 
     assert ws_connector_mod.WsConnector.requires_auth() is True
     assert ws_connector_mod.WsConnector.requires_csrf() is False
@@ -824,7 +820,7 @@ def test_projects_action_list_returns_colors_and_current_project_from_context_ou
         ],
     )
 
-    projects_mod = _reload("usr.plugins.a0_connector.api.v1.projects")
+    projects_mod = _reload("plugins._a0_connector.api.v1.projects")
     context_cls = state["AgentContext"]
     config_cls = state["make_config"]
     assert callable(context_cls)
@@ -858,7 +854,7 @@ def test_projects_action_activate_and_deactivate_return_refreshed_state() -> Non
         ],
     )
 
-    projects_mod = _reload("usr.plugins.a0_connector.api.v1.projects")
+    projects_mod = _reload("plugins._a0_connector.api.v1.projects")
     context_cls = state["AgentContext"]
     config_cls = state["make_config"]
     assert callable(context_cls)
@@ -924,7 +920,7 @@ def test_projects_action_load_and_update_proxy_core_payloads_without_dropping_fi
     }
     _install_fake_core_projects_module(state, project_payload=full_project)
 
-    projects_mod = _reload("usr.plugins.a0_connector.api.v1.projects")
+    projects_mod = _reload("plugins._a0_connector.api.v1.projects")
     handler = projects_mod.Projects(app="app", thread_lock="lock")
     request = object()
 
@@ -945,7 +941,7 @@ def test_projects_action_load_and_update_proxy_core_payloads_without_dropping_fi
 def test_chat_create_inherits_project_and_model_override_from_current_context() -> None:
     state = _install_fake_connector_chat_env()
 
-    chat_create_mod = _reload("usr.plugins.a0_connector.api.v1.chat_create")
+    chat_create_mod = _reload("plugins._a0_connector.api.v1.chat_create")
     context_cls = state["AgentContext"]
     config_cls = state["make_config"]
     assert callable(context_cls)
@@ -972,13 +968,13 @@ def test_chat_create_inherits_project_and_model_override_from_current_context() 
     assert new_context.get_data("chat_model_override") == {"preset_name": "fast"}
     assert payload["project_name"] == "atlas"
     assert payload["agent_profile"] == "default"
-    assert state["dirty_reasons"] == ["plugins.a0_connector.chat_context.create_context"]
+    assert state["dirty_reasons"] == ["plugins._a0_connector.chat_context.create_context"]
 
 
 def test_chat_create_applies_explicit_project_and_profile_overrides() -> None:
     state = _install_fake_connector_chat_env()
 
-    chat_create_mod = _reload("usr.plugins.a0_connector.api.v1.chat_create")
+    chat_create_mod = _reload("plugins._a0_connector.api.v1.chat_create")
     context_cls = state["AgentContext"]
     config_cls = state["make_config"]
     assert callable(context_cls)
@@ -1013,7 +1009,7 @@ def test_chat_reset_delegates_to_core_handler_and_preserves_missing_404() -> Non
     state = _install_fake_connector_chat_env()
     _install_fake_core_chat_modules(state)
 
-    chat_reset_mod = _reload("usr.plugins.a0_connector.api.v1.chat_reset")
+    chat_reset_mod = _reload("plugins._a0_connector.api.v1.chat_reset")
     context_cls = state["AgentContext"]
     config_cls = state["make_config"]
     assert callable(context_cls)
@@ -1044,7 +1040,7 @@ def test_chat_delete_delegates_to_core_handler_and_preserves_missing_404() -> No
     state = _install_fake_connector_chat_env()
     _install_fake_core_chat_modules(state)
 
-    chat_delete_mod = _reload("usr.plugins.a0_connector.api.v1.chat_delete")
+    chat_delete_mod = _reload("plugins._a0_connector.api.v1.chat_delete")
     context_cls = state["AgentContext"]
     config_cls = state["make_config"]
     assert callable(context_cls)
@@ -1074,7 +1070,7 @@ def test_chat_delete_delegates_to_core_handler_and_preserves_missing_404() -> No
 def test_message_send_without_context_reuses_shared_creation_semantics() -> None:
     state = _install_fake_connector_chat_env()
 
-    message_send_mod = _reload("usr.plugins.a0_connector.api.v1.message_send")
+    message_send_mod = _reload("plugins._a0_connector.api.v1.message_send")
     context_cls = state["AgentContext"]
     config_cls = state["make_config"]
     assert callable(context_cls)
@@ -1110,7 +1106,7 @@ def test_message_send_without_context_reuses_shared_creation_semantics() -> None
 def test_ws_resolve_context_without_context_id_uses_shared_creation_helper() -> None:
     state = _install_fake_connector_chat_env()
 
-    ws_connector_mod = _reload("usr.plugins.a0_connector.api.ws_connector")
+    ws_connector_mod = _reload("plugins._a0_connector.api.ws_connector")
     context_cls = state["AgentContext"]
     config_cls = state["make_config"]
     assert callable(context_cls)
@@ -1139,8 +1135,8 @@ def test_ws_resolve_context_without_context_id_uses_shared_creation_helper() -> 
 def test_settings_round_trip_uses_connector_helpers() -> None:
     _install_fake_helpers()
 
-    settings_get_mod = _reload("usr.plugins.a0_connector.api.v1.settings_get")
-    settings_set_mod = _reload("usr.plugins.a0_connector.api.v1.settings_set")
+    settings_get_mod = _reload("plugins._a0_connector.api.v1.settings_get")
+    settings_set_mod = _reload("plugins._a0_connector.api.v1.settings_set")
 
     get_handler = settings_get_mod.SettingsGet(None, None)
     set_handler = settings_set_mod.SettingsSet(None, None)
@@ -1157,7 +1153,7 @@ def test_settings_round_trip_uses_connector_helpers() -> None:
 def test_token_status_returns_ctx_window_and_context_limit() -> None:
     _install_fake_helpers()
 
-    token_status_mod = _reload("usr.plugins.a0_connector.api.v1.token_status")
+    token_status_mod = _reload("plugins._a0_connector.api.v1.token_status")
     model_config_mod = sys.modules["plugins._model_config.helpers.model_config"]
     model_config_mod.get_chat_model_config = lambda agent=None: {
         "provider": "anthropic",
@@ -1212,7 +1208,7 @@ def test_pause_handler_marks_running_context_paused() -> None:
     agent_mod.AgentContext = types.SimpleNamespace(get=lambda context_id: fake_context)
     sys.modules["agent"] = agent_mod
 
-    pause_mod = _reload("usr.plugins.a0_connector.api.v1.pause")
+    pause_mod = _reload("plugins._a0_connector.api.v1.pause")
     result = asyncio.run(
         pause_mod.Pause(None, None).process({"context_id": "ctx-1", "paused": True}, object())
     )
@@ -1250,7 +1246,7 @@ def test_nudge_handler_starts_nudged_context() -> None:
     agent_mod.AgentContext = types.SimpleNamespace(get=lambda context_id: fake_context)
     sys.modules["agent"] = agent_mod
 
-    nudge_mod = _reload("usr.plugins.a0_connector.api.v1.nudge")
+    nudge_mod = _reload("plugins._a0_connector.api.v1.nudge")
     result = asyncio.run(
         nudge_mod.Nudge(None, None).process({"context_id": "ctx-1"}, object())
     )
@@ -1284,7 +1280,7 @@ def test_nudge_handler_allows_running_context() -> None:
     agent_mod.AgentContext = types.SimpleNamespace(get=lambda context_id: fake_context)
     sys.modules["agent"] = agent_mod
 
-    nudge_mod = _reload("usr.plugins.a0_connector.api.v1.nudge")
+    nudge_mod = _reload("plugins._a0_connector.api.v1.nudge")
     result = asyncio.run(
         nudge_mod.Nudge(None, None).process({"context_id": "ctx-1"}, object())
     )
@@ -1296,10 +1292,10 @@ def test_nudge_handler_allows_running_context() -> None:
 def test_agents_skills_and_model_preset_proxy_payloads() -> None:
     _install_fake_helpers()
 
-    agents_mod = _reload("usr.plugins.a0_connector.api.v1.agents_list")
-    skills_list_mod = _reload("usr.plugins.a0_connector.api.v1.skills_list")
-    skills_delete_mod = _reload("usr.plugins.a0_connector.api.v1.skills_delete")
-    presets_mod = _reload("usr.plugins.a0_connector.api.v1.model_presets")
+    agents_mod = _reload("plugins._a0_connector.api.v1.agents_list")
+    skills_list_mod = _reload("plugins._a0_connector.api.v1.skills_list")
+    skills_delete_mod = _reload("plugins._a0_connector.api.v1.skills_delete")
+    presets_mod = _reload("plugins._a0_connector.api.v1.model_presets")
 
     agents = asyncio.run(agents_mod.AgentsList(None, None).process({}, object()))
     assert agents["data"][0] == {"key": "default", "label": "Default"}
@@ -1337,7 +1333,7 @@ def test_model_switcher_returns_effective_models_and_updates_override() -> None:
     agent_mod.AgentContext = types.SimpleNamespace(get=lambda context_id: fake_context)
     sys.modules["agent"] = agent_mod
 
-    switcher_mod = _reload("usr.plugins.a0_connector.api.v1.model_switcher")
+    switcher_mod = _reload("plugins._a0_connector.api.v1.model_switcher")
     handler = switcher_mod.ModelSwitcher(None, None)
 
     initial = asyncio.run(handler.process({"action": "get", "context_id": "ctx-1"}, object()))
@@ -1401,7 +1397,7 @@ def test_model_switcher_returns_effective_models_and_updates_override() -> None:
 def test_compact_chat_returns_stats_and_schedules_compaction() -> None:
     _install_fake_helpers()
 
-    compact_mod = _reload("usr.plugins.a0_connector.api.v1.compact_chat")
+    compact_mod = _reload("plugins._a0_connector.api.v1.compact_chat")
 
     class _FakeLog:
         def __init__(self) -> None:
@@ -1477,7 +1473,7 @@ def test_event_bridge_uses_log_output_cursor() -> None:
     agent_mod.AgentContext = types.SimpleNamespace(get=lambda context_id: _FakeContext())
     sys.modules["agent"] = agent_mod
 
-    bridge_mod = _reload("usr.plugins.a0_connector.helpers.event_bridge")
+    bridge_mod = _reload("plugins._a0_connector.helpers.event_bridge")
 
     events, cursor = bridge_mod.get_context_log_entries("ctx-1", after=5)
 
@@ -1522,7 +1518,7 @@ def test_event_bridge_maps_info_logs_to_standalone_info_events() -> None:
     agent_mod.AgentContext = types.SimpleNamespace(get=lambda context_id: _FakeContext())
     sys.modules["agent"] = agent_mod
 
-    bridge_mod = _reload("usr.plugins.a0_connector.helpers.event_bridge")
+    bridge_mod = _reload("plugins._a0_connector.helpers.event_bridge")
 
     events, cursor = bridge_mod.get_context_log_entries("ctx-1", after=0)
 
@@ -1541,7 +1537,7 @@ def test_event_bridge_maps_info_logs_to_standalone_info_events() -> None:
 def test_ws_connector_hello_advertises_remote_exec_and_tree_features() -> None:
     _install_fake_helpers()
 
-    ws_connector_mod = _reload("usr.plugins.a0_connector.api.ws_connector")
+    ws_connector_mod = _reload("plugins._a0_connector.api.ws_connector")
     handler = ws_connector_mod.WsConnector(None, None)
 
     payload = asyncio.run(handler.process("connector_hello", {}, "sid-1"))
@@ -1554,7 +1550,7 @@ def test_ws_connector_hello_advertises_remote_exec_and_tree_features() -> None:
 def test_code_execution_remote_accepts_shell_backed_runtimes() -> None:
     _install_fake_helpers()
 
-    tool_mod = _reload("usr.plugins.a0_connector.tools.code_execution_remote")
+    tool_mod = _reload("plugins._a0_connector.tools.code_execution_remote")
     tool = tool_mod.CodeExecutionRemote(
         agent=types.SimpleNamespace(context=types.SimpleNamespace(id="ctx-1")),
         args={"runtime": "terminal", "session": 0, "code": "echo hi"},
@@ -1568,7 +1564,7 @@ def test_code_execution_remote_accepts_shell_backed_runtimes() -> None:
 def test_code_execution_remote_logs_with_code_handler_shape() -> None:
     _install_fake_helpers()
 
-    tool_mod = _reload("usr.plugins.a0_connector.tools.code_execution_remote")
+    tool_mod = _reload("plugins._a0_connector.tools.code_execution_remote")
 
     class _FakeLog:
         def __init__(self) -> None:
@@ -1594,7 +1590,7 @@ def test_code_execution_remote_logs_with_code_handler_shape() -> None:
 def test_code_execution_remote_rejects_unknown_runtime_with_expanded_list() -> None:
     _install_fake_helpers()
 
-    tool_mod = _reload("usr.plugins.a0_connector.tools.code_execution_remote")
+    tool_mod = _reload("plugins._a0_connector.tools.code_execution_remote")
     tool = tool_mod.CodeExecutionRemote(
         agent=types.SimpleNamespace(context=types.SimpleNamespace(id="ctx-1")),
         args={"runtime": "ruby", "session": 0},
@@ -1609,7 +1605,7 @@ def test_code_execution_remote_rejects_unknown_runtime_with_expanded_list() -> N
 
 
 def test_code_execution_remote_prompt_describes_shell_backed_execution() -> None:
-    prompt_path = PLUGIN_ROOT / "a0_connector" / "prompts" / "agent.system.tool.code_execution_remote.md"
+    prompt_path = PLUGIN_ROOT / "_a0_connector" / "prompts" / "agent.system.tool.code_execution_remote.md"
     prompt_text = prompt_path.read_text(encoding="utf-8")
 
     assert "shell-backed" in prompt_text
@@ -1622,9 +1618,9 @@ def test_code_execution_remote_prompt_describes_shell_backed_execution() -> None
 def test_ws_connector_remote_tree_update_stores_latest_snapshot() -> None:
     _install_fake_helpers()
 
-    ws_runtime_mod = _reload("usr.plugins.a0_connector.helpers.ws_runtime")
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
     _reset_ws_runtime_state(ws_runtime_mod)
-    ws_connector_mod = _reload("usr.plugins.a0_connector.api.ws_connector")
+    ws_connector_mod = _reload("plugins._a0_connector.api.ws_connector")
     handler = ws_connector_mod.WsConnector(None, None)
 
     sid = "sid-tree"
@@ -1654,9 +1650,9 @@ def test_ws_connector_remote_tree_update_stores_latest_snapshot() -> None:
 def test_ws_connector_exec_op_result_resolves_pending_future() -> None:
     _install_fake_helpers()
 
-    ws_runtime_mod = _reload("usr.plugins.a0_connector.helpers.ws_runtime")
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
     _reset_ws_runtime_state(ws_runtime_mod)
-    ws_connector_mod = _reload("usr.plugins.a0_connector.api.ws_connector")
+    ws_connector_mod = _reload("plugins._a0_connector.api.ws_connector")
     handler = ws_connector_mod.WsConnector(None, None)
 
     async def _scenario() -> None:
@@ -1704,10 +1700,10 @@ def test_remote_tree_prompt_extension_injects_when_snapshot_is_fresh() -> None:
     _install_fake_helpers()
     _install_fake_agent_loopdata_module()
 
-    ws_runtime_mod = _reload("usr.plugins.a0_connector.helpers.ws_runtime")
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
     _reset_ws_runtime_state(ws_runtime_mod)
     extension_mod = _reload(
-        "usr.plugins.a0_connector.extensions.python.message_loop_prompts_after._76_include_remote_file_structure"
+        "plugins._a0_connector.extensions.python.message_loop_prompts_after._76_include_remote_file_structure"
     )
 
     sid = "sid-ext-fresh"
@@ -1747,10 +1743,10 @@ def test_remote_tree_prompt_extension_skips_stale_or_missing_snapshots() -> None
     _install_fake_helpers()
     _install_fake_agent_loopdata_module()
 
-    ws_runtime_mod = _reload("usr.plugins.a0_connector.helpers.ws_runtime")
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
     _reset_ws_runtime_state(ws_runtime_mod)
     extension_mod = _reload(
-        "usr.plugins.a0_connector.extensions.python.message_loop_prompts_after._76_include_remote_file_structure"
+        "plugins._a0_connector.extensions.python.message_loop_prompts_after._76_include_remote_file_structure"
     )
 
     sid = "sid-ext-stale"
