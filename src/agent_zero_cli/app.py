@@ -59,14 +59,14 @@ class AgentZeroCLI(App):
     TITLE = "Agent Zero CLI"
     BINDINGS = [
         Binding("Ctrl+C", "Quit", "Exit", show=True),
-        Binding("f3", "toggle_remote_file_mode", "Read&Write", show=True, priority=True),
-        Binding("f4", "toggle_remote_exec", "exec on", show=True, priority=True),
-        Binding("f5", "clear_chat", "Clear", show=True, priority=True),
-        Binding("f6", "list_chats", "Chats", show=True, priority=True),
-        Binding("f7", "nudge_agent", "Nudge", show=True, priority=True),
-        Binding("f8", "pause_agent", "Pause", show=True, priority=True),
+        Binding("F3", "toggle_remote_file_mode", "Read&Write", show=True, priority=True),
+        Binding("F4", "toggle_remote_exec", "exec on", show=True, priority=True),
+        Binding("F5", "clear_chat", "Clear", show=True, priority=True),
+        Binding("F6", "list_chats", "Chats", show=True, priority=True),
+        Binding("F7", "nudge_agent", "Nudge", show=True, priority=True),
+        Binding("F8", "pause_agent", "Pause", show=True, priority=True),
         Binding(
-            "ctrl+p",
+            "Ctrl+P",
             "command_palette",
             "Commands",
             show=False,
