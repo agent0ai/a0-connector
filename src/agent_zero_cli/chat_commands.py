@@ -31,6 +31,10 @@ async def cmd_quit(app: AgentZeroCLI) -> None:
     await app.action_quit()
 
 
+async def cmd_disconnect(app: AgentZeroCLI) -> None:
+    await app.action_disconnect()
+
+
 async def cmd_clear(app: AgentZeroCLI) -> None:
     app.query_one("#chat-log", ChatLog).clear()
     app._set_idle()

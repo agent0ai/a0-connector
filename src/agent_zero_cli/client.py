@@ -732,7 +732,8 @@ class A0Client:
             data["ok"] = True
         return data
 
-    async def disconnect(self) -> None:
+    async def disconnect(self, *, close_http: bool = True) -> None:
         if self.sio.connected:
             await self.sio.disconnect()
-        await self.http.aclose()
+        if close_http:
+            await self.http.aclose()

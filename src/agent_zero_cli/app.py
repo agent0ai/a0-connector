@@ -4,9 +4,12 @@ import asyncio
 import os
 from typing import Any, Iterable, Mapping
 
+from textual import events
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.command import CommandPalette
+from textual.css.query import NoMatches
+from textual.geometry import Offset
 from textual.reactive import reactive
 from textual.theme import Theme
 from textual.widgets import ContentSwitcher
@@ -23,6 +26,7 @@ from agent_zero_cli import (
 from agent_zero_cli.client import A0Client, DEFAULT_HOST
 from agent_zero_cli.commands import CommandAvailability, CommandSpec
 from agent_zero_cli.config import CLIConfig, load_config
+from agent_zero_cli.instance_discovery import DiscoveryResult, discover_local_instances
 from agent_zero_cli.remote_exec import PythonTTYManager
 from agent_zero_cli.remote_files import RemoteFileUtility
 from agent_zero_cli.project_utils import normalize_project_list, normalize_project_summary
@@ -64,7 +68,7 @@ class AgentZeroCLI(App):
     BINDINGS = [
         Binding("Ctrl+C", "Quit", "Exit", show=True),
         Binding("F3", "toggle_remote_file_mode", "Read&Write", show=True, priority=True),
-        Binding("F4", "toggle_remote_exec", "exec on", show=True, priority=True),
+        Binding("F4", "toggle_remote_exec", "Code-exec on", show=True, priority=True),
         Binding("F5", "clear_chat", "Clear", show=True, priority=True),
         Binding("F6", "list_chats", "Chats", show=True, priority=True),
         Binding("F7", "nudge_agent", "Nudge", show=True, priority=True),
@@ -140,6 +144,7 @@ class AgentZeroCLI(App):
         self._slash_palette_query: str | None = None
         self._compaction_refresh_context: str | None = None
         self._project_menu_popover: ProjectMenuPopover | None = None
+        self._instance_discovery_generation = 0
 
     def compose(self) -> ComposeResult:
         yield ConnectionStatus(id="connection-status")
@@ -234,6 +239,13 @@ class AgentZeroCLI(App):
                 lambda app: chat_commands.cmd_keys(app),
             ),
             CommandSpec(
+                "/disconnect",
+                (),
+                "Disconnect and return to the current host sign-in screen.",
+                lambda app: availability.require_connection(app),
+                lambda app: chat_commands.cmd_disconnect(app),
+            ),
+            CommandSpec(
                 "/help",
                 (),
                 "Show the commands available in this shell.",
@@ -275,7 +287,7 @@ class AgentZeroCLI(App):
         rows: list[tuple[CommandSpec, CommandAvailability]] = []
         for spec in self._command_registry:
             availability = spec.availability(self)
-            if spec.canonical_name in {"/presets", "/models", "/project"} and not availability.available:
+            if spec.canonical_name in {"/presets", "/models", "/project", "/disconnect"} and not availability.available:
                 continue
             rows.append((spec, availability))
         return tuple(rows)
@@ -358,6 +370,7 @@ class AgentZeroCLI(App):
     async def _open_project_menu(self) -> None:
         await self._refresh_projects(context_id=self.current_context, silent=False)
         if self._project_menu_popover is not None:
+            self.call_after_refresh(self._position_project_menu_popover)
             self.call_after_refresh(self._project_menu_popover.focus_first_item)
             return
 
@@ -368,6 +381,7 @@ class AgentZeroCLI(App):
         )
         self._project_menu_popover = popover
         await self.mount(popover)
+        self.call_after_refresh(self._position_project_menu_popover)
         self.call_after_refresh(popover.focus_first_item)
 
     async def _toggle_project_menu(self) -> None:
@@ -383,6 +397,23 @@ class AgentZeroCLI(App):
             return
         await popover.remove()
 
+    def _position_project_menu_popover(self) -> None:
+        popover = self._project_menu_popover
+        if popover is None:
+            return
+
+        try:
+            status = self.query_one("#connection-status", ConnectionStatus)
+        except NoMatches:
+            return
+
+        menu_width = popover.region.width or popover.outer_size.width or 38
+        screen_width = self.screen.size.width
+        x = max(0, screen_width - menu_width - 2)
+        y = max(0, status.region.y + status.region.height)
+        popover.absolute_offset = Offset(x, y)
+        popover.refresh(layout=True)
+
     async def _handle_project_menu_action(self, action: str, project_name_value: str | None = None) -> None:
         await self._hide_project_menu()
         await project_commands.handle_project_menu_action(
@@ -390,6 +421,10 @@ class AgentZeroCLI(App):
             action,
             project_name_value=project_name_value,
         )
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._position_project_menu_popover()
 
     def _splash_host(self) -> str:
         return splash_helpers.splash_host(self)
@@ -494,7 +529,7 @@ class AgentZeroCLI(App):
         if binding.action == "toggle_remote_file_mode":
             return "Read" if self._remote_file_write_enabled else "Read&Write"
         if binding.action == "toggle_remote_exec":
-            return "exec off" if self._remote_exec_enabled else "exec on"
+            return "Code-exec OFF" if self._remote_exec_enabled else "Code-exec ON"
         if binding.action == "pause_agent":
             return "Resume" if self._pause_latched else "Pause"
         return binding.description
@@ -581,6 +616,68 @@ class AgentZeroCLI(App):
 
     def _welcome_actions(self) -> tuple[SplashAction, ...]:
         return splash_helpers.welcome_actions(self)
+
+    def _start_instance_discovery(self, *, auto_connect_single: bool = False) -> None:
+        self._instance_discovery_generation += 1
+        generation = self._instance_discovery_generation
+        self._set_splash_state(
+            discovery_status="loading",
+            discovery_detail="",
+        )
+        self.run_worker(
+            self._discover_local_instances(generation, auto_connect_single=auto_connect_single),
+            exclusive=False,
+            name=f"instance-discovery-{generation}",
+        )
+
+    async def _discover_local_instances(self, generation: int, *, auto_connect_single: bool = False) -> None:
+        result = await discover_local_instances()
+        if generation != self._instance_discovery_generation:
+            return
+        auto_connect_host = self._apply_instance_discovery_result(
+            result,
+            auto_connect_single=auto_connect_single,
+        )
+        if auto_connect_host:
+            await self._begin_connection(auto_connect_host)
+
+    def _apply_instance_discovery_result(
+        self,
+        result: DiscoveryResult,
+        *,
+        auto_connect_single: bool = False,
+    ) -> str:
+        instances = tuple(result.instances)
+        discovered_urls = {instance.url for instance in instances}
+        preferred_host = (self._splash_state.host or self.config.instance_url or "").strip()
+        selected_host_url = self._splash_state.selected_host_url.strip()
+
+        if selected_host_url in discovered_urls:
+            resolved_selection = selected_host_url
+        elif preferred_host in discovered_urls:
+            resolved_selection = preferred_host
+        elif instances:
+            resolved_selection = instances[0].url
+        else:
+            resolved_selection = ""
+
+        manual_entry_expanded = self._splash_state.manual_entry_expanded
+        if not instances:
+            manual_entry_expanded = True
+        elif preferred_host and preferred_host != DEFAULT_HOST and preferred_host not in discovered_urls:
+            manual_entry_expanded = True
+
+        self._set_splash_state(
+            host=preferred_host if manual_entry_expanded else (resolved_selection or preferred_host),
+            discovered_instances=instances,
+            discovery_status=result.status,
+            discovery_detail=result.detail,
+            selected_host_url=resolved_selection,
+            manual_entry_expanded=manual_entry_expanded,
+        )
+        if auto_connect_single and len(instances) == 1 and resolved_selection and not manual_entry_expanded:
+            return resolved_selection
+        return ""
 
     async def _startup(self) -> None:
         await connection.startup(self)
@@ -753,6 +850,15 @@ class AgentZeroCLI(App):
             name="splash-submit",
         )
 
+    def on_splash_view_host_state_changed(self, event: SplashView.HostStateChanged) -> None:
+        if self._splash_state.stage != "host":
+            return
+        self._set_splash_state(
+            host=event.host,
+            selected_host_url=event.selected_host_url,
+            manual_entry_expanded=event.manual_entry_expanded,
+        )
+
     def on_splash_view_action_requested(self, event: SplashView.ActionRequested) -> None:
         if event.action == "back":
             self._set_splash_stage(
@@ -765,6 +871,16 @@ class AgentZeroCLI(App):
                 save_credentials=self._splash_state.save_credentials,
                 login_error="",
             )
+            self._start_instance_discovery(auto_connect_single=False)
+            self._focus_splash_primary()
+            return
+
+        if event.action == "refresh-hosts":
+            self._start_instance_discovery()
+            return
+
+        if event.action == "toggle-manual-host":
+            self._set_splash_state(manual_entry_expanded=not self._splash_state.manual_entry_expanded)
             self._focus_splash_primary()
             return
 
@@ -850,6 +966,9 @@ class AgentZeroCLI(App):
     async def _disconnect_and_exit(self) -> None:
         await connection.disconnect_and_exit(self)
 
+    async def _disconnect_to_login(self) -> None:
+        await connection.disconnect_to_login(self)
+
     async def action_clear_chat(self) -> None:
         await self._cmd_clear()
 
@@ -877,3 +996,6 @@ class AgentZeroCLI(App):
 
     async def action_quit(self) -> None:
         await self._disconnect_and_exit()
+
+    async def action_disconnect(self) -> None:
+        await self._disconnect_to_login()

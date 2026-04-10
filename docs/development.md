@@ -33,9 +33,11 @@ A0_SET_mcp_server_token=your-token python run_ui.py --host=127.0.0.1 --port=5000
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
-export AGENT_ZERO_HOST=http://127.0.0.1:50001
+export AGENT_ZERO_HOST=http://localhost:50001
 agentzero
 ```
+
+When you are developing against a Docker-detected local Agent Zero instance, prefer `localhost` over `127.0.0.1` so the saved host matches the discovered host exactly.
 
 ### Mirroring backend changes back into this repo
 

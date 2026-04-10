@@ -555,12 +555,11 @@ ChatListScreen {
 
 #project-menu-popover {
     layer: status;
-    dock: right;
+    overlay: screen;
     width: 38;
     height: auto;
     min-height: 0;
     max-height: 16;
-    margin: 1 2 0 0;
     border: round #0f6db8;
     background: #101820;
     padding: 1;
@@ -758,9 +757,108 @@ SplashStatusPanel {
     align: left middle;
 }
 
+#splash-host-loading,
+#splash-host-status,
+#splash-host-list-mount {
+    margin-top: 1;
+}
+
+#splash-host-status {
+    color: #9aa7b4;
+}
+
+#splash-host-list-mount {
+    width: 100%;
+    height: auto;
+}
+
+#splash-host-list {
+    width: 100%;
+    height: auto;
+    max-height: 10;
+    border: round #2a3a4a;
+    background: #111820;
+    padding: 0 1;
+}
+
+#splash-host-list > ListItem {
+    margin: 0;
+    padding: 0;
+    border-bottom: solid #1d2a36;
+}
+
+#splash-host-list > ListItem.-highlight,
+#splash-host-list > ListItem.-hovered {
+    background: #172533;
+}
+
+.splash-host-row-body {
+    width: 100%;
+    height: auto;
+    padding: 1 1 0 1;
+    background: transparent;
+}
+
+.splash-host-row-title {
+    width: 100%;
+    color: #d9e2ec;
+    text-style: bold;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+.splash-host-row-meta {
+    width: 100%;
+    margin-bottom: 1;
+    color: #7f8c98;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+#splash-host-list > ListItem.-highlight .splash-host-row-title {
+    color: #f5f7fa;
+}
+
+#splash-host-list > ListItem.-highlight .splash-host-row-meta {
+    color: #9ecfff;
+}
+
 #splash-host-validation {
     margin-top: 1;
     min-height: 1;
+}
+
+#splash-host-secondary-actions {
+    width: 100%;
+    height: auto;
+    layout: horizontal;
+    margin-top: 1;
+}
+
+#splash-host-refresh,
+#splash-host-toggle-manual {
+    width: 1fr;
+    background: transparent;
+    color: #80d0ff;
+    border: round #2a3a4a;
+    text-style: bold;
+}
+
+#splash-host-refresh {
+    margin-right: 1;
+}
+
+#splash-host-refresh:focus,
+#splash-host-toggle-manual:focus {
+    background: #172533;
+    color: #f5f7fa;
+    border: round #00b4ff;
+}
+
+#splash-host-refresh:disabled,
+#splash-host-toggle-manual:disabled {
+    color: #7f8b97;
+    border: round #2a3a4a;
 }
 
 #splash-login-back {
@@ -822,6 +920,18 @@ SplashStatusPanel {
     background: #1c2732;
     color: #7f8b97;
     border: round #2a3a4a;
+}
+
+#splash-manual-section {
+    width: 100%;
+    height: auto;
+    margin-top: 1;
+    padding-top: 1;
+    border-top: solid #1d2a36;
+}
+
+#splash-manual-title {
+    margin-bottom: 0;
 }
 
 #splash-save-credentials {

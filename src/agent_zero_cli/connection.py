@@ -19,19 +19,22 @@ if TYPE_CHECKING:
 
 
 async def startup(app: AgentZeroCLI) -> None:
-    host = app.config.instance_url.strip()
-    if not host:
-        app._set_splash_stage(
-            "host",
-            message="Enter the Agent Zero WebUI URL and port.",
-            detail="",
-            host=DEFAULT_HOST,
-        )
-        app._sync_connection_status("disconnected", "")
-        app._focus_splash_primary()
-        return
-
-    await app._begin_connection(host)
+    host = app.config.instance_url.strip() or DEFAULT_HOST
+    app._set_splash_stage(
+        "host",
+        message="",
+        detail="",
+        host=host,
+    )
+    app._set_splash_state(
+        discovery_status="loading",
+        discovery_detail="",
+        selected_host_url="",
+        manual_entry_expanded=False,
+    )
+    app._sync_connection_status("disconnected", "")
+    app._focus_splash_primary()
+    app._start_instance_discovery(auto_connect_single=True)
 
 
 async def fetch_capabilities(app: AgentZeroCLI) -> tuple[dict[str, Any] | None, bool, str]:
@@ -300,30 +303,89 @@ async def begin_connection(
     app._focus_message_input()
 
 
-def set_connected(app: AgentZeroCLI, value: bool) -> None:
-    app.connected = value
-    app._sync_connection_status("connected" if value else "disconnected")
+def _reset_disconnected_state(app: AgentZeroCLI) -> None:
+    app.connected = False
+    app.agent_active = False
+    app.current_context = None
+    app.current_context_has_messages = False
+    app._response_delivered = False
+    app._context_run_complete = False
+    app._chat_intro_pending = True
+    app.capabilities = {}
+    app.connector_features = set()
+    app._slash_palette_query = None
+    app._sync_connection_status("disconnected")
     input_widget = app.query_one("#message-input", ChatInput)
-    input_widget.disabled = not value
-    if not value:
-        if app.is_running:
-            asyncio.create_task(app._hide_project_menu())
-        app._cancel_compaction_refresh()
-        app._set_pause_latched(False)
-        app._stop_remote_tree_publisher()
-        app._stop_token_refresh()
-        app._clear_token_usage()
-        app._clear_project_state()
-        app._set_workspace_context(remote_workspace="")
-        asyncio.create_task(app._python_tty.close())
-        app._clear_model_switcher()
+    input_widget.disabled = True
+    app.query_one("#chat-log", ChatLog).clear()
+    app._set_idle()
+    if app.is_running:
+        asyncio.create_task(app._hide_project_menu())
+    app._cancel_compaction_refresh()
+    app._set_pause_latched(False)
+    app._stop_remote_tree_publisher()
+    app._stop_token_refresh()
+    app._clear_token_usage()
+    app._clear_project_state()
+    app._set_workspace_context(remote_workspace="")
+    asyncio.create_task(app._python_tty.close())
+    app._clear_model_switcher()
+    app._sync_body_mode()
+
+
+def set_connected(app: AgentZeroCLI, value: bool) -> None:
+    if value:
+        app.connected = True
+        app._sync_connection_status("connected")
+        input_widget = app.query_one("#message-input", ChatInput)
+        input_widget.disabled = False
+        return
+
+    _reset_disconnected_state(app)
+    app._set_splash_stage(
+        "error",
+        message="Connection lost",
+        detail=app.config.instance_url or app._splash_host(),
+        host=app._splash_host(),
+    )
+
+
+async def disconnect_to_login(app: AgentZeroCLI) -> None:
+    current_host = app.config.instance_url or app._splash_host()
+    login_supported = "login" in (app.capabilities.get("auth") or [])
+    username = app._splash_state.username
+    save_credentials = app._splash_state.save_credentials
+
+    app.client.on_disconnect = None
+    try:
+        await app.client.disconnect(close_http=False)
+    except Exception:
+        pass
+
+    app.config.api_key = ""
+    app.client.api_key = ""
+    _reset_disconnected_state(app)
+    app._sync_connection_status("disconnected", current_host)
+
+    if login_supported and current_host:
         app._set_splash_stage(
-            "error",
-            message="Connection lost",
-            detail=app.config.instance_url or app._splash_host(),
-            host=app._splash_host(),
+            "login",
+            message="",
+            detail="",
+            host=current_host,
+            username=username,
+            password="",
+            save_credentials=save_credentials,
+            login_error="",
         )
-        app._sync_body_mode()
+    else:
+        app._set_splash_stage(
+            "host",
+            message="",
+            detail="",
+            host=current_host or DEFAULT_HOST,
+        )
+    app._focus_splash_primary()
 
 
 async def disconnect_and_exit(app: AgentZeroCLI) -> None:

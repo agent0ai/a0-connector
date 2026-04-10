@@ -26,4 +26,4 @@ rsync -a /path/to/a0-connector/plugin/a0_connector/ usr/plugins/a0_connector/
 Same cause — the browser uses Agent Zero's built-in UI, not the connector API.
 
 **WebSocket connection rejected**
-Ensure reverse proxies forward both `/api/plugins/` and `/socket.io` to Agent Zero unchanged. Check that `AGENT_ZERO_HOST` matches the actual URL (e.g. `localhost` vs `127.0.0.1`).
+Ensure reverse proxies forward both `/api/plugins/` and `/socket.io` to Agent Zero unchanged. Check that `AGENT_ZERO_HOST` exactly matches the actual URL (for example `localhost` vs `127.0.0.1`). If the CLI discovered the server through Docker as `localhost`, keep using `localhost`.

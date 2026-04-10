@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from rich.padding import Padding
 from textual.app import App, ComposeResult
-from textual.widgets import Button, Input, Static
+from textual.widgets import Button, Input, ListView, LoadingIndicator, Static
 
 from agent_zero_cli.app import AgentZeroCLI
 from agent_zero_cli.client import DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
+from agent_zero_cli.instance_discovery import DiscoveredInstance, DiscoveryResult
 from agent_zero_cli.rendering import _sanitize_code_output, extract_detail, render_connector_event
 from agent_zero_cli.screens.compact_modal import CompactResult
 from agent_zero_cli.screens.model_runtime import ModelRuntimeResult
@@ -39,6 +41,22 @@ from agent_zero_cli.widgets.splash_view import (
 
 async def _async_return(value=None):
     return value
+
+
+def _instance(
+    url: str,
+    *,
+    name: str = "agent-zero",
+    host_port: str = "50001",
+    status_text: str = "agent-zero | frdel/agent-zero:latest",
+) -> DiscoveredInstance:
+    return DiscoveredInstance(
+        id=f"{name}:{host_port}",
+        name=name,
+        url=url,
+        host_port=host_port,
+        status_text=status_text,
+    )
 
 
 pytestmark = pytest.mark.anyio
@@ -313,6 +331,13 @@ class ProjectMenuHarnessApp(App[None]):
         self.project_actions.append((event.action, event.project_name))
 
 
+class ProjectMenuOverlayHarnessApp(AgentZeroCLI):
+    CSS_PATH = str(Path(__file__).resolve().parents[1] / "src/agent_zero_cli/styles/app.tcss")
+
+    async def _startup(self) -> None:
+        return None
+
+
 @pytest.fixture
 def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
     app = DummyAgentZeroCLI()
@@ -401,6 +426,25 @@ def test_splash_login_submit_requires_both_fields_in_top_context() -> None:
     assert view._login_panel.error_message == "Username and password are required."
 
 
+def test_splash_login_submit_uses_visible_login_target_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    view = SplashView()
+    posted: list[object] = []
+    view.post_message = posted.append
+
+    monkeypatch.setattr(type(view._login_panel), "username", property(lambda self: "admin"))
+    monkeypatch.setattr(type(view._login_panel), "password", property(lambda self: "secret"))
+    monkeypatch.setattr(type(view._login_panel), "save_credentials", property(lambda self: False))
+    monkeypatch.setattr(type(view._login_panel), "target_host", property(lambda self: "http://localhost:32080"))
+
+    view._submit_login()
+
+    assert len(posted) == 1
+    assert isinstance(posted[0], SplashView.SubmitRequested)
+    assert posted[0].host == "http://localhost:32080"
+
+
 def test_splash_login_panel_restores_target_context_after_error() -> None:
     panel = SplashLoginPanel()
     target = "http://207.148.13.38:32080"
@@ -415,6 +459,37 @@ def test_splash_login_panel_restores_target_context_after_error() -> None:
 
     assert panel.error_message == ""
     assert panel.target_host == target
+
+
+async def test_splash_login_stage_surfaces_detected_instance_context() -> None:
+    app = SplashHarnessApp()
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        view = app.query_one(SplashView)
+        view.set_state(
+            SplashState(
+                stage="login",
+                host="http://localhost:32081",
+                discovered_instances=(
+                    _instance(
+                        "http://localhost:32081",
+                        name="serene_haibt",
+                        host_port="32081",
+                        status_text="serene_haibt | 0ca698cd797e",
+                    ),
+                ),
+            )
+        )
+        await pilot.pause(0.1)
+
+        assert (
+            view._login_panel._copy.render().plain
+            == "Input the credentials used in your Agent Zero WebUI (Settings > External Services)."
+        )
+        summary = view.query_one("#splash-login-target-summary", Static)
+        assert summary.display is True
+        assert "Detected A0 instance" in summary.render().plain
+        assert "serene_haibt" in summary.render().plain
 
 
 async def test_splash_host_panel_blocks_invalid_url_submission() -> None:
@@ -541,6 +616,54 @@ async def test_project_menu_item_click_posts_selection_message() -> None:
         assert app.project_actions == [("activate", "project_1")]
 
 
+async def test_project_menu_overlay_does_not_shift_connection_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = ProjectMenuOverlayHarnessApp(
+        config=CLIConfig(
+            instance_url="http://example.test",
+            api_key="",
+        )
+    )
+
+    monkeypatch.setattr(
+        app.client,
+        "get_projects",
+        lambda context_id: _async_return(
+            {
+                "ok": True,
+                "projects": [
+                    {"name": "project_1", "title": "Project #1", "color": "#002975ff"},
+                    {"name": "project_2", "title": "Project #2", "color": "#ff5b00ff"},
+                ],
+                "current_project": None,
+            }
+        ),
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause(0.1)
+        app.connected = True
+        app.current_context = "ctx-1"
+        app.connector_features = {"projects"}
+        app._sync_project_header()
+        await pilot.pause(0.1)
+
+        status = app.query_one("#connection-status", ConnectionStatus)
+        trigger = app.query_one("#connection-status-project", ConnectionStatus.ProjectTrigger)
+        before_status_region = status.region
+        before_trigger_region = trigger.region
+
+        await app._open_project_menu()
+        await pilot.pause(0.1)
+
+        popover = app.query_one("#project-menu-popover", ProjectMenuPopover)
+        assert status.region == before_status_region
+        assert trigger.region == before_trigger_region
+        assert popover.region.x == app.screen.size.width - popover.region.width - 2
+        assert popover.region.y == status.region.y + status.region.height
+
+
 def test_connection_target_summary_handles_invalid_port() -> None:
     label, normalized, secure = _connection_target_summary("http://bad:abc")
 
@@ -604,6 +727,88 @@ async def test_splash_host_stage_hides_redundant_header_copy() -> None:
         assert view.query_one("#splash-message", Static).display is False
 
 
+async def test_splash_host_stage_shows_loading_before_discovery_completes() -> None:
+    app = SplashHarnessApp()
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        view = app.query_one(SplashView)
+        view.set_state(
+            SplashState(
+                stage="host",
+                host=DEFAULT_HOST,
+                discovery_status="loading",
+            )
+        )
+        await pilot.pause(0.1)
+
+        assert view.query_one("#splash-host-loading", LoadingIndicator).display is True
+        assert view.query_one("#splash-host-submit", Button).disabled is True
+
+
+async def test_splash_host_stage_renders_discovered_instances_as_selectable_rows() -> None:
+    app = SplashHarnessApp()
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        view = app.query_one(SplashView)
+        view.set_state(
+            SplashState(
+                stage="host",
+                host=DEFAULT_HOST,
+                discovery_status="ready",
+                discovered_instances=(
+                    _instance("http://localhost:50001", host_port="50001"),
+                    _instance("http://127.0.0.1:50002", host_port="50002"),
+                ),
+                selected_host_url="http://localhost:50001",
+            )
+        )
+        await pilot.pause(0.1)
+
+        assert len(view.query_one("#splash-host-list", ListView).children) == 2
+
+
+async def test_splash_host_stage_hides_manual_section_when_instances_exist() -> None:
+    app = SplashHarnessApp()
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        view = app.query_one(SplashView)
+        view.set_state(
+            SplashState(
+                stage="host",
+                host=DEFAULT_HOST,
+                discovery_status="ready",
+                discovered_instances=(_instance("http://localhost:50001"),),
+                selected_host_url="http://localhost:50001",
+                manual_entry_expanded=False,
+            )
+        )
+        await pilot.pause(0.1)
+
+        assert view._host_panel._manual_section.display is False
+
+
+async def test_splash_host_stage_invalid_manual_url_keeps_connect_disabled() -> None:
+    app = SplashHarnessApp()
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        view = app.query_one(SplashView)
+        view.set_state(
+            SplashState(
+                stage="host",
+                host=DEFAULT_HOST,
+                discovery_status="empty",
+                manual_entry_expanded=True,
+            )
+        )
+        await pilot.pause(0.1)
+
+        host_input = view.query_one("#splash-host-input", Input)
+        host_input.value = "localhost:5080"
+        await pilot.pause(0.1)
+
+        assert view.query_one("#splash-host-submit", Button).disabled is True
+
+
 async def test_startup_without_host_shows_host_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -624,6 +829,156 @@ async def test_startup_without_host_shows_host_stage(
     assert splash.state.stage == "host"
     assert splash.state.host == DEFAULT_HOST
     assert splash.focused is True
+
+
+async def test_startup_with_saved_host_stays_on_picker_and_skips_autoconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = DummyAgentZeroCLI(config=CLIConfig(instance_url="http://saved-host:50001", api_key=""))
+    widgets = {
+        "#chat-log": FakeChatLog(),
+        "#message-input": FakeInput(),
+        "#connection-status": FakeConnectionStatus(),
+        "#model-switcher-bar": FakeModelSwitcherBar(),
+        "#body-switcher": FakeBodySwitcher(),
+        "#splash-view": FakeSplash(),
+    }
+    app.query_one = lambda selector, cls=None: widgets[selector]
+
+    begin_calls: list[str] = []
+    discovery_calls: list[str] = []
+
+    async def fake_begin_connection(host: str, **kwargs) -> None:
+        begin_calls.append(host)
+
+    monkeypatch.setattr(app, "_begin_connection", fake_begin_connection)
+    monkeypatch.setattr(
+        app,
+        "_start_instance_discovery",
+        lambda *, auto_connect_single=False: discovery_calls.append(str(auto_connect_single)),
+    )
+
+    await app._startup()
+
+    splash = widgets["#splash-view"]
+    assert splash.state.stage == "host"
+    assert splash.state.host == "http://saved-host:50001"
+    assert begin_calls == []
+    assert discovery_calls == ["True"]
+
+
+def test_apply_instance_discovery_result_preselects_saved_host(dummy_app: DummyAgentZeroCLI) -> None:
+    saved_host = "http://localhost:50002"
+    dummy_app._set_splash_state(host=saved_host)
+
+    dummy_app._apply_instance_discovery_result(
+        DiscoveryResult(
+            status="ready",
+            instances=(
+                _instance("http://localhost:50001", host_port="50001"),
+                _instance(saved_host, host_port="50002"),
+            ),
+        )
+    )
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert splash.state.host == saved_host
+    assert splash.state.selected_host_url == saved_host
+    assert splash.state.manual_entry_expanded is False
+
+
+def test_apply_instance_discovery_result_returns_single_instance_for_autoconnect(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    dummy_app._set_splash_state(host=DEFAULT_HOST)
+    target = dummy_app._apply_instance_discovery_result(
+        DiscoveryResult(
+            status="ready",
+            instances=(_instance("http://localhost:50001", host_port="50001"),),
+        ),
+        auto_connect_single=True,
+    )
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert splash.state.host == "http://localhost:50001"
+    assert target == "http://localhost:50001"
+    assert splash.state.selected_host_url == "http://localhost:50001"
+    assert splash.state.manual_entry_expanded is False
+
+
+def test_apply_instance_discovery_result_expands_manual_when_no_instances(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app._apply_instance_discovery_result(
+        DiscoveryResult(
+            status="empty",
+            instances=(),
+            detail="No local Agent Zero Docker instances were found.",
+        )
+    )
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert splash.state.discovery_status == "empty"
+    assert splash.state.manual_entry_expanded is True
+    assert splash.state.selected_host_url == ""
+
+
+def test_apply_instance_discovery_result_expands_manual_when_saved_host_is_not_discovered(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    dummy_app._set_splash_state(host="http://remote.example:5080")
+
+    dummy_app._apply_instance_discovery_result(
+        DiscoveryResult(
+            status="ready",
+            instances=(
+                _instance("http://localhost:50001", host_port="50001"),
+                _instance("http://localhost:50002", host_port="50002"),
+            ),
+        )
+    )
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert splash.state.manual_entry_expanded is True
+    assert splash.state.selected_host_url == "http://localhost:50001"
+
+
+def test_apply_instance_discovery_result_skips_autoconnect_for_conflicting_saved_host(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    dummy_app._set_splash_state(host="http://remote.example:5080")
+
+    target = dummy_app._apply_instance_discovery_result(
+        DiscoveryResult(
+            status="ready",
+            instances=(_instance("http://localhost:50001", host_port="50001"),),
+        ),
+        auto_connect_single=True,
+    )
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert target == ""
+    assert splash.state.manual_entry_expanded is True
+
+
+def test_splash_host_submit_uses_selected_discovered_url() -> None:
+    view = SplashView()
+    posted: list[object] = []
+    view.post_message = posted.append
+    view.set_state(
+        SplashState(
+            stage="host",
+            host=DEFAULT_HOST,
+            discovery_status="ready",
+            discovered_instances=(_instance("http://localhost:50001"),),
+            selected_host_url="http://localhost:50001",
+        )
+    )
+    view._host_panel.set_state(view._state)
+
+    view._submit_host()
+
+    assert len(posted) == 1
+    assert isinstance(posted[0], SplashView.SubmitRequested)
+    assert posted[0].host == "http://localhost:50001"
 
 
 async def test_begin_connection_with_saved_login_persists_host_and_api_key(
@@ -795,6 +1150,7 @@ async def test_rejected_login_shows_inline_retry_copy(
 
 
 def test_splash_back_action_returns_to_host_stage(dummy_app: DummyAgentZeroCLI) -> None:
+    refresh_calls: list[bool] = []
     dummy_app._set_splash_state(
         stage="login",
         host="http://example.test:5080",
@@ -802,6 +1158,7 @@ def test_splash_back_action_returns_to_host_stage(dummy_app: DummyAgentZeroCLI) 
         save_credentials=True,
         login_error="Wrong username or password: retry.",
     )
+    dummy_app._start_instance_discovery = lambda *, auto_connect_single=False: refresh_calls.append(auto_connect_single)
 
     dummy_app.on_splash_view_action_requested(SplashView.ActionRequested("back"))
 
@@ -810,6 +1167,23 @@ def test_splash_back_action_returns_to_host_stage(dummy_app: DummyAgentZeroCLI) 
     assert splash.state.host == "http://example.test:5080"
     assert splash.state.login_error == ""
     assert splash.focused is True
+    assert refresh_calls == [False]
+
+
+def test_host_state_change_is_ignored_outside_host_stage(dummy_app: DummyAgentZeroCLI) -> None:
+    dummy_app._set_splash_state(stage="login", host="http://localhost:32080")
+
+    dummy_app.on_splash_view_host_state_changed(
+        SplashView.HostStateChanged(
+            host=DEFAULT_HOST,
+            selected_host_url="http://localhost:32081",
+            manual_entry_expanded=False,
+        )
+    )
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    assert splash.state.stage == "login"
+    assert splash.state.host == "http://localhost:32080"
 
 
 def test_login_stage_hides_composer_until_ready(dummy_app: DummyAgentZeroCLI) -> None:
@@ -1419,7 +1793,10 @@ async def test_remote_safety_toggle_actions_update_local_permissions(
     assert dummy_app._python_tty.enabled is True
 
 
-async def test_remote_safety_function_keys_toggle_permissions() -> None:
+async def test_remote_safety_function_keys_toggle_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(AgentZeroCLI, "_startup", lambda self: _async_return(None))
     app = AgentZeroCLI(config=CLIConfig(instance_url="", api_key=""))
 
     async with app.run_test() as pilot:
@@ -1512,7 +1889,7 @@ def test_system_commands_include_project_when_feature_advertised(dummy_app: Dumm
 
     titles = [command.title for command in dummy_app.get_system_commands(screen)]
 
-    assert titles == ["/new", "/chats", "/project", "/compact", "/keys", "/help", "/quit"]
+    assert titles == ["/new", "/chats", "/project", "/compact", "/keys", "/disconnect", "/help", "/quit"]
 
 
 async def test_project_command_opens_popover(
@@ -1685,6 +2062,7 @@ def test_system_commands_include_model_presets_when_available(dummy_app: DummyAg
         "/presets",
         "/models",
         "/keys",
+        "/disconnect",
         "/help",
         "/quit",
     ]
@@ -2104,3 +2482,38 @@ async def test_quit_disconnects_before_exit(
 
     assert disconnected == [True]
     assert exited == [True]
+
+
+async def test_disconnect_returns_to_login_stage(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disconnect_calls: list[bool] = []
+
+    async def fake_disconnect(*, close_http: bool = True) -> None:
+        disconnect_calls.append(close_http)
+
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app.capabilities = {"auth": ["api_key", "login"]}
+    dummy_app.config.instance_url = "http://example.test"
+    dummy_app.config.api_key = "key-123"
+    dummy_app.client.api_key = "key-123"
+    dummy_app._set_splash_state(stage="ready", host="http://example.test", username="admin", save_credentials=True)
+    monkeypatch.setattr(dummy_app.client, "disconnect", fake_disconnect)
+
+    await dummy_app.action_disconnect()
+
+    splash = dummy_app._test_widgets["#splash-view"]
+    body = dummy_app._test_widgets["#body-switcher"]
+    assert disconnect_calls == [False]
+    assert splash.state.stage == "login"
+    assert splash.state.host == "http://example.test"
+    assert splash.state.username == "admin"
+    assert splash.state.save_credentials is True
+    assert dummy_app.config.api_key == ""
+    assert dummy_app.client.api_key == ""
+    assert dummy_app.current_context is None
+    assert dummy_app.connected is False
+    assert body.current == "splash-view"
