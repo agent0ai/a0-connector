@@ -34,6 +34,14 @@ def _resolve_python() -> str:
     return sys.executable
 
 
+def _build_command() -> str:
+    """Launch the preview wrapper so browser sessions terminate with their parent."""
+
+    python = _resolve_python()
+    launcher = _PROJECT_ROOT / "devtools" / "preview_launcher.py"
+    return f'"{python}" "{launcher}"'
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Serve the TUI in a browser")
     parser.add_argument("--port", type=int, default=8566, help="HTTP port (default: 8566)")
@@ -49,8 +57,7 @@ def main() -> None:
         print(f"  {python} -m pip install textual-serve")
         sys.exit(1)
 
-    python = _resolve_python()
-    command = f'"{python}" -m agent_zero_cli'
+    command = _build_command()
 
     server = Server(
         command,

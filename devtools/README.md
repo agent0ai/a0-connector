@@ -32,6 +32,10 @@ screenshots of it just like a web page.
 ./.venv/bin/python devtools/serve.py --debug             # enable Textual devtools
 ```
 
+On Linux, the preview launcher now arms a parent-death signal so browser-preview
+CLI sessions shut down with the serving process instead of lingering under
+`systemd --user`.
+
 > **Tip:** Append `?fontsize=14` to the URL to tweak the rendered font size.
 
 ## 2. SVG Snapshot (`snapshot.py`)
