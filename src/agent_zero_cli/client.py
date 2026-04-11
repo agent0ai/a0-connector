@@ -469,7 +469,7 @@ class A0Client:
             _EVENT_HELLO,
             {
                 "protocol": PROTOCOL_VERSION,
-                "client": "agent-zero-cli",
+                "client": "a0",
                 "client_version": __version__,
             },
         )

@@ -31,7 +31,7 @@ class RemoteTreeSnapshot:
             "tree": self.tree,
             "tree_hash": self.tree_hash,
             "generated_at": self.generated_at,
-            "source": "agent-zero-cli",
+            "source": "a0",
         }
 
 

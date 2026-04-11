@@ -67,16 +67,32 @@ class AgentZeroCLI(App):
 
     CSS_PATH = "styles/app.tcss"
     TITLE = "Agent Zero CLI"
+    # Textual reports function keys as lowercase identifiers like `f3`.
+    # Keep the canonical key names here and use `key_display` for the footer.
     BINDINGS = [
         Binding("Ctrl+C", "Quit", "Exit", show=True),
-        Binding("F3", "toggle_remote_file_mode", "Read&Write", show=True, priority=True),
-        Binding("F4", "toggle_remote_exec", "Code-exec on", show=True, priority=True),
-        Binding("F5", "clear_chat", "Clear", show=True, priority=True),
-        Binding("F6", "list_chats", "Chats", show=True, priority=True),
-        Binding("F7", "nudge_agent", "Nudge", show=True, priority=True),
-        Binding("F8", "pause_agent", "Pause", show=True, priority=True),
         Binding(
-            "Ctrl+P",
+            "f3",
+            "toggle_remote_file_mode",
+            "Read&Write",
+            show=True,
+            priority=True,
+            key_display="F3",
+        ),
+        Binding(
+            "f4",
+            "toggle_remote_exec",
+            "Code-exec on",
+            show=True,
+            priority=True,
+            key_display="F4",
+        ),
+        Binding("f5", "clear_chat", "Clear", show=True, priority=True, key_display="F5"),
+        Binding("f6", "list_chats", "Chats", show=True, priority=True, key_display="F6"),
+        Binding("f7", "nudge_agent", "Nudge", show=True, priority=True, key_display="F7"),
+        Binding("f8", "pause_agent", "Pause", show=True, priority=True, key_display="F8"),
+        Binding(
+            "ctrl+p",
             "command_palette",
             "Commands",
             show=False,

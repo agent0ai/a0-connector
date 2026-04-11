@@ -3,10 +3,27 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent-zero-cli"
+name = "a0"
 version = "0.1.0"
 description = "Terminal chat interface for Agent Zero"
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
+authors = [
+    { name = "agent0ai" },
+]
+keywords = ["agent-zero", "a0", "cli", "textual", "tui"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Terminals",
+]
 dependencies = [
     "textual>=0.50.0",
     "python-socketio[asyncio_client]>=5.0.0",
@@ -14,8 +31,13 @@ dependencies = [
     "aiohttp>=3.11.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/agent0ai/a0-connector"
+Repository = "https://github.com/agent0ai/a0-connector"
+Issues = "https://github.com/agent0ai/a0-connector/issues"
+
 [project.scripts]
-agentzero = "agent_zero_cli.__main__:main"
+a0 = "agent_zero_cli.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_zero_cli"]

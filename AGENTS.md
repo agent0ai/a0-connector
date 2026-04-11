@@ -5,7 +5,7 @@
 ## Quick Reference
 
 Tech Stack: Python 3.10+ | Textual 8+ | httpx | python-socketio (Engine.IO)
-Run TUI: `agentzero` (or `python -m agent_zero_cli`)
+Run TUI: `a0` (or `python -m agent_zero_cli`)
 **UI preview in browser: `python devtools/serve.py` → http://localhost:8566**
 Run tests: `pytest tests/ -v`
 Docs: `docs/` | Architecture: `docs/architecture.md` | TUI: `docs/tui-frontend.md`
@@ -33,7 +33,7 @@ Plugin runtime path: `plugins/_a0_connector` (or `/a0/plugins/_a0_connector` in 
 
 **a0-connector** has two parts that live in the same repo and work together:
 
-1. **`agentzero` CLI** — a Textual terminal UI that connects to an Agent Zero
+1. **`a0` CLI** — a Textual terminal UI that connects to an Agent Zero
    instance, streams live agent events, and lets the user chat via a WebSocket
    protocol (`a0-connector.v1`).
 
@@ -52,7 +52,7 @@ browser preview (see below) launches just the CLI against any available backend
 
 Use two running pieces:
 - an Agent Zero instance whose Core build includes builtin `_a0_connector` support
-- this connector CLI (`agentzero`)
+- this connector CLI (`a0`)
 
 Recommended dev flow for backend changes:
 1. Keep plugin source in this repo at `plugin/_a0_connector/`.

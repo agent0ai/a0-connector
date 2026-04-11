@@ -6,22 +6,44 @@ Terminal connector for [Agent Zero](https://github.com/frdel/agent-zero). It pai
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| CLI (`agent-zero-cli`) | `src/agent_zero_cli/` | Terminal UI and session-aware transport client |
+| CLI (`a0`) | `src/agent_zero_cli/` | Terminal UI and session-aware transport client |
 | Plugin (`_a0_connector`) | `plugin/_a0_connector/` | Builtin Agent Zero Core plugin that exposes the connector HTTP + Socket.IO surface |
 
 The CLI requires an Agent Zero build that includes the builtin `_a0_connector` plugin.
 
 ## Install
 
-### 1. Install the CLI
+### 1. Install on macOS / Linux
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+curl -LsSf https://raw.githubusercontent.com/agent0ai/a0-connector/main/install.sh | sh
 ```
 
-### 2. Use Agent Zero Core with builtin `_a0_connector`
+### 2. Install on Windows PowerShell
+
+```powershell
+irm https://raw.githubusercontent.com/agent0ai/a0-connector/main/install.ps1 | iex
+```
+
+### 3. Run
+
+```bash
+a0
+```
+
+## Manual install
+
+If you already use `uv`, you can install the CLI directly from GitHub. `uv`
+will pick a compatible Python for the tool environment and can download one if
+needed:
+
+```bash
+uv tool install git+https://github.com/agent0ai/a0-connector
+```
+
+Advanced one-off runs with `uvx` also work, but they are intentionally not the primary install path for this project.
+
+## Agent Zero Core
 
 No separate plugin install is required for users once Agent Zero Core ships `_a0_connector` as a builtin plugin.
 
@@ -35,10 +57,10 @@ rsync -a /path/to/a0-connector/plugin/_a0_connector/ plugins/_a0_connector/
 
 For Docker-based Agent Zero setups, the same builtin plugin path is `/a0/plugins/_a0_connector`.
 
-### 3. Connect
+## Connect
 
 ```bash
-agentzero
+a0
 ```
 
 On every launch the CLI opens the host picker first. It checks Docker for local Agent Zero containers, lists any detected WebUI endpoints as friendly URLs such as `http://localhost:50001`, and lets you connect explicitly with Enter or the `Connect` button.
@@ -55,7 +77,7 @@ If you want to prefill a host, export it before starting the CLI:
 
 ```bash
 export AGENT_ZERO_HOST=http://localhost:50001
-agentzero
+a0
 ```
 
 You can optionally remember only the chosen host in `~/.agent-zero/.env` from inside the app. The CLI never stores usernames, passwords, session cookies, or connector tokens.
@@ -90,13 +112,13 @@ You can optionally remember only the chosen host in `~/.agent-zero/.env` from in
 ## Troubleshooting
 
 - `404` on `/api/plugins/_a0_connector/v1/capabilities`: the running Agent Zero build does not include the builtin `_a0_connector` plugin, or the local Core checkout/runtime copy is out of sync.
-- Browser UI works but `agentzero` does not: the core web UI can run without the connector plugin; the CLI cannot.
+- Browser UI works but `a0` does not: the core web UI can run without the connector plugin; the CLI cannot.
 - `Connector contract mismatch`: the server is advertising an older connector auth contract. Update Agent Zero Core so its builtin `_a0_connector` plugin matches the CLI.
 - WebSocket connection rejected: ensure proxies forward both `/socket.io` and `/api/plugins/` unchanged, and that `AGENT_ZERO_HOST` exactly matches the real host seen by Agent Zero. If Docker discovery shows `localhost`, prefer `localhost` over `127.0.0.1`.
 
 ## Docs
 
-- [Configuration](docs/configuration.md)
-- [Architecture](docs/architecture.md)
-- [Development](docs/development.md)
-- [TUI frontend](docs/tui-frontend.md)
+- [Configuration](https://github.com/agent0ai/a0-connector/blob/main/docs/configuration.md)
+- [Architecture](https://github.com/agent0ai/a0-connector/blob/main/docs/architecture.md)
+- [Development](https://github.com/agent0ai/a0-connector/blob/main/docs/development.md)
+- [TUI frontend](https://github.com/agent0ai/a0-connector/blob/main/docs/tui-frontend.md)

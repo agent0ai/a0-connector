@@ -4,14 +4,14 @@
 
 ```
 ┌─────────────────┐     HTTP POST /login + session cookie     ┌────────────────────────────┐
-│  agentzero CLI  │ ────────────────────────────────────────► │  Agent Zero                │
+│      a0 CLI     │ ────────────────────────────────────────► │  Agent Zero                │
 │                 │                                           │  + _a0_connector plugin     │
 │                 │     Socket.IO /ws namespace               │                            │
 │                 │ ◄──────────────────────────────────────── │                            │
 └─────────────────┘     connector_* events                   └────────────────────────────┘
 ```
 
-- **CLI** (`agent-zero-cli`): Textual TUI, installed via `pip install -e .`
+- **CLI** (`a0`): Textual TUI, published as the `a0` package and installed as the `a0` command
 - **Plugin** (`_a0_connector`): builtin Agent Zero Core plugin, mirrored in this repo under `plugin/_a0_connector/`
 
 ## Startup flow

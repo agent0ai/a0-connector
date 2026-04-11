@@ -172,6 +172,25 @@ def test_default_client_host_uses_splash_default() -> None:
     assert app.client.base_url == DEFAULT_HOST
 
 
+def test_shortcut_bindings_use_textual_canonical_key_names() -> None:
+    bindings = {binding.action: binding for binding in AgentZeroCLI.BINDINGS}
+
+    assert bindings["toggle_remote_file_mode"].key == "f3"
+    assert bindings["toggle_remote_file_mode"].key_display == "F3"
+    assert bindings["toggle_remote_exec"].key == "f4"
+    assert bindings["toggle_remote_exec"].key_display == "F4"
+    assert bindings["clear_chat"].key == "f5"
+    assert bindings["clear_chat"].key_display == "F5"
+    assert bindings["list_chats"].key == "f6"
+    assert bindings["list_chats"].key_display == "F6"
+    assert bindings["nudge_agent"].key == "f7"
+    assert bindings["nudge_agent"].key_display == "F7"
+    assert bindings["pause_agent"].key == "f8"
+    assert bindings["pause_agent"].key_display == "F8"
+    assert bindings["command_palette"].key == "ctrl+p"
+    assert bindings["command_palette"].key_display == "^P"
+
+
 def test_apply_instance_discovery_result_autoconnects_single_instance(
     dummy_app: DummyAgentZeroCLI,
 ) -> None:

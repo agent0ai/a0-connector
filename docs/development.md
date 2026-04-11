@@ -36,7 +36,7 @@ To test a protected instance, start Agent Zero with `AUTH_LOGIN` and `AUTH_PASSW
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 export AGENT_ZERO_HOST=http://localhost:50001
-agentzero
+a0
 ```
 
 When you are developing against a Docker-detected local Agent Zero instance, prefer `localhost` over `127.0.0.1` so the saved host matches the discovered host exactly.
