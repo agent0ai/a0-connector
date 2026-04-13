@@ -5,7 +5,7 @@
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `AGENT_ZERO_HOST` | Agent Zero base URL | `http://127.0.0.1:5080` (TUI default) |
-| `AGENT_ZERO_CORE_ROOT` | Override path used to runtime-import the local Agent Zero Core `_code_execution` helpers for frontend remote exec | Tried first, then `/home/eclypso/agentdocker`, then `/a0` |
+| `AGENT_ZERO_CORE_ROOT` | Override path used to runtime-import the local Agent Zero Core `_code_execution` helpers for frontend remote exec | Tried first, then `/a0` |
 
 ## Resolution order
 
@@ -19,7 +19,7 @@ For `AGENT_ZERO_HOST`:
 For `AGENT_ZERO_CORE_ROOT`:
 
 1. **Process environment**
-2. **Fallback paths** — `/home/eclypso/agentdocker`, then `/a0`
+2. **Fallback paths** — `/a0`
 
 If none of those paths contains a valid Core `_code_execution` tree, the CLI still starts normally for chat and remote-file features, but `code_execution_remote` returns an unavailable error instead of using a connector-local fallback runtime.
 

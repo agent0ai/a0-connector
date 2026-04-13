@@ -15,7 +15,6 @@ from typing import Any, Callable
 
 _CORE_ROOT_ENV = "AGENT_ZERO_CORE_ROOT"
 _CORE_ROOT_CANDIDATES = (
-    "/home/eclypso/agentdocker",
     "/a0",
 )
 _CORE_REQUIRED_FILES = (
@@ -64,7 +63,7 @@ _SUPPORTED_RUNTIMES = ("terminal", "python", "nodejs", "output", "reset", "input
 
 _NO_CORE_ERROR = (
     "Remote execution is unavailable because Agent Zero Core could not be found. "
-    "Set AGENT_ZERO_CORE_ROOT or ensure /home/eclypso/agentdocker or /a0 exists "
+    "Set AGENT_ZERO_CORE_ROOT or ensure /a0 exists "
     "on this machine."
 )
 _EXEC_DISABLED_ERROR = (

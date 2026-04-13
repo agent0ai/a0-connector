@@ -422,10 +422,7 @@ class A0Client:
                 "HTTP 404 — the builtin _a0_connector plugin is not available on this Agent Zero server.\n"
                 "\n"
                 "The web UI can work while this endpoint is missing: the CLI needs the plugin.\n"
-                "For this workspace, the intended builtin plugin path is:\n"
-                "  /home/eclypso/agentdocker/plugins/_a0_connector\n"
-                "Ensure Agent Zero Core includes that builtin plugin at /a0/plugins/_a0_connector,\n"
-                "then restart Agent Zero. On a remote host, update Agent Zero Core before retrying."
+                "On a remote host, update Agent Zero before retrying."
             )
         response.raise_for_status()
         return self._json(response)
