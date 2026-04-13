@@ -295,7 +295,7 @@ class SplashHostPanel(Vertical):
 
     def _sync_connect_button(self) -> None:
         if self._state.manual_entry_expanded:
-            self._button.disabled = not self._host_valid
+            self._button.disabled = not self._host_valid or not self._host.value.strip()
             return
         if self._state.discovered_instances:
             self._button.disabled = not bool(self.selected_host_url)
@@ -347,7 +347,7 @@ class SplashHostPanel(Vertical):
     @property
     def connect_host(self) -> str:
         if self._state.manual_entry_expanded:
-            return self.host
+            return self._host.value.strip()
         return self.selected_host_url
 
     @property
@@ -997,6 +997,9 @@ class SplashView(VerticalScroll):
             if not self._host_panel.is_valid:
                 self._host_panel.focus_input()
                 return
+            if not self._host_panel.connect_host:
+                self._host_panel.focus_input()
+                return
         elif not self._host_panel.selected_host_url:
             self._host_panel.focus_input()
             return
@@ -1026,7 +1029,10 @@ class SplashView(VerticalScroll):
         if next_selected_host is None:
             next_selected_host = self._host_panel.selected_host_url
         next_remember_host = self._host_panel.remember_host if remember_host is None else remember_host
-        next_host = self._host_panel.host
+        if self._state.manual_entry_expanded:
+            next_host = self._host_panel._host.value.strip()
+        else:
+            next_host = self._host_panel.host
         if not self._state.manual_entry_expanded and next_selected_host:
             next_host = next_selected_host
 

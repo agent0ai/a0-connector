@@ -4,7 +4,7 @@
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `AGENT_ZERO_HOST` | Agent Zero base URL | `http://127.0.0.1:5080` (TUI default) |
+| `AGENT_ZERO_HOST` | Agent Zero base URL | `http://127.0.0.1` (TUI placeholder; use Docker discovery or set the real URL) |
 | `AGENT_ZERO_CORE_ROOT` | Override path used to runtime-import the local Agent Zero Core `_code_execution` helpers for frontend remote exec | Tried first, then `/a0` |
 
 ## Resolution order

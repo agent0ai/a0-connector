@@ -716,7 +716,7 @@ class AgentZeroCLI(App):
         elif preferred_host in discovered_urls:
             resolved_selection = preferred_host
         elif instances:
-            resolved_selection = instances[0].url
+            resolved_selection = str(instances[0].url)
         else:
             resolved_selection = ""
 

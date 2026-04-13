@@ -87,6 +87,13 @@ async def refresh_token_usage(app: AgentZeroCLI, *, context_id: str | None = Non
         status_code = int(payload.get("status_code") or 0)
         if status_code == 409:
             return
+        stats = payload.get("stats")
+        if isinstance(stats, Mapping):
+            token_count = coerce_positive_int(stats.get("token_count"))
+            if token_count is not None:
+                token_limit = extract_token_limit(stats)
+                app._set_token_usage(token_count, token_limit)
+                return
         if not silent:
             app._show_notice(str(payload.get("message") or "Token usage unavailable."), error=True)
         return
