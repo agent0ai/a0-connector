@@ -34,4 +34,20 @@ def test_main_help_exits_without_launching_app(
     captured = capsys.readouterr()
     assert exc_info.value.code == 0
     assert "usage: a0" in captured.out
+    assert "update" in captured.out
+    assert launched == []
+
+
+def test_main_update_routes_without_launching_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launched: list[bool] = []
+    updated: list[bool] = []
+    monkeypatch.setattr(__main__, "_run_app", lambda: launched.append(True))
+    monkeypatch.setattr(__main__, "_run_self_update", lambda: updated.append(True) or 0)
+
+    exit_code = __main__.main(["update"])
+
+    assert exit_code == 0
+    assert updated == [True]
     assert launched == []

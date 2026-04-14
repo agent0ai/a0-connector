@@ -16,6 +16,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the installed a0 version and exit.",
     )
+    subparsers = parser.add_subparsers(dest="command", title="commands")
+    subparsers.add_parser(
+        "update",
+        help="Update the installed a0 tool and exit.",
+    )
     return parser
 
 
@@ -28,6 +33,12 @@ def _run_app() -> None:
     app.run()
 
 
+def _run_self_update() -> int:
+    from agent_zero_cli.self_update import run_self_update_handoff
+
+    return run_self_update_handoff()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -35,6 +46,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.version:
         print(__version__)
         return 0
+
+    if args.command == "update":
+        return _run_self_update()
 
     _run_app()
     return 0

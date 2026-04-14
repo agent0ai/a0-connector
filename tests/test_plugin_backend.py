@@ -273,6 +273,78 @@ def test_ws_connector_hello_advertises_remote_exec_and_tree_features() -> None:
     assert payload["exec_config"]["dialog_patterns"] == ["yes/no"]
 
 
+def test_remote_file_structure_is_injected_as_extras_not_system_prompt() -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+
+    class FakeLoopData:
+        def __init__(self) -> None:
+            self.system = []
+            self.extras_temporary = {}
+            self.extras_persistent = {}
+
+    agent_mod = types.ModuleType("agent")
+    agent_mod.LoopData = FakeLoopData
+    sys.modules["agent"] = agent_mod
+
+    extension_mod = types.ModuleType("helpers.extension")
+
+    class Extension:
+        def __init__(self, agent=None, **kwargs) -> None:
+            self.agent = agent
+            self.kwargs = kwargs
+
+    extension_mod.Extension = Extension
+    sys.modules["helpers.extension"] = extension_mod
+    sys.modules["helpers"].extension = extension_mod
+
+    include_mod = _reload(
+        "plugins._a0_connector.extensions.python.message_loop_prompts_after."
+        "_76_include_remote_file_structure"
+    )
+
+    sid = "sid-tree"
+    context_id = "ctx-tree"
+    ws_runtime_mod.register_sid(sid)
+    ws_runtime_mod.subscribe_sid_to_context(sid, context_id)
+    ws_runtime_mod.store_remote_tree_snapshot(
+        sid,
+        {
+            "root_path": r"C:\workspace\a0-connector",
+            "tree": "C:/workspace/a0-connector/\n|-- src/\n`-- pyproject.toml",
+            "tree_hash": "tree-hash-1",
+            "generated_at": "2026-04-14T12:00:00+00:00",
+        },
+    )
+
+    class FakeContext:
+        id = context_id
+
+    class FakeAgent:
+        context = FakeContext()
+
+        def read_prompt(self, file: str, **kwargs) -> str:
+            assert file == "agent.extras.remote_file_structure.md"
+            return f"REMOTE_TREE_EXTRAS\n{kwargs['folder']}\n{kwargs['file_structure']}"
+
+    loop_data = FakeLoopData()
+    loop_data.system.append("static system prompt")
+
+    asyncio.run(
+        include_mod.IncludeRemoteFileStructure(agent=FakeAgent()).execute(
+            loop_data=loop_data
+        )
+    )
+
+    assert loop_data.system == ["static system prompt"]
+    assert set(loop_data.extras_temporary) == {"remote_file_structure"}
+    remote_tree_prompt = loop_data.extras_temporary["remote_file_structure"]
+    assert "REMOTE_TREE_EXTRAS" in remote_tree_prompt
+    assert r"C:\workspace\a0-connector" in remote_tree_prompt
+    assert "pyproject.toml" in remote_tree_prompt
+
+
 def test_ws_connector_exec_result_resolves_pending_future() -> None:
     _install_fake_helpers()
     ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")

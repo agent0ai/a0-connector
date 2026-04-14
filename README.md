@@ -38,10 +38,22 @@ archive. `uv` will pick a compatible Python for the tool environment and can
 download one if needed, without requiring `git` to be installed:
 
 ```bash
-uv tool install "a0 @ https://github.com/agent0ai/a0-connector/archive/refs/heads/main.zip"
+uv tool install --upgrade "a0 @ https://github.com/agent0ai/a0-connector/archive/refs/heads/main.zip"
 ```
 
 Advanced one-off runs with `uvx` also work, but they are intentionally not the primary install path for this project.
+
+## Update
+
+If you installed `a0` with the standard `uv tool` flow, update it in place with:
+
+```bash
+a0 update
+```
+
+By default `a0 update` follows the same `main.zip` channel as the installer and manual `uv tool install --upgrade` command above. For advanced cases you can override the package source by setting `A0_PACKAGE_SPEC` before running `a0 update`.
+
+`a0 update` requires `uv` to be available on your `PATH`.
 
 ## Agent Zero Core
 
@@ -115,6 +127,7 @@ You can optionally remember only the chosen host in `~/.agent-zero/.env` from in
 - Browser UI works but `a0` does not: the core web UI can run without the connector plugin; the CLI cannot.
 - `Connector contract mismatch`: the server is advertising an older connector auth contract. Update Agent Zero Core so its builtin `_a0_connector` plugin matches the CLI.
 - WebSocket connection rejected: ensure proxies forward both `/socket.io` and `/api/plugins/` unchanged, and that `AGENT_ZERO_HOST` exactly matches the real host seen by Agent Zero. If Docker discovery shows `localhost`, prefer `localhost` over `127.0.0.1`.
+- `a0 update` says `uv` is required: Install `uv` or rerun the existing installer.
 
 ## Docs
 

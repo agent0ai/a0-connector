@@ -50,7 +50,10 @@ def test_readme_documents_uv_managed_python_and_git_install() -> None:
     assert "raw.githubusercontent.com/agent0ai/a0-connector/main/install.sh" in compact
     assert "raw.githubusercontent.com/agent0ai/a0-connector/main/install.ps1" in compact
     assert "directly from a GitHub source archive" in compact
-    assert 'uv tool install "a0 @ https://github.com/agent0ai/a0-connector/archive/refs/heads/main.zip"' in compact
+    assert 'uv tool install --upgrade "a0 @ https://github.com/agent0ai/a0-connector/archive/refs/heads/main.zip"' in compact
     assert "will pick a compatible Python" in compact
     assert "download one if needed" in compact
     assert "without requiring `git` to be installed" in readme
+    assert "`a0 update`" in readme
+    assert "`A0_PACKAGE_SPEC`" in readme
+    assert "Install `uv` or rerun the existing installer." in readme
