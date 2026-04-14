@@ -45,6 +45,7 @@ async def switch_context(app: AgentZeroCLI, context_id: str, *, has_messages_hin
         app._cancel_compaction_refresh()
     app._stop_token_refresh()
     await app._hide_project_menu()
+    await app._hide_profile_menu()
 
     if app.current_context:
         await app.client.unsubscribe_context(app.current_context)

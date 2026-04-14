@@ -362,6 +362,68 @@ async def test_active_run_preserves_draft_and_blocks_new_send(
     ]
 
 
+async def test_profile_command_dispatches_profile_menu(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.connector_features = {"settings_get", "settings_set"}
+
+    opened: list[str] = []
+
+    async def fake_open_profile_menu() -> None:
+        opened.append("profile-menu")
+
+    monkeypatch.setattr(dummy_app, "_open_profile_menu", fake_open_profile_menu)
+
+    await dummy_app._dispatch_command("/profile")
+
+    assert opened == ["profile-menu"]
+
+
+async def test_profile_command_with_argument_sets_profile(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.connector_features = {"settings_get", "settings_set"}
+
+    calls: list[dict[str, str]] = []
+    notices: list[tuple[str, bool]] = []
+
+    async def fake_get_settings() -> dict[str, object]:
+        return {
+            "settings": {"agent_profile": "agent0"},
+            "additional": {
+                "agent_subdirs": [
+                    {"value": "agent0", "label": "Agent 0"},
+                    {"value": "developer", "label": "Developer"},
+                ]
+            },
+        }
+
+    async def fake_set_settings(settings: dict[str, str]) -> dict[str, object]:
+        calls.append(settings)
+        return {
+            "settings": {"agent_profile": "developer"},
+            "additional": {
+                "agent_subdirs": [
+                    {"value": "agent0", "label": "Agent 0"},
+                    {"value": "developer", "label": "Developer"},
+                ]
+            },
+        }
+
+    monkeypatch.setattr(dummy_app.client, "get_settings", fake_get_settings)
+    monkeypatch.setattr(dummy_app.client, "set_settings", fake_set_settings)
+    monkeypatch.setattr(dummy_app, "_show_notice", lambda message, *, error=False: notices.append((message, error)))
+
+    await dummy_app._dispatch_command("/profile dev")
+
+    assert calls == [{"agent_profile": "developer"}]
+    assert notices == [("Agent profile set to Developer.", False)]
+
+
 async def test_remote_safety_toggles_update_local_permissions(
     dummy_app: DummyAgentZeroCLI,
 ) -> None:

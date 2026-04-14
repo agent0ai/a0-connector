@@ -87,6 +87,7 @@ async def begin_connection(
     app._stop_token_refresh()
     app._clear_token_usage()
     await app._hide_project_menu()
+    await app._hide_profile_menu()
     app._clear_project_state()
     app._last_remote_tree_hash = ""
     normalized_host = app._normalize_host(host)
@@ -296,6 +297,7 @@ def _reset_disconnected_state(app: AgentZeroCLI) -> None:
     app._set_idle()
     if app.is_running:
         asyncio.create_task(app._hide_project_menu())
+        asyncio.create_task(app._hide_profile_menu())
     app._cancel_compaction_refresh()
     app._set_pause_latched(False)
     app._stop_remote_tree_publisher()

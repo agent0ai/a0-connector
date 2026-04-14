@@ -20,6 +20,7 @@ from agent_zero_cli import (
     compaction,
     connection,
     event_handlers,
+    profile_commands,
     project_commands,
     splash_helpers,
 )
@@ -39,6 +40,8 @@ from agent_zero_cli.widgets import (
     ConnectionStatus,
     DynamicFooter,
     ModelSwitcherBar,
+    ProfileMenuItem,
+    ProfileMenuPopover,
     ProjectMenuItem,
     ProjectMenuPopover,
     SplashAction,
@@ -60,6 +63,7 @@ from agent_zero_cli.token_usage import (
 )
 
 _HIDDEN_SLASH_COMMANDS = frozenset({"/pause", "/resume", "/nudge"})
+_SPLASH_HIDDEN_COMMANDS = frozenset({"/profile"})
 
 
 class AgentZeroCLI(App):
@@ -162,8 +166,10 @@ class AgentZeroCLI(App):
         self._pause_latched = False
         self._slash_palette_query: str | None = None
         self._compaction_refresh_context: str | None = None
+        self._profile_menu_popover: ProfileMenuPopover | None = None
         self._project_menu_popover: ProjectMenuPopover | None = None
         self._instance_discovery_generation = 0
+        self._splash_hidden_commands = _SPLASH_HIDDEN_COMMANDS
 
     def compose(self) -> ComposeResult:
         yield ConnectionStatus(id="connection-status")
@@ -228,6 +234,13 @@ class AgentZeroCLI(App):
                 "Open the project menu and edit current project instructions.",
                 lambda app: availability.project_availability(app),
                 lambda app: project_commands.cmd_project(app),
+            ),
+            CommandSpec(
+                "/profile",
+                (),
+                "Pick or set the active Agent Zero Core profile.",
+                lambda app: availability.profile_availability(app),
+                lambda app: profile_commands.cmd_profile(app),
             ),
             CommandSpec(
                 "/compact",
@@ -329,7 +342,7 @@ class AgentZeroCLI(App):
             availability = spec.availability(self)
             if spec.canonical_name in _HIDDEN_SLASH_COMMANDS:
                 continue
-            if spec.canonical_name in {"/presets", "/models", "/project", "/disconnect"} and not availability.available:
+            if spec.canonical_name in {"/presets", "/models", "/profile", "/project", "/disconnect"} and not availability.available:
                 continue
             rows.append((spec, availability))
         return tuple(rows)
@@ -373,6 +386,9 @@ class AgentZeroCLI(App):
     def _is_project_menu_open(self) -> bool:
         return self._project_menu_popover is not None
 
+    def _is_profile_menu_open(self) -> bool:
+        return self._profile_menu_popover is not None
+
     def _stop_token_refresh(self) -> None:
         stop_token_refresh(self)
 
@@ -410,6 +426,7 @@ class AgentZeroCLI(App):
         await splash_helpers.refresh_workspace_from_settings(self)
 
     async def _open_project_menu(self) -> None:
+        await self._hide_profile_menu()
         await self._refresh_projects(context_id=self.current_context, silent=False)
         if self._project_menu_popover is not None:
             self.call_after_refresh(self._position_project_menu_popover)
@@ -438,6 +455,34 @@ class AgentZeroCLI(App):
     async def _hide_project_menu(self) -> None:
         popover = self._project_menu_popover
         self._project_menu_popover = None
+        if popover is None:
+            return
+        await popover.remove()
+
+    async def _open_profile_menu(self) -> None:
+        await self._hide_project_menu()
+        current_profile, options = await profile_commands.load_profile_menu_state(self, silent=False)
+        if not options:
+            return
+        if self._profile_menu_popover is not None:
+            await self._hide_profile_menu()
+
+        popover = ProfileMenuPopover(
+            options,
+            current_profile=current_profile,
+            id="profile-menu-popover",
+        )
+        self._profile_menu_popover = popover
+        offset = self._profile_menu_popover_offset(popover)
+        if offset is not None:
+            popover.absolute_offset = offset
+        await self.mount(popover)
+        self.call_after_refresh(self._position_profile_menu_popover)
+        self.call_after_refresh(popover.focus_first_item)
+
+    async def _hide_profile_menu(self) -> None:
+        popover = self._profile_menu_popover
+        self._profile_menu_popover = None
         if popover is None:
             return
         await popover.remove()
@@ -473,6 +518,47 @@ class AgentZeroCLI(App):
         popover.absolute_offset = offset
         popover.refresh(layout=True)
 
+    def _profile_menu_popover_offset(self, popover: ProfileMenuPopover | None = None) -> Offset | None:
+        popover = popover or self._profile_menu_popover
+        if popover is None:
+            return None
+
+        screen_width = self.screen.size.width
+        screen_height = self.screen.size.height
+        if screen_width <= 0 or screen_height <= 0:
+            return None
+
+        try:
+            composer = self.query_one("#message-input", ChatInput)
+            input_region = composer.region
+        except Exception:
+            return Offset(2, 2)
+
+        menu_width = popover.region.width or popover.outer_size.width or 44
+        menu_height = popover.region.height or popover.outer_size.height or 10
+        x = max(1, min(input_region.x, max(1, screen_width - menu_width - 1)))
+        y_above = input_region.y - menu_height - 1
+        if y_above >= 1:
+            y = y_above
+        else:
+            y = min(
+                max(1, input_region.y + input_region.height),
+                max(1, screen_height - menu_height - 1),
+            )
+        return Offset(x, y)
+
+    def _position_profile_menu_popover(self) -> None:
+        popover = self._profile_menu_popover
+        if popover is None:
+            return
+
+        offset = self._profile_menu_popover_offset(popover)
+        if offset is None:
+            return
+
+        popover.absolute_offset = offset
+        popover.refresh(layout=True)
+
     async def _handle_project_menu_action(self, action: str, project_name_value: str | None = None) -> None:
         await self._hide_project_menu()
         await project_commands.handle_project_menu_action(
@@ -481,9 +567,23 @@ class AgentZeroCLI(App):
             project_name_value=project_name_value,
         )
 
+    async def _dismiss_profile_menu(self) -> None:
+        await self._hide_profile_menu()
+        self._focus_message_input()
+
+    async def _handle_profile_menu_action(self, profile_key: str) -> None:
+        options = ()
+        popover = self._profile_menu_popover
+        if popover is not None:
+            options = getattr(popover, "_profiles", ())
+        await self._hide_profile_menu()
+        await profile_commands.apply_profile_selection(self, profile_key, options=options)
+        self._focus_message_input()
+
     def on_resize(self, event: events.Resize) -> None:
         del event
         self._position_project_menu_popover()
+        self._position_profile_menu_popover()
 
     def _splash_host(self) -> str:
         return splash_helpers.splash_host(self)
@@ -667,6 +767,9 @@ class AgentZeroCLI(App):
     def _project_availability(self) -> CommandAvailability:
         return availability.project_availability(self)
 
+    def _profile_availability(self) -> CommandAvailability:
+        return availability.profile_availability(self)
+
     def _model_presets_availability(self) -> CommandAvailability:
         return availability.model_presets_availability(self)
 
@@ -813,6 +916,12 @@ class AgentZeroCLI(App):
         availability = spec.availability(self)
         if not availability.available:
             self._show_notice(availability.reason or f"{token} is unavailable right now.", error=True)
+            return
+
+        if token == "/profile":
+            _, _, query = text.partition(" ")
+            await profile_commands.cmd_profile(self, query=query.strip())
+            self._sync_ready_actions()
             return
 
         await spec.handler(self)
@@ -993,6 +1102,17 @@ class AgentZeroCLI(App):
             name=f"project-menu-{event.action}",
         )
 
+    def on_profile_menu_popover_dismiss_requested(self, event: ProfileMenuPopover.DismissRequested) -> None:
+        del event
+        self.run_worker(self._dismiss_profile_menu(), exclusive=True, name="dismiss-profile-menu")
+
+    def on_profile_menu_item_selected(self, event: ProfileMenuItem.Selected) -> None:
+        self.run_worker(
+            self._handle_profile_menu_action(event.profile_key),
+            exclusive=True,
+            name=f"profile-menu-{event.profile_key}",
+        )
+
     async def _cmd_clear(self) -> None:
         await chat_commands.cmd_clear(self)
 
@@ -1019,6 +1139,9 @@ class AgentZeroCLI(App):
 
     async def _cmd_project(self) -> None:
         await project_commands.cmd_project(self)
+
+    async def _cmd_profile(self) -> None:
+        await profile_commands.cmd_profile(self)
 
     async def _cmd_model_presets(self) -> None:
         await cmd_model_presets(self)

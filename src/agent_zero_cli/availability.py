@@ -79,6 +79,15 @@ def project_availability(app: AgentZeroCLI) -> CommandAvailability:
     return CommandAvailability(True)
 
 
+def profile_availability(app: AgentZeroCLI) -> CommandAvailability:
+    base = app._require_features("settings_get", "settings_set")
+    if not base.available:
+        return base
+    if app.agent_active:
+        return CommandAvailability(False, "Wait for the current run to finish before changing the agent profile.")
+    return CommandAvailability(True)
+
+
 def model_presets_availability(app: AgentZeroCLI) -> CommandAvailability:
     base = app._require_features("model_switcher", "model_presets")
     if not base.available:

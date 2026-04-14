@@ -607,6 +607,61 @@ ChatListScreen {
     content-align: center middle;
 }
 
+#profile-menu-popover {
+    layer: status;
+    overlay: screen;
+    width: 44;
+    height: auto;
+    min-height: 0;
+    max-height: 14;
+    border: round #0f6db8;
+    background: #101820;
+    padding: 1;
+}
+
+#profile-menu-title {
+    text-style: bold;
+}
+
+#profile-menu-current {
+    color: #7f8c98;
+    margin-bottom: 1;
+}
+
+.profile-menu-item {
+    width: 100%;
+    height: 1;
+    min-height: 1;
+    margin: 0;
+    padding: 0 1;
+    background: transparent;
+    border: none;
+    color: #d9e2ec;
+    content-align: left middle;
+}
+
+.profile-menu-item:hover,
+.profile-menu-item:focus {
+    background: #172533;
+}
+
+.profile-menu-item.-disabled {
+    background: #111820;
+    color: #7f8c98;
+    opacity: 1;
+}
+
+#profile-menu-items {
+    height: auto;
+    max-height: 9;
+}
+
+#profile-menu-empty {
+    color: #7f8c98;
+    min-height: 3;
+    content-align: center middle;
+}
+
 ProjectInstructionsScreen {
     align: left top;
 }

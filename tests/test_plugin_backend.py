@@ -283,7 +283,7 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert payload["websocket_namespace"] == "/ws"
     assert payload["websocket_handlers"] == ["plugins/_a0_connector/ws_connector"]
     assert {"pause", "nudge", "remote_file_tree", "code_execution_remote"} <= set(payload["features"])
-    assert {"settings_get", "model_switcher", "compact_chat"} <= set(payload["features"])
+    assert {"settings_get", "settings_set", "agents_list", "model_switcher", "compact_chat"} <= set(payload["features"])
 
 
 def test_capabilities_reflect_core_login_requirement() -> None:

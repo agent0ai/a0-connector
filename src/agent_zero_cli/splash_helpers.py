@@ -212,6 +212,7 @@ def surface_help(app: AgentZeroCLI) -> None:
 
 
 def welcome_actions(app: AgentZeroCLI) -> tuple[SplashAction, ...]:
+    hidden = set(getattr(app, "_splash_hidden_commands", ()))
     return tuple(
         SplashAction(
             key=spec.canonical_name,
@@ -221,4 +222,5 @@ def welcome_actions(app: AgentZeroCLI) -> tuple[SplashAction, ...]:
             disabled_reason="" if availability.available else (availability.reason or ""),
         )
         for spec, availability in app._iter_ui_commands()
+        if spec.canonical_name not in hidden
     )
