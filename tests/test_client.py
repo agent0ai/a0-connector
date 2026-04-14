@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ssl
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
+from aiohttp import web
 import aiohttp
 import httpx
 import pytest
@@ -18,6 +21,60 @@ from agent_zero_cli.config import load_config, save_env
 
 
 pytestmark = pytest.mark.anyio
+
+_FIXTURES_DIR = Path(__file__).with_name("fixtures")
+_SELF_SIGNED_CERT = _FIXTURES_DIR / "localhost-selfsigned.crt"
+_SELF_SIGNED_KEY = _FIXTURES_DIR / "localhost-selfsigned.key"
+
+
+@asynccontextmanager
+async def self_signed_connector_server():
+    sio_server = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
+    app = web.Application()
+    sio_server.attach(app)
+
+    async def socketio_probe_alias(_request: web.Request) -> web.Response:
+        return web.Response(
+            text='0{"sid":"probe-sid","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+            content_type="text/plain",
+        )
+
+    async def capabilities(_request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "protocol": "a0-connector.v1",
+                "websocket_namespace": "/ws",
+                "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
+                "auth": ["session"],
+                "auth_required": False,
+                "features": [],
+            }
+        )
+
+    async def chats_list(_request: web.Request) -> web.Response:
+        return web.json_response({"contexts": []})
+
+    app.router.add_get("/socket.io", socketio_probe_alias)
+    app.router.add_post("/api/plugins/_a0_connector/v1/capabilities", capabilities)
+    app.router.add_post("/api/plugins/_a0_connector/v1/chats_list", chats_list)
+
+    @sio_server.event(namespace="/ws")
+    async def connect(_sid: str, _environ: dict, auth: dict | None) -> bool:
+        return auth == {"handlers": ["plugins/_a0_connector/ws_connector"]}
+
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_context.load_cert_chain(_SELF_SIGNED_CERT, _SELF_SIGNED_KEY)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=ssl_context)
+    await site.start()
+    port = runner.addresses[0][1]
+
+    try:
+        yield f"https://127.0.0.1:{port}"
+    finally:
+        await runner.cleanup()
 
 
 class FakeResponse:
@@ -134,6 +191,25 @@ async def test_fetch_capabilities_raises_plugin_missing_on_404() -> None:
         await client.fetch_capabilities()
 
 
+async def test_default_httpx_rejects_self_signed_https_connector_fixture() -> None:
+    async with self_signed_connector_server() as base_url:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            with pytest.raises(httpx.ConnectError):
+                await client.post(f"{base_url}/api/plugins/_a0_connector/v1/capabilities")
+
+
+async def test_fetch_capabilities_accepts_self_signed_https_connector() -> None:
+    async with self_signed_connector_server() as base_url:
+        client = A0Client(base_url)
+        try:
+            capabilities = await client.fetch_capabilities()
+
+            assert capabilities["protocol"] == "a0-connector.v1"
+            assert await client.verify_session() is True
+        finally:
+            await client.disconnect()
+
+
 async def test_connect_websocket_forwards_session_cookie_and_handler_auth() -> None:
     client = A0Client("http://127.0.0.1:50001")
     client.http = Mock()
@@ -173,6 +249,18 @@ async def test_connect_websocket_forwards_session_cookie_and_handler_auth() -> N
             },
         )
     ]
+
+
+async def test_connect_websocket_accepts_self_signed_https_connector() -> None:
+    async with self_signed_connector_server() as base_url:
+        client = A0Client(base_url)
+        try:
+            await client.connect_websocket()
+
+            assert client.connected is True
+            assert client.sio.connected is True
+        finally:
+            await client.disconnect()
 
 
 async def test_connect_websocket_reports_blank_namespace_rejection_after_probe() -> None:

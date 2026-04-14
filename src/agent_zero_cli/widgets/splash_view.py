@@ -445,8 +445,8 @@ class SplashLoginPanel(Vertical):
                 (self._login_error, "#ff8b6b"),
             )
         else:
-            security_tag = "[secure]" if self._target_secure else "[insecure]"
-            security_style = "#79d18a" if self._target_secure else "#f0b54d"
+            security_tag = "[TLS unverified]" if self._target_secure else "[insecure]"
+            security_style = "#f0b54d"
             if self._target_detected_label:
                 summary = Text.assemble(
                     ("Detected A0 instance ", "bold #79d18a"),

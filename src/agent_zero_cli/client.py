@@ -37,6 +37,9 @@ _EVENT_ERROR = "connector_error"
 
 _SOCKET_IO_PROBE_QUERY = {"transport": "polling", "EIO": "4"}
 _BLANK_SOCKET_IO_REJECTION = "server rejected the Socket.IO connection without an error message"
+# Mirror the browser/manual-URL posture: accept self-signed or privately-issued
+# certificates instead of blocking HTTPS connections outright.
+_VERIFY_TLS_CERTIFICATES = False
 
 
 class A0ProtocolError(RuntimeError):
@@ -68,8 +71,11 @@ class A0Client:
     def __init__(self, base_url: str) -> None:
         _ensure_aiohttp_ws_timeout_compat()
         self.base_url = base_url.rstrip("/")
-        self.http = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
-        self.sio = socketio.AsyncClient()
+        self.http = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0),
+            verify=_VERIFY_TLS_CERTIFICATES,
+        )
+        self.sio = socketio.AsyncClient(ssl_verify=_VERIFY_TLS_CERTIFICATES)
         self.connected = False
         self._events_registered = False
         self._last_connect_error: Any = None
