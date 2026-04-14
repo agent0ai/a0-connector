@@ -68,6 +68,8 @@ class RemoteFileUtility:
         path = str(data.get("path", "")).strip()
 
         try:
+            if op == "stat":
+                return self._file_op_stat(op_id, path)
             if op == "read":
                 return self._file_op_read(op_id, path, data)
             if op in {"write", "patch"} and not self.allow_writes:
@@ -87,14 +89,58 @@ class RemoteFileUtility:
         except Exception as exc:
             return {"op_id": op_id, "ok": False, "error": str(exc)}
 
+    def _expand_file_path(self, path: str) -> str:
+        return os.path.abspath(os.path.expanduser(path))
+
+    def _count_content_lines(self, content: str) -> int:
+        return content.count("\n") + (
+            1 if content and not content.endswith("\n") else 0
+        )
+
+    def _file_metadata(
+        self,
+        path: str,
+        *,
+        total_lines: int | None = None,
+    ) -> dict[str, Any]:
+        target_path = self._expand_file_path(path)
+        if not os.path.isfile(target_path):
+            raise FileNotFoundError(f"File not found: {path}")
+
+        if total_lines is None:
+            with open(target_path, "r", encoding="utf-8", errors="replace") as handle:
+                total_lines = sum(1 for _ in handle)
+
+        mtime: float | None = None
+        try:
+            mtime = os.path.getmtime(target_path)
+        except OSError:
+            pass
+
+        return {
+            "realpath": os.path.realpath(target_path),
+            "mtime": mtime,
+            "total_lines": total_lines,
+        }
+
+    def _file_op_stat(self, op_id: str, path: str) -> dict[str, Any]:
+        return {
+            "op_id": op_id,
+            "ok": True,
+            "result": {
+                "file": self._file_metadata(path),
+            },
+        }
+
     def _file_op_read(self, op_id: str, path: str, data: dict[str, Any]) -> dict[str, Any]:
         line_from = data.get("line_from")
         line_to = data.get("line_to")
+        target_path = self._expand_file_path(path)
 
-        if not os.path.isfile(path):
+        if not os.path.isfile(target_path):
             return {"op_id": op_id, "ok": False, "error": f"File not found: {path}"}
 
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        with open(target_path, "r", encoding="utf-8", errors="replace") as handle:
             lines = handle.readlines()
 
         total = len(lines)
@@ -103,6 +149,7 @@ class RemoteFileUtility:
         selected = lines[start:end]
 
         content = "".join(f"{index:>4} | {line}" for index, line in enumerate(selected, start=start + 1))
+        file_meta = self._file_metadata(target_path, total_lines=total)
 
         return {
             "op_id": op_id,
@@ -112,20 +159,27 @@ class RemoteFileUtility:
                 "total_lines": total,
                 "line_from": start + 1,
                 "line_to": end,
+                "file": file_meta,
             },
         }
 
     def _file_op_write(self, op_id: str, path: str, data: dict[str, Any]) -> dict[str, Any]:
         content = str(data.get("content", ""))
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
+        target_path = self._expand_file_path(path)
+        os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+        with open(target_path, "w", encoding="utf-8") as handle:
             handle.write(content)
+        file_meta = self._file_metadata(
+            target_path,
+            total_lines=self._count_content_lines(content),
+        )
         return {
             "op_id": op_id,
             "ok": True,
             "result": {
                 "path": path,
                 "message": f"{path} written successfully",
+                "file": file_meta,
             },
         }
 
@@ -134,10 +188,11 @@ class RemoteFileUtility:
         if not isinstance(edits, list) or not edits:
             return {"op_id": op_id, "ok": False, "error": "edits must be a non-empty list"}
 
-        if not os.path.isfile(path):
+        target_path = self._expand_file_path(path)
+        if not os.path.isfile(target_path):
             return {"op_id": op_id, "ok": False, "error": f"File not found: {path}"}
 
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(target_path, "r", encoding="utf-8") as handle:
             lines = handle.readlines()
 
         sorted_edits = sorted(edits, key=lambda item: int(item.get("from", 0) or 0), reverse=True)
@@ -160,8 +215,9 @@ class RemoteFileUtility:
             else:
                 lines[idx:to_idx] = str(content).splitlines(True)
 
-        with open(path, "w", encoding="utf-8") as handle:
+        with open(target_path, "w", encoding="utf-8") as handle:
             handle.writelines(lines)
+        file_meta = self._file_metadata(target_path, total_lines=len(lines))
 
         return {
             "op_id": op_id,
@@ -169,6 +225,7 @@ class RemoteFileUtility:
             "result": {
                 "path": path,
                 "message": f"{path} patched successfully",
+                "file": file_meta,
             },
         }
 

@@ -1,8 +1,36 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+import pytest
+
 from agent_zero_cli.remote_files import RemoteFileUtility
+
+
+def test_remote_file_utility_stat_returns_canonical_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "sample.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+
+    utility = RemoteFileUtility(scan_root=str(tmp_path))
+    result = utility.handle_file_op(
+        {
+            "op_id": "op-stat",
+            "op": "stat",
+            "path": ".\\sample.txt",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["file"] == {
+        "realpath": os.path.realpath(str(target)),
+        "mtime": os.path.getmtime(target),
+        "total_lines": 2,
+    }
 
 
 def test_remote_file_utility_roundtrips_read_write_and_patch(tmp_path: Path) -> None:
@@ -36,9 +64,17 @@ def test_remote_file_utility_roundtrips_read_write_and_patch(tmp_path: Path) -> 
     )
 
     assert write_result["ok"] is True
+    assert write_result["result"]["message"] == f"{target} written successfully"
+    assert write_result["result"]["file"]["realpath"] == os.path.realpath(str(target))
+    assert write_result["result"]["file"]["total_lines"] == 2
     assert read_result["ok"] is True
     assert "1 | line-1" in read_result["result"]["content"]
+    assert read_result["result"]["file"]["realpath"] == os.path.realpath(str(target))
+    assert read_result["result"]["file"]["total_lines"] == 2
     assert patch_result["ok"] is True
+    assert patch_result["result"]["message"] == f"{target} patched successfully"
+    assert patch_result["result"]["file"]["realpath"] == os.path.realpath(str(target))
+    assert patch_result["result"]["file"]["total_lines"] == 2
     assert target.read_text(encoding="utf-8") == "line-1\nline-2-updated\n"
 
 

@@ -109,6 +109,43 @@ All events are `connector_`-prefixed to avoid collisions on the shared `/ws` nam
 
 The `text_editor_remote` tool emits `connector_file_op` to the subscribed CLI client. The CLI performs the file read, write, or patch on the local machine and returns `connector_file_op_result`.
 
+Supported public tool operations:
+- `read`
+- `write`
+- `patch`
+
+Internal transport-only operation:
+- `stat` - used by the plugin to fetch canonical CLI-side file metadata before a freshness-checked patch. This is not exposed as a public `text_editor_remote` tool method.
+
+Successful `read`, `write`, and `patch` results now include:
+
+```json
+{
+  "file": {
+    "realpath": "C:/absolute/canonical/path.py",
+    "mtime": 1713182400.123,
+    "total_lines": 42
+  }
+}
+```
+
+`read` still returns the same numbered text content, and `write` / `patch` still return the same success message strings as before; the metadata block is additive.
+
+Freshness semantics for `patch`:
+- The plugin stores per-agent remote file state in `agent.data`, keyed by the CLI-reported `realpath`.
+- A prior successful `read` or `write` is required before `patch`.
+- `patch` first issues an internal `stat` and compares the current CLI `mtime` against the stored state.
+- No stored state produces the same prompt behavior as `_text_editor` `patch_need_read`.
+- A changed `mtime` produces the same prompt behavior as `_text_editor` `patch_stale_read`.
+- Line-preserving in-place patches refresh the stored metadata and may be chained without rereading.
+- Insertions, deletions, or any line-count-changing patch deliberately mark the file state stale so the next patch requires a reread.
+- If the connected CLI does not support internal `stat`, the plugin returns a single explicit compatibility error (`unsupported_cli_freshness`) and does not fall back to blind patching.
+
+Structured freshness failure codes may be returned in remote patch flows:
+- `patch_need_read`
+- `patch_stale_read`
+- `unsupported_cli_freshness`
+
 `ws_runtime.py` manages SID-to-context subscriptions, pending file futures, pending execution futures, and the latest remote tree snapshot per SID.
 
 ## Remote execution operations
