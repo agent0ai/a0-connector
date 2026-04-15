@@ -16,6 +16,33 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the installed a0 version and exit.",
     )
+    parser.add_argument(
+        "--server",
+        type=str,
+        default="",
+        metavar="URL",
+        help="Agent Zero server URL (overrides A0_CLI_SERVER env var).",
+    )
+    parser.add_argument(
+        "--username",
+        type=str,
+        default="",
+        metavar="NAME",
+        help="Login username (overrides A0_CLI_USERNAME env var).",
+    )
+    parser.add_argument(
+        "--password",
+        type=str,
+        default="",
+        metavar="PASS",
+        help="Login password (overrides A0_CLI_PASSWORD env var).",
+    )
+    parser.add_argument(
+        "--codeexec",
+        action="store_true",
+        default=False,
+        help="Enable remote code execution (F4) on startup.",
+    )
     subparsers = parser.add_subparsers(dest="command", title="commands")
     subparsers.add_parser(
         "update",
@@ -24,11 +51,16 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _run_app() -> None:
+def _run_app(args: argparse.Namespace) -> None:
     from agent_zero_cli.app import AgentZeroCLI
     from agent_zero_cli.config import load_config
 
-    config = load_config()
+    config = load_config(
+        cli_server=args.server,
+        cli_username=args.username,
+        cli_password=args.password,
+        cli_codeexec=args.codeexec,
+    )
     app = AgentZeroCLI(config)
     app.run()
 
@@ -50,7 +82,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "update":
         return _run_self_update()
 
-    _run_app()
+    _run_app(args)
     return 0
 
 

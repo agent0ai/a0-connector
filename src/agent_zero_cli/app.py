@@ -140,7 +140,7 @@ class AgentZeroCLI(App):
         self._context_run_complete = False
         self._chat_intro_pending = True
         self._remote_file_write_enabled = False
-        self._remote_exec_enabled = False
+        self._remote_exec_enabled = self.config.codeexec
         self._remote_files = RemoteFileUtility(
             scan_root=os.getcwd(),
             allow_writes=self._remote_file_write_enabled,
@@ -833,7 +833,11 @@ class AgentZeroCLI(App):
             auto_connect_single=auto_connect_single,
         )
         if auto_connect_host:
-            await self._begin_connection(auto_connect_host)
+            await self._begin_connection(
+                auto_connect_host,
+                username=self.config.username,
+                password=self.config.password,
+            )
 
     def _apply_instance_discovery_result(
         self,

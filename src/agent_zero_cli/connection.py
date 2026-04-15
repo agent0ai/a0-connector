@@ -25,6 +25,7 @@ async def startup(app: AgentZeroCLI) -> None:
         message="",
         detail="",
         host=host,
+        username=app.config.username,
     )
     app._set_splash_state(
         discovery_status="loading",

@@ -13,6 +13,9 @@ class CLIConfig:
     instance_url: str = ""
     last_context_id: str = ""
     last_context_host: str = ""
+    username: str = ""
+    password: str = ""
+    codeexec: bool = False
 
 
 def _read_dotenv() -> dict[str, str]:
@@ -85,16 +88,44 @@ def save_last_context(host: str, context_id: str) -> None:
     save_env(_LAST_CONTEXT_ID_KEY, normalized_context_id)
 
 
-def load_config() -> CLIConfig:
-    """Load config from environment variables, falling back to ~/.agent-zero/.env."""
+def load_config(
+    *,
+    cli_server: str = "",
+    cli_username: str = "",
+    cli_password: str = "",
+    cli_codeexec: bool = False,
+) -> CLIConfig:
+    """Load config from CLI args, environment variables, and ~/.agent-zero/.env.
+
+    Priority: CLI args > environment variables > dotenv file > defaults.
+    """
     dotenv = _read_dotenv()
 
-    instance_url = os.environ.get("AGENT_ZERO_HOST") or dotenv.get("AGENT_ZERO_HOST", "")
+    # Server URL: --server > A0_CLI_SERVER > AGENT_ZERO_HOST env/dotenv
+    instance_url = (
+        cli_server
+        or os.environ.get("A0_CLI_SERVER", "")
+        or os.environ.get("AGENT_ZERO_HOST", "")
+        or dotenv.get("AGENT_ZERO_HOST", "")
+    )
+
     last_context_id = os.environ.get(_LAST_CONTEXT_ID_KEY) or dotenv.get(_LAST_CONTEXT_ID_KEY, "")
     last_context_host = os.environ.get(_LAST_CONTEXT_HOST_KEY) or dotenv.get(_LAST_CONTEXT_HOST_KEY, "")
+
+    # Username: --username > A0_CLI_USERNAME
+    username = cli_username or os.environ.get("A0_CLI_USERNAME", "")
+
+    # Password: --password > A0_CLI_PASSWORD
+    password = cli_password or os.environ.get("A0_CLI_PASSWORD", "")
+
+    # Code execution: --codeexec flag (no env fallback)
+    codeexec = cli_codeexec
 
     return CLIConfig(
         instance_url=instance_url,
         last_context_id=last_context_id,
         last_context_host=last_context_host,
+        username=username,
+        password=password,
+        codeexec=codeexec,
     )
