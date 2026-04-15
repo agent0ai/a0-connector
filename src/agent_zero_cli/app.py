@@ -860,10 +860,17 @@ class AgentZeroCLI(App):
             resolved_selection = ""
 
         manual_entry_expanded = self._splash_state.manual_entry_expanded
+        has_credentials = bool(self.config.username and self.config.password)
+        
         if not instances:
-            manual_entry_expanded = True
+            # If no instances discovered, only expand manual entry if we don't have credentials
+            # With credentials, allow auto-connect to explicit host
+            if not has_credentials:
+                manual_entry_expanded = True
         elif preferred_host and preferred_host != DEFAULT_HOST and preferred_host not in discovered_urls:
-            manual_entry_expanded = True
+            # Host not in discovered instances; allow auto-connect if we have credentials
+            if not has_credentials:
+                manual_entry_expanded = True
 
         self._set_splash_state(
             host=preferred_host if manual_entry_expanded else (resolved_selection or preferred_host),
@@ -873,8 +880,18 @@ class AgentZeroCLI(App):
             selected_host_url=resolved_selection,
             manual_entry_expanded=manual_entry_expanded,
         )
-        if auto_connect_single and len(instances) == 1 and resolved_selection and not manual_entry_expanded:
+        # Auto-connect if:
+        # 1. Single discovered instance with resolved_selection, OR
+        # 2. Explicit host with valid credentials and not showing manual entry
+        if auto_connect_single and resolved_selection and not manual_entry_expanded:
             return resolved_selection
+        if (
+            auto_connect_single
+            and preferred_host
+            and has_credentials
+            and not manual_entry_expanded
+        ):
+            return preferred_host
         return ""
 
     async def _startup(self) -> None:
