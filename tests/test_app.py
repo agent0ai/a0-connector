@@ -713,8 +713,19 @@ async def test_action_toggle_computer_use_refreshes_hello_metadata_when_connecte
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    async def fake_send_hello(*, computer_use: dict[str, object] | None = None) -> dict[str, object]:
-        calls.append(dict(computer_use or {}))
+    async def fake_send_hello(
+        *,
+        computer_use: dict[str, object] | None = None,
+        remote_files: dict[str, object] | None = None,
+        remote_exec: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "computer_use": dict(computer_use or {}),
+                "remote_files": dict(remote_files or {}),
+                "remote_exec": dict(remote_exec or {}),
+            }
+        )
         return {"exec_config": {"version": 1}}
 
     dummy_app.client.connected = True
@@ -725,16 +736,36 @@ async def test_action_toggle_computer_use_refreshes_hello_metadata_when_connecte
 
     assert calls == [
         {
-            "supported": True,
-            "enabled": True,
-            "trust_mode": "persistent",
-            "artifact_root": "/a0/tmp/_a0_connector/computer_use",
+            "computer_use": {
+                "supported": True,
+                "enabled": True,
+                "trust_mode": "persistent",
+                "artifact_root": "/a0/tmp/_a0_connector/computer_use",
+            },
+            "remote_files": {
+                "enabled": True,
+                "write_enabled": False,
+                "mode": "read_only",
+            },
+            "remote_exec": {
+                "enabled": False,
+            },
         },
         {
-            "supported": True,
-            "enabled": False,
-            "trust_mode": "persistent",
-            "artifact_root": "/a0/tmp/_a0_connector/computer_use",
+            "computer_use": {
+                "supported": True,
+                "enabled": False,
+                "trust_mode": "persistent",
+                "artifact_root": "/a0/tmp/_a0_connector/computer_use",
+            },
+            "remote_files": {
+                "enabled": True,
+                "write_enabled": False,
+                "mode": "read_only",
+            },
+            "remote_exec": {
+                "enabled": False,
+            },
         },
     ]
 
@@ -777,8 +808,19 @@ async def test_set_computer_use_mode_refreshes_hello_metadata_when_connected(
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    async def fake_send_hello(*, computer_use: dict[str, object] | None = None) -> dict[str, object]:
-        calls.append(dict(computer_use or {}))
+    async def fake_send_hello(
+        *,
+        computer_use: dict[str, object] | None = None,
+        remote_files: dict[str, object] | None = None,
+        remote_exec: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "computer_use": dict(computer_use or {}),
+                "remote_files": dict(remote_files or {}),
+                "remote_exec": dict(remote_exec or {}),
+            }
+        )
         return {"exec_config": {"version": 1}}
 
     dummy_app.client.connected = True
@@ -790,16 +832,98 @@ async def test_set_computer_use_mode_refreshes_hello_metadata_when_connected(
 
     assert calls == [
         {
-            "supported": True,
-            "enabled": True,
-            "trust_mode": "free_run",
-            "artifact_root": "/a0/tmp/_a0_connector/computer_use",
+            "computer_use": {
+                "supported": True,
+                "enabled": True,
+                "trust_mode": "free_run",
+                "artifact_root": "/a0/tmp/_a0_connector/computer_use",
+            },
+            "remote_files": {
+                "enabled": True,
+                "write_enabled": False,
+                "mode": "read_only",
+            },
+            "remote_exec": {
+                "enabled": False,
+            },
         },
         {
-            "supported": True,
-            "enabled": True,
-            "trust_mode": "persistent",
-            "artifact_root": "/a0/tmp/_a0_connector/computer_use",
+            "computer_use": {
+                "supported": True,
+                "enabled": True,
+                "trust_mode": "persistent",
+                "artifact_root": "/a0/tmp/_a0_connector/computer_use",
+            },
+            "remote_files": {
+                "enabled": True,
+                "write_enabled": False,
+                "mode": "read_only",
+            },
+            "remote_exec": {
+                "enabled": False,
+            },
+        },
+    ]
+
+
+async def test_remote_safety_toggles_refresh_hello_metadata_when_connected(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_send_hello(
+        *,
+        computer_use: dict[str, object] | None = None,
+        remote_files: dict[str, object] | None = None,
+        remote_exec: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "computer_use": dict(computer_use or {}),
+                "remote_files": dict(remote_files or {}),
+                "remote_exec": dict(remote_exec or {}),
+            }
+        )
+        return {"exec_config": {"version": 1}}
+
+    dummy_app.client.connected = True
+    dummy_app.client.send_hello = fake_send_hello  # type: ignore[method-assign]
+
+    await dummy_app.action_toggle_remote_file_mode()
+    await dummy_app.action_toggle_remote_exec()
+
+    assert calls == [
+        {
+            "computer_use": {
+                "supported": True,
+                "enabled": False,
+                "trust_mode": "persistent",
+                "artifact_root": "/a0/tmp/_a0_connector/computer_use",
+            },
+            "remote_files": {
+                "enabled": True,
+                "write_enabled": True,
+                "mode": "read_write",
+            },
+            "remote_exec": {
+                "enabled": False,
+            },
+        },
+        {
+            "computer_use": {
+                "supported": True,
+                "enabled": False,
+                "trust_mode": "persistent",
+                "artifact_root": "/a0/tmp/_a0_connector/computer_use",
+            },
+            "remote_files": {
+                "enabled": True,
+                "write_enabled": True,
+                "mode": "read_write",
+            },
+            "remote_exec": {
+                "enabled": True,
+            },
         },
     ]
 

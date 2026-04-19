@@ -979,11 +979,27 @@ class AgentZeroCLI(App):
     def _computer_use_metadata(self) -> dict[str, Any]:
         return self._computer_use.metadata()
 
-    async def _refresh_computer_use_metadata(self) -> None:
+    def _remote_file_metadata(self) -> dict[str, Any]:
+        return {
+            "enabled": True,
+            "write_enabled": self._remote_file_write_enabled,
+            "mode": "read_write" if self._remote_file_write_enabled else "read_only",
+        }
+
+    def _remote_exec_metadata(self) -> dict[str, Any]:
+        return {
+            "enabled": self._remote_exec_enabled,
+        }
+
+    async def _refresh_remote_tool_metadata(self) -> None:
         if not self.client.connected:
             return
         try:
-            hello = await self.client.send_hello(computer_use=self._computer_use_metadata())
+            hello = await self.client.send_hello(
+                computer_use=self._computer_use_metadata(),
+                remote_files=self._remote_file_metadata(),
+                remote_exec=self._remote_exec_metadata(),
+            )
         except Exception:
             return
         self._python_tty.set_exec_config(hello.get("exec_config") if isinstance(hello, dict) else None)
@@ -1271,7 +1287,7 @@ class AgentZeroCLI(App):
 
     async def _set_computer_use_mode(self, mode: str) -> None:
         selected = self._computer_use.set_trust_mode(mode)
-        await self._refresh_computer_use_metadata()
+        await self._refresh_remote_tool_metadata()
         self._show_notice(f"Computer use trust mode set to {selected}.")
         self._sync_computer_use_status()
 
@@ -1289,7 +1305,7 @@ class AgentZeroCLI(App):
         self._computer_use.set_enabled(enabled)
         if not enabled:
             await self._computer_use.disconnect()
-        await self._refresh_computer_use_metadata()
+        await self._refresh_remote_tool_metadata()
         state = "enabled" if self._computer_use.enabled else "disabled"
         self._show_notice(
             f"Computer use {state} for this CLI session ({self._computer_use.trust_mode})."
@@ -1298,11 +1314,13 @@ class AgentZeroCLI(App):
 
     async def action_toggle_remote_file_mode(self) -> None:
         self._set_remote_file_write_enabled(not self._remote_file_write_enabled)
+        await self._refresh_remote_tool_metadata()
         mode = "Read&Write" if self._remote_file_write_enabled else "Read only"
         self._show_notice(f"Local access: {mode}.")
 
     async def action_toggle_remote_exec(self) -> None:
         self._set_remote_exec_enabled(not self._remote_exec_enabled)
+        await self._refresh_remote_tool_metadata()
         mode = "enabled" if self._remote_exec_enabled else "disabled"
         self._show_notice(f"Remote execution {mode} for this CLI session.")
 

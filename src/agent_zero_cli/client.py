@@ -514,7 +514,13 @@ class A0Client:
         except Exception as exc:
             raise A0WebSocketConnectionError(self._format_namespace_rejection_error(exc)) from exc
 
-    async def send_hello(self, *, computer_use: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def send_hello(
+        self,
+        *,
+        computer_use: dict[str, Any] | None = None,
+        remote_files: dict[str, Any] | None = None,
+        remote_exec: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "protocol": PROTOCOL_VERSION,
             "client": "a0",
@@ -522,6 +528,10 @@ class A0Client:
         }
         if isinstance(computer_use, dict):
             payload["computer_use"] = dict(computer_use)
+        if isinstance(remote_files, dict):
+            payload["remote_files"] = dict(remote_files)
+        if isinstance(remote_exec, dict):
+            payload["remote_exec"] = dict(remote_exec)
         return await self._call(_EVENT_HELLO, payload)
 
     async def subscribe_context(self, context_id: str, from_seq: int = 0) -> dict[str, Any]:

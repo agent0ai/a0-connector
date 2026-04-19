@@ -237,7 +237,11 @@ async def begin_connection(
 
     try:
         await app.client.connect_websocket()
-        hello = await app.client.send_hello(computer_use=app._computer_use_metadata())
+        hello = await app.client.send_hello(
+            computer_use=app._computer_use_metadata(),
+            remote_files=app._remote_file_metadata(),
+            remote_exec=app._remote_exec_metadata(),
+        )
         app._python_tty.set_exec_config(hello.get("exec_config") if isinstance(hello, dict) else None)
     except Exception as exc:
         app._sync_connection_status("disconnected", normalized_host)

@@ -457,6 +457,29 @@ async def test_send_hello_includes_computer_use_metadata() -> None:
     assert payload["computer_use"] == metadata
 
 
+async def test_send_hello_includes_remote_file_and_exec_metadata() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.sio = FakeSocketIOClient(
+        call_response={"results": [{"ok": True, "data": {"protocol": "a0-connector.v1"}}]}
+    )
+
+    remote_files = {
+        "enabled": True,
+        "write_enabled": False,
+        "mode": "read_only",
+    }
+    remote_exec = {
+        "enabled": True,
+    }
+    await client.send_hello(remote_files=remote_files, remote_exec=remote_exec)
+
+    event, payload, namespace = client.sio.call_calls[0]
+    assert event == "connector_hello"
+    assert namespace == "/ws"
+    assert payload["remote_files"] == remote_files
+    assert payload["remote_exec"] == remote_exec
+
+
 async def test_pause_agent_normalizes_http_failure() -> None:
     client = A0Client("http://localhost:5080")
     client.http = Mock()
