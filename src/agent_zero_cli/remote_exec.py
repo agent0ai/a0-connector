@@ -51,6 +51,11 @@ _DEFAULT_DIALOG_PATTERNS = (
 _EXEC_DISABLED_ERROR = (
     "Remote execution is disabled in this CLI session. Press F4 to switch exec on."
 )
+_EXEC_WRITE_DISABLED_ERROR = (
+    "Remote execution that may modify local files is disabled in this CLI session while "
+    "local access is Read only. Press F3 to switch to Read&Write. "
+    "`runtime=output` and `runtime=reset` remain available for existing sessions."
+)
 _RUNNING_MESSAGE = (
     "Terminal session {session} might be still running. Check previous outputs and "
     "decide whether to reset and continue or wait for more output is needed."
@@ -430,16 +435,24 @@ class RemoteExecManager:
         *,
         cwd: str,
         enabled: bool = True,
+        allow_writes: bool = True,
         poll_interval: float = 0.1,
     ) -> None:
         self.cwd = cwd
         self.enabled = enabled
+        self.allow_writes = allow_writes
         self.poll_interval = poll_interval
         self._exec_config = _default_exec_config()
         self._sessions: dict[int, _SessionState] = {}
 
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = enabled
+
+    def set_write_enabled(self, enabled: bool) -> None:
+        self.allow_writes = enabled
+
+    def _runtime_requires_write_access(self, runtime: str) -> bool:
+        return runtime in {"terminal", "python", "nodejs", "input"}
 
     def set_exec_config(self, payload: dict[str, Any] | None) -> None:
         self._exec_config = _normalize_exec_config(payload)
@@ -469,6 +482,9 @@ class RemoteExecManager:
                     "input (deprecated alias)"
                 ),
             }
+
+        if self._runtime_requires_write_access(runtime) and not self.allow_writes:
+            return {"op_id": op_id, "ok": False, "error": _EXEC_WRITE_DISABLED_ERROR}
 
         try:
             session = int(data.get("session", 0) or 0)

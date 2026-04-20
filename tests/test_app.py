@@ -677,6 +677,7 @@ async def test_remote_safety_toggles_update_local_permissions(
 ) -> None:
     assert dummy_app._remote_files.allow_writes is False
     assert dummy_app._python_tty.enabled is False
+    assert dummy_app._python_tty.allow_writes is False
 
     await dummy_app.action_toggle_remote_file_mode()
     await dummy_app.action_toggle_remote_exec()
@@ -685,6 +686,7 @@ async def test_remote_safety_toggles_update_local_permissions(
     assert dummy_app._remote_exec_enabled is True
     assert dummy_app._remote_files.allow_writes is True
     assert dummy_app._python_tty.enabled is True
+    assert dummy_app._python_tty.allow_writes is True
 
 
 async def test_action_toggle_computer_use_updates_notice_and_status(

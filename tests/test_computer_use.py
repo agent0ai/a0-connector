@@ -381,6 +381,57 @@ async def test_capture_requests_shared_artifact_path_and_adds_container_path(
     assert result["result"]["container_path"].startswith(f"{CONTAINER_ARTIFACT_ROOT}/ctx-1/")
 
 
+async def test_capture_failure_preserves_active_session_for_retry(
+    _temp_env: Path,
+) -> None:
+    manager = _manager(enabled=True)
+    manager._helper_request = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            {
+                "ok": False,
+                "code": "COMPUTER_USE_ERROR",
+                "error": "capture failed",
+            },
+            {
+                "ok": True,
+                "result": {
+                    "width": 640,
+                    "height": 480,
+                    "session_id": "sess-1",
+                    "capture_path": str(HOST_ARTIFACT_ROOT / "ctx-1" / "capture.png"),
+                },
+            },
+        ]
+    )
+    session = _HelperSession(context_id="ctx-1", session_id="sess-1", active=True, status="active")
+    session.process = type("FakeProcess", (), {"returncode": None})()
+    session.session_result = {
+        "session_id": "sess-1",
+        "status": "active",
+        "width": 1280,
+        "height": 720,
+    }
+    manager._sessions["ctx-1"] = session
+
+    first = await manager.handle_op(
+        {"op_id": "cap-fail", "action": "capture", "context_id": "ctx-1", "session_id": "sess-1"}
+    )
+
+    assert first["ok"] is False
+    assert first["error"] == "capture failed"
+    assert manager._sessions["ctx-1"].active is True
+    assert manager._sessions["ctx-1"].session_id == "sess-1"
+    assert manager.status_label == "active"
+    assert manager.status_detail == "capture failed"
+
+    second = await manager.handle_op(
+        {"op_id": "cap-retry", "action": "capture", "context_id": "ctx-1", "session_id": "sess-1"}
+    )
+
+    assert second["ok"] is True
+    assert second["result"]["session_id"] == "sess-1"
+
+
 async def test_move_click_scroll_key_type_normalize_payloads(
     _temp_env: Path,
 ) -> None:

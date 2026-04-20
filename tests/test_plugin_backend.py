@@ -268,6 +268,35 @@ class _FakeCliWsManager:
         ]
 
 
+class _FakeExecWsManager:
+    def __init__(self, *, exec_handler) -> None:
+        self.exec_handler = exec_handler
+        self.ws_runtime_mod = None
+        self.calls: list[dict[str, object]] = []
+
+    async def emit_to(
+        self,
+        namespace: str,
+        sid: str,
+        event: str,
+        payload: dict,
+        handler_id: str | None = None,
+    ) -> None:
+        del namespace, event, handler_id
+        self.calls.append({"sid": sid, "payload": dict(payload)})
+
+        result = self.exec_handler(dict(payload))
+        if asyncio.iscoroutine(result):
+            result = await result
+
+        assert self.ws_runtime_mod is not None
+        self.ws_runtime_mod.resolve_pending_exec_op(
+            payload["op_id"],
+            sid=sid,
+            payload=result,
+        )
+
+
 class _FakeComputerUseWsManager:
     def __init__(self, *, computer_use_handler) -> None:
         self.computer_use_handler = computer_use_handler
@@ -329,6 +358,16 @@ def _load_text_editor_remote_tool(*, file_op_handler):
     return shared_ws_manager, ws_runtime_mod, tool_mod
 
 
+def _load_code_execution_remote_tool(*, exec_handler):
+    shared_ws_manager = _FakeExecWsManager(exec_handler=exec_handler)
+    _install_fake_helpers(shared_ws_manager=shared_ws_manager)
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+    shared_ws_manager.ws_runtime_mod = ws_runtime_mod
+    tool_mod = _reload("plugins._a0_connector.tools.code_execution_remote")
+    return shared_ws_manager, ws_runtime_mod, tool_mod
+
+
 def _load_computer_use_remote_tool(*, computer_use_handler):
     shared_ws_manager = _FakeComputerUseWsManager(computer_use_handler=computer_use_handler)
     _install_fake_helpers(shared_ws_manager=shared_ws_manager)
@@ -345,6 +384,14 @@ def _create_text_editor_remote(
     **args,
 ):
     return tool_mod.TextEditorRemote(agent=agent, args=args)
+
+
+def _create_code_execution_remote(
+    tool_mod,
+    agent: _FakeRemoteAgent,
+    **args,
+):
+    return tool_mod.CodeExecutionRemote(agent=agent, args=args)
 
 
 def _create_computer_use_remote(
@@ -814,6 +861,14 @@ def test_code_execution_remote_guidance_is_injected_as_extras_when_cli_is_availa
     context_id = "ctx-exec"
     ws_runtime_mod.register_sid(sid)
     ws_runtime_mod.subscribe_sid_to_context(sid, context_id)
+    ws_runtime_mod.store_sid_remote_file_metadata(
+        sid,
+        {
+            "enabled": True,
+            "write_enabled": True,
+            "mode": "read_write",
+        },
+    )
     ws_runtime_mod.store_sid_remote_exec_metadata(sid, {"enabled": True})
 
     class FakeContext:
@@ -826,6 +881,9 @@ def test_code_execution_remote_guidance_is_injected_as_extras_when_cli_is_availa
             assert file == "agent.extras.code_execution_remote.md"
             return (
                 "CODE_EXEC_REMOTE_EXTRAS\n"
+                f"{kwargs['access_mode']}\n"
+                f"{kwargs['write_runtime_guidance']}\n"
+                f"{kwargs['write_runtime_examples']}\n"
                 f"{kwargs['code_exec_timeouts']}\n"
                 f"{kwargs['output_timeouts']}\n"
                 f"{kwargs['prompt_patterns']}\n"
@@ -843,10 +901,86 @@ def test_code_execution_remote_guidance_is_injected_as_extras_when_cli_is_availa
     assert set(loop_data.extras_temporary) == {"code_execution_remote"}
     prompt = loop_data.extras_temporary["code_execution_remote"]
     assert "CODE_EXEC_REMOTE_EXTRAS" in prompt
+    assert "Read&Write" in prompt
+    assert '"runtime": "terminal"' in prompt
+    assert '"code": "pwd"' in prompt
     assert "first_output_timeout=12" in prompt
     assert "max_exec_timeout=120" in prompt
     assert "PS .+> ?$" in prompt
     assert "yes/no" in prompt
+
+
+def test_code_execution_remote_guidance_reflects_read_only_mode() -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+
+    class FakeLoopData:
+        def __init__(self) -> None:
+            self.system = []
+            self.extras_temporary = {}
+            self.extras_persistent = {}
+
+    agent_mod = types.ModuleType("agent")
+    agent_mod.LoopData = FakeLoopData
+    sys.modules["agent"] = agent_mod
+
+    extension_mod = types.ModuleType("helpers.extension")
+
+    class Extension:
+        def __init__(self, agent=None, **kwargs) -> None:
+            self.agent = agent
+            self.kwargs = kwargs
+
+    extension_mod.Extension = Extension
+    sys.modules["helpers.extension"] = extension_mod
+    sys.modules["helpers"].extension = extension_mod
+
+    include_mod = _reload(
+        "plugins._a0_connector.extensions.python.message_loop_prompts_after."
+        "_78_include_code_execution_remote"
+    )
+
+    sid = "sid-exec"
+    context_id = "ctx-exec"
+    ws_runtime_mod.register_sid(sid)
+    ws_runtime_mod.subscribe_sid_to_context(sid, context_id)
+    ws_runtime_mod.store_sid_remote_file_metadata(
+        sid,
+        {
+            "enabled": True,
+            "write_enabled": False,
+            "mode": "read_only",
+        },
+    )
+    ws_runtime_mod.store_sid_remote_exec_metadata(sid, {"enabled": True})
+
+    class FakeContext:
+        id = context_id
+
+    class FakeAgent:
+        context = FakeContext()
+
+        def read_prompt(self, file: str, **kwargs) -> str:
+            assert file == "agent.extras.code_execution_remote.md"
+            return (
+                "CODE_EXEC_REMOTE_EXTRAS\n"
+                f"{kwargs['access_mode']}\n"
+                f"{kwargs['write_runtime_guidance']}\n"
+                f"{kwargs['write_runtime_examples']}"
+            )
+
+    loop_data = FakeLoopData()
+    loop_data.system.append("static system prompt")
+
+    asyncio.run(
+        include_mod.IncludeCodeExecutionRemote(agent=FakeAgent()).execute(loop_data=loop_data)
+    )
+
+    prompt = loop_data.extras_temporary["code_execution_remote"]
+    assert "Read only" in prompt
+    assert "Press F3" in prompt
+    assert '"runtime": "terminal"' not in prompt
 
 
 def test_code_execution_remote_guidance_is_not_injected_without_cli() -> None:
@@ -1037,6 +1171,98 @@ def test_select_remote_exec_target_sid_ignores_disabled_clients() -> None:
     ws_runtime_mod.store_sid_remote_exec_metadata("sid-enabled", {"enabled": True})
 
     assert ws_runtime_mod.select_remote_exec_target_sid("ctx-1") == "sid-enabled"
+
+
+def test_select_remote_exec_target_sid_requires_write_enabled_for_mutating_runtimes() -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+
+    for sid in ("sid-read-only", "sid-read-write"):
+        ws_runtime_mod.register_sid(sid)
+        ws_runtime_mod.subscribe_sid_to_context(sid, "ctx-1")
+        ws_runtime_mod.store_sid_remote_exec_metadata(sid, {"enabled": True})
+
+    ws_runtime_mod.store_sid_remote_file_metadata(
+        "sid-read-only",
+        {"enabled": True, "write_enabled": False, "mode": "read_only"},
+    )
+    ws_runtime_mod.store_sid_remote_file_metadata(
+        "sid-read-write",
+        {"enabled": True, "write_enabled": True, "mode": "read_write"},
+    )
+
+    assert ws_runtime_mod.select_remote_exec_target_sid("ctx-1") == "sid-read-only"
+    assert (
+        ws_runtime_mod.select_remote_exec_target_sid("ctx-1", require_writes=True)
+        == "sid-read-write"
+    )
+
+
+def test_code_execution_remote_rejects_mutating_runtime_when_only_read_only_cli_is_subscribed() -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+    tool_mod = _reload("plugins._a0_connector.tools.code_execution_remote")
+    agent = _FakeRemoteAgent()
+
+    ws_runtime_mod.register_sid("sid-cli")
+    ws_runtime_mod.subscribe_sid_to_context("sid-cli", agent.context.id)
+    ws_runtime_mod.store_sid_remote_exec_metadata("sid-cli", {"enabled": True})
+    ws_runtime_mod.store_sid_remote_file_metadata(
+        "sid-cli",
+        {"enabled": True, "write_enabled": False, "mode": "read_only"},
+    )
+
+    response = asyncio.run(
+        _create_code_execution_remote(
+            tool_mod,
+            agent,
+            runtime="terminal",
+            session=0,
+            code="pwd",
+        ).execute()
+    )
+
+    assert "Press F3" in response.message
+    assert "runtime=output" in response.message
+
+
+def test_code_execution_remote_allows_output_runtime_while_cli_is_read_only() -> None:
+    def handler(payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "op_id": payload["op_id"],
+            "ok": True,
+            "result": {
+                "message": "Session 8 completed.",
+                "output": "tick:1\ntick:2\ntick:3",
+                "running": False,
+            },
+        }
+
+    shared_ws_manager, ws_runtime_mod, tool_mod = _load_code_execution_remote_tool(
+        exec_handler=handler
+    )
+    agent = _FakeRemoteAgent()
+    ws_runtime_mod.register_sid("sid-cli")
+    ws_runtime_mod.subscribe_sid_to_context("sid-cli", agent.context.id)
+    ws_runtime_mod.store_sid_remote_exec_metadata("sid-cli", {"enabled": True})
+    ws_runtime_mod.store_sid_remote_file_metadata(
+        "sid-cli",
+        {"enabled": True, "write_enabled": False, "mode": "read_only"},
+    )
+
+    response = asyncio.run(
+        _create_code_execution_remote(
+            tool_mod,
+            agent,
+            runtime="output",
+            session=8,
+        ).execute()
+    )
+
+    assert response.message == "Session 8 completed.\n\ntick:1\ntick:2\ntick:3"
+    assert shared_ws_manager.calls[0]["payload"]["runtime"] == "output"
 
 
 def test_select_remote_file_target_sid_requires_write_enabled_for_writes() -> None:

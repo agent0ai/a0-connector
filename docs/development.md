@@ -34,9 +34,26 @@ To test a protected instance, start Agent Zero with `AUTH_LOGIN` and `AUTH_PASSW
 
 ### CLI
 
+Repo-local editable installs need the matching backend package from `packages/`
+in the same `pip` invocation. The published `a0` wheel can pull the platform
+backend from an index, but a workspace checkout cannot infer that sibling
+package automatically.
+
+Windows PowerShell:
+
+```powershell
+py -3.10 -m venv .venv
+. .\.venv\Scripts\Activate.ps1
+pip install -e .\packages\a0-computer-use-windows -e .
+$env:AGENT_ZERO_HOST = "http://localhost:50001"
+a0
+```
+
+Linux / Wayland:
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e .
+pip install -e ./packages/a0-computer-use-wayland -e .
 export AGENT_ZERO_HOST=http://localhost:50001
 a0
 ```

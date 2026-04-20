@@ -637,6 +637,9 @@ class ComputerUseManager:
         code = str(response.get("code", "") or "")
         error = str(response.get("error", "") or "")
         action_name = str(action or "").strip().lower()
+        previous_session_id = session.session_id
+        previous_active = session.active
+        previous_status = session.status
 
         if ok:
             session.session_id = str(result_dict.get("session_id", session.session_id or "")).strip()
@@ -676,8 +679,6 @@ class ComputerUseManager:
             self._set_status("active" if session.active else self.trust_mode)
             return self._success(op_id, result_dict)
 
-        session.active = False
-        session.status = "error"
         if code == _REARM_REQUIRED_ERROR or error == _REARM_REQUIRED_ERROR:
             self._set_status("rearm required", error=_REARM_REQUIRED_ERROR)
             return self._error(op_id, _REARM_REQUIRED_ERROR, result=self._session_snapshot())
@@ -687,6 +688,21 @@ class ComputerUseManager:
             return self._error(op_id, _DISABLED_ERROR, result=self._session_snapshot())
 
         message = error or code or "Computer-use operation failed"
+        preserve_session = (
+            action_name not in {"start_session", "stop_session"}
+            and bool(previous_session_id or previous_active)
+            and code not in {_SESSION_REQUIRED_ERROR, "COMPUTER_USE_SESSION_MISMATCH"}
+            and error not in {_SESSION_REQUIRED_ERROR, "COMPUTER_USE_SESSION_MISMATCH"}
+        )
+        if preserve_session:
+            session.session_id = previous_session_id
+            session.active = previous_active
+            session.status = previous_status or ("active" if previous_active else "idle")
+            self._set_status("active" if session.active else self.trust_mode, error=message)
+            return self._error(op_id, code or "COMPUTER_USE_ERROR", message=message, result=result_dict or None)
+
+        session.active = False
+        session.status = "error"
         self._set_status("error", error=message)
         return self._error(op_id, code or "COMPUTER_USE_ERROR", message=message, result=result_dict or None)
 

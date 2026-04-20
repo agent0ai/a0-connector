@@ -50,6 +50,14 @@ def test_root_package_declares_platform_backend_dependencies() -> None:
     assert 'a0-computer-use-windows>=1.5; platform_system == "Windows"' in pyproject
 
 
+def test_development_docs_show_workspace_backend_editable_installs() -> None:
+    development = (ROOT / "docs" / "development.md").read_text(encoding="utf-8")
+    compact = " ".join(development.split())
+    assert "pip install -e .\\packages\\a0-computer-use-windows -e ." in development
+    assert "pip install -e ./packages/a0-computer-use-wayland -e ." in development
+    assert "Repo-local editable installs need the matching backend package" in compact
+
+
 def test_backend_package_scaffolding_reserves_release_names() -> None:
     package_names = {
         "a0-computer-use-wayland": "a0_computer_use_wayland",

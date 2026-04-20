@@ -157,6 +157,7 @@ class AgentZeroCLI(App):
         self._python_tty = PythonTTYManager(
             cwd=self._remote_files.scan_root,
             enabled=self._remote_exec_enabled,
+            allow_writes=self._remote_file_write_enabled,
         )
         self._computer_use = ComputerUseManager(self.config)
         self._computer_use.set_status_callback(
@@ -724,6 +725,7 @@ class AgentZeroCLI(App):
             return
         self._remote_file_write_enabled = value
         self._remote_files.set_write_enabled(value)
+        self._python_tty.set_write_enabled(value)
         self.refresh_bindings()
 
     def _set_remote_exec_enabled(self, value: bool) -> None:

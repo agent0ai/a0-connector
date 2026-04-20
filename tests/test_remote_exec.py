@@ -216,3 +216,30 @@ async def test_input_runtime_sends_keystrokes_into_running_session(
     assert created_shells[0].inputs == ["y"]
 
     await manager.close()
+
+
+async def test_mutating_exec_runtimes_are_blocked_when_local_access_is_read_only(
+    tmp_path: Path,
+    created_shells: list[FakeShellSession],
+) -> None:
+    manager = RemoteExecManager(
+        cwd=str(tmp_path),
+        enabled=True,
+        allow_writes=False,
+        poll_interval=0.01,
+    )
+
+    result = await manager.handle_exec_op(
+        {
+            "op_id": "exec-read-only",
+            "runtime": "terminal",
+            "session": 0,
+            "code": "ansi",
+        }
+    )
+
+    assert result["ok"] is False
+    assert "Press F3 to switch to Read&Write" in result["error"]
+    assert created_shells == []
+
+    await manager.close()
