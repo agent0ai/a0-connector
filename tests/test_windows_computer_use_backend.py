@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import os
 import sys
+import types
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 
@@ -14,6 +16,7 @@ if str(WINDOWS_PACKAGE_SRC) not in sys.path:
     sys.path.insert(0, str(WINDOWS_PACKAGE_SRC))
 
 from a0_computer_use_windows.backend import WINDOWS_BACKEND_SPEC, WindowsComputerUseBackend
+import a0_computer_use_windows.runtime as windows_runtime_mod
 from a0_computer_use_windows.runtime import (
     WindowsComputerUseError,
     WindowsComputerUseRuntime,
@@ -179,6 +182,28 @@ def test_windows_runtime_capture_writes_requested_path_without_inline_payload(tm
     assert capture["capture_path"] == str(capture_path)
     assert "png_base64" not in capture
     assert capture_path.exists()
+
+
+def test_windows_desktop_automation_prefers_dxcam_numpy_processor(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeCamera:
+        def grab(self):
+            return np.zeros((1, 1, 4), dtype=np.uint8)
+
+    def create(**kwargs):
+        calls.append(dict(kwargs))
+        return FakeCamera()
+
+    automation = windows_runtime_mod._WindowsDesktopAutomation.__new__(windows_runtime_mod._WindowsDesktopAutomation)
+    automation._camera = None
+    monkeypatch.setattr(windows_runtime_mod, "_load_dxcam_module", lambda: types.SimpleNamespace(create=create))
+
+    png_bytes, width, height = automation.capture_png()
+
+    assert png_bytes
+    assert (width, height) == (1, 1)
+    assert calls == [{"output_idx": 0, "processor_backend": "numpy"}]
 
 
 def test_windows_runtime_normalizes_actions_and_routes_input(tmp_path: Path) -> None:

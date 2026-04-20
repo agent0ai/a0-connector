@@ -4,11 +4,13 @@ import asyncio
 import base64
 import contextlib
 import json
+import os
 import sys
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from agent_zero_cli import computer_use_wayland as _builtin_computer_use_wayland  # noqa: F401
@@ -25,10 +27,14 @@ from agent_zero_cli.config import (
 )
 
 HELPER_PYTHON = "/usr/bin/python3"
-HOST_ARTIFACT_ROOT = Path("/home/eclypso/agentdocker/tmp/_a0_connector/computer_use")
-CONTAINER_ARTIFACT_ROOT = "/a0/tmp/_a0_connector/computer_use"
+_HOST_ARTIFACT_ROOT_ENV = "A0_COMPUTER_USE_HOST_ARTIFACT_ROOT"
+_CONTAINER_ARTIFACT_ROOT_ENV = "A0_COMPUTER_USE_CONTAINER_ARTIFACT_ROOT"
+_DEFAULT_CONTAINER_ARTIFACT_ROOT = "/a0/tmp/_a0_connector/computer_use"
+_LEGACY_HOST_ARTIFACT_ROOT = Path("/home/eclypso/agentdocker/tmp/_a0_connector/computer_use")
 _CAPTURE_RETENTION_MAX_FILES = 24
 _CAPTURE_RETENTION_MAX_AGE_SECONDS = 60 * 60 * 24
+_HELPER_PROTOCOL_NOISE_MAX_LINES = 8
+_HELPER_STDIO_LIMIT = 32 * 1024 * 1024
 _SUPPORTED_ACTIONS = {
     "start_session",
     "status",
@@ -45,6 +51,68 @@ _DISABLED_ERROR = "COMPUTER_USE_DISABLED"
 _REARM_REQUIRED_ERROR = "COMPUTER_USE_REARM_REQUIRED"
 _SESSION_REQUIRED_ERROR = "COMPUTER_USE_SESSION_REQUIRED"
 _UNSUPPORTED_ERROR = "COMPUTER_USE_UNSUPPORTED"
+
+
+def _normalize_container_artifact_root(value: object) -> str:
+    root = str(value or "").strip().replace("\\", "/")
+    if not root:
+        root = _DEFAULT_CONTAINER_ARTIFACT_ROOT
+    return root.rstrip("/")
+
+
+def _path_search_roots() -> list[Path]:
+    roots: list[Path] = []
+    for candidate in (Path.cwd(), Path(__file__).resolve(), Path(sys.executable).resolve()):
+        resolved = Path(candidate)
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def _find_dockervolume_root() -> Path | None:
+    seen: set[str] = set()
+    for anchor in _path_search_roots():
+        for candidate in (anchor, *anchor.parents):
+            marker = str(candidate).lower()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            if candidate.name.lower() == "dockervolume" and candidate.is_dir():
+                return candidate
+            sibling = candidate / "dockervolume"
+            if sibling.is_dir():
+                return sibling
+    return None
+
+
+def _host_artifact_root_from_container_root(container_root: str, *, volume_root: Path) -> Path:
+    normalized = _normalize_container_artifact_root(container_root)
+    try:
+        relative_root = PurePosixPath(normalized).relative_to("/a0")
+    except ValueError:
+        segments = [part for part in PurePosixPath(normalized).parts if part not in {"/", "\\"}]
+        return volume_root.joinpath(*segments)
+    return volume_root.joinpath(*relative_root.parts)
+
+
+def _default_host_artifact_root(container_root: str) -> Path:
+    configured = str(os.environ.get(_HOST_ARTIFACT_ROOT_ENV, "")).strip()
+    if configured:
+        return Path(configured).expanduser()
+
+    if os.name == "nt":
+        volume_root = _find_dockervolume_root()
+        if volume_root is not None:
+            return _host_artifact_root_from_container_root(container_root, volume_root=volume_root)
+        return Path(tempfile.gettempdir()) / "_a0_connector" / "computer_use"
+
+    return _LEGACY_HOST_ARTIFACT_ROOT
+
+
+CONTAINER_ARTIFACT_ROOT = _normalize_container_artifact_root(
+    os.environ.get(_CONTAINER_ARTIFACT_ROOT_ENV, _DEFAULT_CONTAINER_ARTIFACT_ROOT)
+)
+HOST_ARTIFACT_ROOT = _default_host_artifact_root(CONTAINER_ARTIFACT_ROOT)
 
 
 def _normalize_context_id(value: object) -> str:
@@ -442,6 +510,7 @@ class ComputerUseManager:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=_HELPER_STDIO_LIMIT,
         )
         session.process = process
         session.stderr_task = asyncio.create_task(self._drain_stderr(process))
@@ -471,19 +540,45 @@ class ComputerUseManager:
 
         payload = dict(request)
         payload.setdefault("request_id", uuid.uuid4().hex)
+        expected_request_id = str(payload.get("request_id", "") or "")
 
         async with session.lock:
             process.stdin.write((json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8"))
             await process.stdin.drain()
-            raw = await process.stdout.readline()
+            stray_stdout: list[str] = []
+            while True:
+                raw = await process.stdout.readline()
+                if not raw:
+                    raise RuntimeError("computer use helper closed its stdout")
 
-        if not raw:
-            raise RuntimeError("computer use helper closed its stdout")
+                raw_text = raw.decode("utf-8", errors="replace").strip()
+                if not raw_text:
+                    continue
 
-        try:
-            response = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("computer use helper returned invalid JSON") from exc
+                try:
+                    response = json.loads(raw_text)
+                except json.JSONDecodeError:
+                    stray_stdout.append(raw_text)
+                else:
+                    if not isinstance(response, dict):
+                        stray_stdout.append(raw_text)
+                    else:
+                        response_request_id = str(response.get("request_id", "") or "")
+                        if (
+                            expected_request_id
+                            and response_request_id
+                            and response_request_id != expected_request_id
+                        ):
+                            stray_stdout.append(raw_text)
+                        else:
+                            break
+
+                if len(stray_stdout) >= _HELPER_PROTOCOL_NOISE_MAX_LINES:
+                    preview = " | ".join(line[:160] for line in stray_stdout[-3:])
+                    raise RuntimeError(
+                        "computer use helper emitted unexpected stdout before its JSON response: "
+                        f"{preview}"
+                    )
 
         if not isinstance(response, dict):
             raise RuntimeError("computer use helper returned an invalid response")

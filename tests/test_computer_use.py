@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
 from agent_zero_cli import computer_use_backend as backend_mod
+import agent_zero_cli.computer_use as computer_use_mod
 from agent_zero_cli.computer_use import (
-    CONTAINER_ARTIFACT_ROOT,
-    HOST_ARTIFACT_ROOT,
     ComputerUseManager,
+    _HELPER_STDIO_LIMIT,
     _HelperSession,
 )
 from agent_zero_cli.computer_use_backend import (
@@ -28,12 +30,41 @@ def _temp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     env_dir = tmp_path / ".agent-zero"
     env_dir.mkdir()
     env_file = env_dir / ".env"
+    artifact_root = tmp_path / "computer-use-artifacts"
 
     import agent_zero_cli.config as config_mod
 
     monkeypatch.setattr(config_mod, "_ENV_DIR", env_dir)
     monkeypatch.setattr(config_mod, "_ENV_FILE", env_file)
+    monkeypatch.setattr(computer_use_mod, "HOST_ARTIFACT_ROOT", artifact_root)
+    monkeypatch.setattr(computer_use_mod, "CONTAINER_ARTIFACT_ROOT", "/a0/test-computer-use")
     return env_file
+
+
+class _FakeHelperStdin:
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self.buffer.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+
+class _FakeHelperProcess:
+    def __init__(self, stdout_lines: list[str]) -> None:
+        self.stdin = _FakeHelperStdin()
+        self.stdout = asyncio.StreamReader()
+        for line in stdout_lines:
+            self.stdout.feed_data(line.encode("utf-8"))
+        self.stdout.feed_eof()
+        self.returncode = None
+
+
+class _FakeStream:
+    async def readline(self) -> bytes:
+        return b""
 
 
 def _manager(
@@ -311,9 +342,9 @@ async def test_capture_normalizes_inline_png_base64_response(
 
     assert result["ok"] is True
     assert result["result"]["png_base64"] == base64.b64encode(payload).decode("ascii")
-    assert result["result"]["host_path"].startswith(str(HOST_ARTIFACT_ROOT / "ctx-1"))
+    assert result["result"]["host_path"].startswith(str(computer_use_mod.HOST_ARTIFACT_ROOT / "ctx-1"))
     assert result["result"]["capture_path"] == result["result"]["host_path"]
-    assert result["result"]["container_path"].startswith(f"{CONTAINER_ARTIFACT_ROOT}/ctx-1/")
+    assert result["result"]["container_path"].startswith(f"{computer_use_mod.CONTAINER_ARTIFACT_ROOT}/ctx-1/")
 
 
 async def test_capture_preserves_path_based_result_without_reinlining_png(
@@ -376,9 +407,13 @@ async def test_capture_requests_shared_artifact_path_and_adds_container_path(
 
     assert result["ok"] is True
     assert "png_base64" not in result["result"]
-    assert result["result"]["capture_path"].startswith(str(HOST_ARTIFACT_ROOT / "ctx-1"))
+    assert result["result"]["capture_path"].startswith(
+        str(computer_use_mod.HOST_ARTIFACT_ROOT / "ctx-1")
+    )
     assert result["result"]["host_path"] == result["result"]["capture_path"]
-    assert result["result"]["container_path"].startswith(f"{CONTAINER_ARTIFACT_ROOT}/ctx-1/")
+    assert result["result"]["container_path"].startswith(
+        f"{computer_use_mod.CONTAINER_ARTIFACT_ROOT}/ctx-1/"
+    )
 
 
 async def test_capture_failure_preserves_active_session_for_retry(
@@ -398,7 +433,7 @@ async def test_capture_failure_preserves_active_session_for_retry(
                     "width": 640,
                     "height": 480,
                     "session_id": "sess-1",
-                    "capture_path": str(HOST_ARTIFACT_ROOT / "ctx-1" / "capture.png"),
+                    "capture_path": str(computer_use_mod.HOST_ARTIFACT_ROOT / "ctx-1" / "capture.png"),
                 },
             },
         ]
@@ -430,6 +465,68 @@ async def test_capture_failure_preserves_active_session_for_retry(
 
     assert second["ok"] is True
     assert second["result"]["session_id"] == "sess-1"
+
+
+async def test_helper_request_ignores_protocol_noise_until_matching_response(
+    _temp_env: Path,
+) -> None:
+    manager = _manager(enabled=True)
+    session = _HelperSession(context_id="ctx-1")
+    session.process = _FakeHelperProcess(
+        [
+            "Right button pressed at (960, 540)\n",
+            json.dumps({"request_id": "stale-1", "ok": True, "result": {"ignored": True}}) + "\n",
+            json.dumps({"request_id": "req-1", "ok": True, "result": {"status": "active"}}) + "\n",
+        ]
+    )
+    manager._ensure_helper = AsyncMock(return_value=session)  # type: ignore[method-assign]
+
+    result = await manager._helper_request(
+        session,
+        {
+            "request_id": "req-1",
+            "action": "click",
+            "context_id": "ctx-1",
+            "session_id": "sess-1",
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["status"] == "active"
+    assert json.loads(session.process.stdin.buffer.decode("utf-8"))["request_id"] == "req-1"
+
+
+async def test_ensure_helper_uses_expanded_stdio_limit_for_large_capture_payloads(
+    _temp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _manager(enabled=True)
+    session = _HelperSession(context_id="ctx-1")
+    calls: list[dict[str, object]] = []
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdin = _FakeHelperStdin()
+            self.stdout = _FakeStream()
+            self.stderr = _FakeStream()
+            self.returncode = None
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return FakeProcess()
+
+    def fake_create_task(coro):
+        coro.close()
+        return AsyncMock()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    await manager._ensure_helper(session)
+
+    assert session.process is not None
+    assert calls
+    assert calls[0]["kwargs"]["limit"] == _HELPER_STDIO_LIMIT
 
 
 async def test_move_click_scroll_key_type_normalize_payloads(

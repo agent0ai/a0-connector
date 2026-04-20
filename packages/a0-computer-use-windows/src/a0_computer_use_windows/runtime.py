@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import io
 import json
 import os
@@ -255,7 +256,8 @@ class _WindowsDesktopAutomation:
         dxcam = _load_dxcam_module()
         camera = self._camera
         if camera is None:
-            camera = dxcam.create(output_idx=0)
+            # Prefer dxcam's NumPy processor so capture works without a cv2 dependency.
+            camera = dxcam.create(output_idx=0, processor_backend="numpy")
             self._camera = camera
         if camera is None:
             raise WindowsComputerUseError(
@@ -711,20 +713,21 @@ def serve_stdio(runtime: WindowsComputerUseRuntime | None = None) -> int:
                 break
 
             try:
-                if action in {"start_session", "status", "capture", "move", "click", "scroll", "key", "type", "stop_session"}:
-                    if action not in {"start_session", "status", "stop_session"}:
-                        request = normalize_action_payload(action, request, context_id=normalize_context_id(request.get("context_id")))
-                    result = runtime.dispatch(action, request)
-                    response = {
-                        "request_id": request_id,
-                        "ok": True,
-                        "result": result,
-                    }
-                else:
-                    raise WindowsComputerUseError(
-                        "UNKNOWN_METHOD",
-                        f"Unknown computer-use helper method: {action}",
-                    )
+                with contextlib.redirect_stdout(sys.stderr):
+                    if action in {"start_session", "status", "capture", "move", "click", "scroll", "key", "type", "stop_session"}:
+                        if action not in {"start_session", "status", "stop_session"}:
+                            request = normalize_action_payload(action, request, context_id=normalize_context_id(request.get("context_id")))
+                        result = runtime.dispatch(action, request)
+                        response = {
+                            "request_id": request_id,
+                            "ok": True,
+                            "result": result,
+                        }
+                    else:
+                        raise WindowsComputerUseError(
+                            "UNKNOWN_METHOD",
+                            f"Unknown computer-use helper method: {action}",
+                        )
             except WindowsComputerUseError as exc:
                 response = _build_error_response(request_id, exc)
             except Exception as exc:

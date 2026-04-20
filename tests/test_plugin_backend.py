@@ -1453,6 +1453,7 @@ def test_computer_use_remote_capture_prefers_inline_png_and_embeds_image_message
     raw_message = agent.history_messages[0]["content"]
     assert raw_message["preview"] == "Computer-use capture 1x1."
     assert raw_message["raw_content"][1]["type"] == "image_url"
+    assert raw_message["raw_content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_computer_use_remote_capture_falls_back_to_shared_png_path_when_inline_payload_missing(
@@ -1497,6 +1498,8 @@ def test_computer_use_remote_capture_falls_back_to_shared_png_path_when_inline_p
     assert response.message == "Current screen attached."
     assert [call["payload"]["action"] for call in shared_ws_manager.calls] == ["capture"]
     assert len(agent.history_messages) == 1
+    raw_message = agent.history_messages[0]["content"]
+    assert raw_message["raw_content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_computer_use_remote_start_session_auto_refreshes_screen() -> None:
