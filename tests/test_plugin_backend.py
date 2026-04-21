@@ -17,6 +17,12 @@ _PNG_1X1_BASE64 = (
 )
 
 
+def _write_png_fixture(tmp_path: Path, filename: str = "capture.png") -> Path:
+    image_path = tmp_path / filename
+    image_path.write_bytes(base64.b64decode(_PNG_1X1_BASE64))
+    return image_path
+
+
 def _resolve_plugin_root() -> Path:
     env_root = os.environ.get("A0_CONNECTOR_PLUGIN_ROOT", "").strip()
     if env_root:
@@ -514,6 +520,40 @@ def test_plugin_root_resolution_prefers_a0_connector_plugin_root_env(
     monkeypatch.setenv("A0_CONNECTOR_PLUGIN_ROOT", str(plugins_root))
 
     assert _resolve_plugin_root() == plugins_root
+
+
+def test_ws_connector_normalizes_attachment_refs_without_base64_payloads() -> None:
+    _install_fake_helpers()
+    ws_connector_mod = _reload("plugins._a0_connector.api.ws_connector")
+    handler = ws_connector_mod.WsConnector(None, None)
+
+    refs, error = handler._normalize_attachment_refs(
+        [
+            "/a0/usr/uploads/chart.png",
+            {"path": "/a0/usr/uploads/diagram.png"},
+            {"url": "https://example.test/photo.png"},
+        ]
+    )
+
+    assert error == ""
+    assert refs == [
+        "/a0/usr/uploads/chart.png",
+        "/a0/usr/uploads/diagram.png",
+        "https://example.test/photo.png",
+    ]
+
+
+def test_ws_connector_rejects_base64_attachment_refs() -> None:
+    _install_fake_helpers()
+    ws_connector_mod = _reload("plugins._a0_connector.api.ws_connector")
+    handler = ws_connector_mod.WsConnector(None, None)
+
+    refs, error = handler._normalize_attachment_refs(
+        [{"filename": "chart.png", "base64": _PNG_1X1_BASE64}]
+    )
+
+    assert refs == []
+    assert "file paths or URLs" in error
 
 
 def test_ws_connector_stores_computer_use_metadata_from_hello() -> None:
@@ -1413,7 +1453,9 @@ def test_computer_use_remote_rejects_when_no_enabled_cli_is_subscribed() -> None
     assert "no subscribed CLI" in response.message
 
 
-def test_computer_use_remote_capture_prefers_inline_png_and_embeds_image_message() -> None:
+def test_computer_use_remote_capture_records_shared_path_image_message(tmp_path: Path) -> None:
+    image_path = _write_png_fixture(tmp_path)
+
     def handler(payload: dict[str, object]) -> dict[str, object]:
         return {
             "op_id": payload["op_id"],
@@ -1421,7 +1463,7 @@ def test_computer_use_remote_capture_prefers_inline_png_and_embeds_image_message
             "result": {
                 "status": "active",
                 "session_id": "sess-1",
-                "png_base64": _PNG_1X1_BASE64,
+                "host_path": str(image_path),
                 "width": 1,
                 "height": 1,
             },
@@ -1453,14 +1495,13 @@ def test_computer_use_remote_capture_prefers_inline_png_and_embeds_image_message
     raw_message = agent.history_messages[0]["content"]
     assert raw_message["preview"] == "Computer-use capture 1x1."
     assert raw_message["raw_content"][1]["type"] == "image_url"
-    assert raw_message["raw_content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert raw_message["raw_content"][1]["image_url"]["url"] == str(image_path)
 
 
-def test_computer_use_remote_capture_falls_back_to_shared_png_path_when_inline_payload_missing(
+def test_computer_use_remote_capture_uses_shared_png_path(
     tmp_path: Path,
 ) -> None:
-    image_path = tmp_path / "capture.png"
-    image_path.write_bytes(base64.b64decode(_PNG_1X1_BASE64))
+    image_path = _write_png_fixture(tmp_path)
 
     def handler(payload: dict[str, object]) -> dict[str, object]:
         return {
@@ -1499,10 +1540,12 @@ def test_computer_use_remote_capture_falls_back_to_shared_png_path_when_inline_p
     assert [call["payload"]["action"] for call in shared_ws_manager.calls] == ["capture"]
     assert len(agent.history_messages) == 1
     raw_message = agent.history_messages[0]["content"]
-    assert raw_message["raw_content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert raw_message["raw_content"][1]["image_url"]["url"] == str(image_path)
 
 
-def test_computer_use_remote_start_session_auto_refreshes_screen() -> None:
+def test_computer_use_remote_start_session_auto_refreshes_screen(tmp_path: Path) -> None:
+    image_path = _write_png_fixture(tmp_path)
+
     def handler(payload: dict[str, object]) -> dict[str, object]:
         if payload["action"] == "start_session":
             return {
@@ -1521,7 +1564,7 @@ def test_computer_use_remote_start_session_auto_refreshes_screen() -> None:
             "result": {
                 "status": "active",
                 "session_id": "sess-1",
-                "png_base64": _PNG_1X1_BASE64,
+                "host_path": str(image_path),
                 "width": 1,
                 "height": 1,
             },
@@ -1552,7 +1595,8 @@ def test_computer_use_remote_start_session_auto_refreshes_screen() -> None:
     assert len(agent.history_messages) == 1
 
 
-def test_computer_use_remote_click_auto_refreshes_screen() -> None:
+def test_computer_use_remote_click_auto_refreshes_screen(tmp_path: Path) -> None:
+    image_path = _write_png_fixture(tmp_path)
 
     def handler(payload: dict[str, object]) -> dict[str, object]:
         if payload["action"] == "click":
@@ -1571,7 +1615,7 @@ def test_computer_use_remote_click_auto_refreshes_screen() -> None:
             "result": {
                 "status": "active",
                 "session_id": "sess-1",
-                "png_base64": _PNG_1X1_BASE64,
+                "host_path": str(image_path),
                 "width": 1,
                 "height": 1,
             },
@@ -1602,7 +1646,8 @@ def test_computer_use_remote_click_auto_refreshes_screen() -> None:
     assert len(agent.history_messages) == 1
 
 
-def test_computer_use_remote_type_submit_sends_submit_flag_and_auto_refreshes_screen() -> None:
+def test_computer_use_remote_type_submit_sends_submit_flag_and_auto_refreshes_screen(tmp_path: Path) -> None:
+    image_path = _write_png_fixture(tmp_path)
 
     def handler(payload: dict[str, object]) -> dict[str, object]:
         if payload["action"] == "type":
@@ -1621,7 +1666,7 @@ def test_computer_use_remote_type_submit_sends_submit_flag_and_auto_refreshes_sc
             "result": {
                 "status": "active",
                 "session_id": "sess-1",
-                "png_base64": _PNG_1X1_BASE64,
+                "host_path": str(image_path),
                 "width": 1,
                 "height": 1,
             },

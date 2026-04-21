@@ -10,6 +10,7 @@ from textual.selection import SELECT_ALL
 
 from agent_zero_cli import chat_commands, connection
 from agent_zero_cli.app import AgentZeroCLI
+from agent_zero_cli.attachments import AttachmentRef
 from agent_zero_cli.client import DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.instance_discovery import DiscoveredInstance, DiscoveryResult
@@ -93,6 +94,7 @@ class FakeInput:
         self.activity_detail = ""
         self.activity_idle = True
         self.value = ""
+        self.attachments = []
 
     def focus(self) -> None:
         self.focused = True
@@ -106,6 +108,15 @@ class FakeInput:
         self.activity_label = ""
         self.activity_detail = ""
         self.activity_idle = True
+
+    def add_attachment(self, attachment: object) -> None:
+        self.attachments.append(attachment)
+
+    def set_attachments(self, attachments: list[object]) -> None:
+        self.attachments = list(attachments)
+
+    def clear_attachments(self) -> None:
+        self.attachments = []
 
 
 class FakeBodySwitcher:
@@ -555,10 +566,14 @@ async def test_active_run_submission_is_sent_as_intervention(
     dummy_app.current_context_has_messages = True
     dummy_app.agent_active = True
 
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, str | None, list[str] | None]] = []
 
-    async def fake_send_message(text: str, context_id: str | None) -> None:
-        calls.append((text, context_id))
+    async def fake_send_message(
+        text: str,
+        context_id: str | None,
+        attachments: list[str] | None = None,
+    ) -> None:
+        calls.append((text, context_id, attachments))
 
     monkeypatch.setattr(dummy_app.client, "send_message", fake_send_message)
 
@@ -567,7 +582,7 @@ async def test_active_run_submission_is_sent_as_intervention(
         ChatInput.Submitted(value="draft follow-up", input=input_widget)
     )
 
-    assert calls == [("draft follow-up", "ctx-1")]
+    assert calls == [("draft follow-up", "ctx-1", [])]
     assert input_widget.value == ""
     assert dummy_app.agent_active is True
     assert dummy_app._response_delivered is False
@@ -584,8 +599,12 @@ async def test_send_failure_restores_draft_and_previous_state(
 
     notices: list[tuple[str, bool]] = []
 
-    async def fake_send_message(text: str, context_id: str | None) -> None:
-        del text, context_id
+    async def fake_send_message(
+        text: str,
+        context_id: str | None,
+        attachments: list[str] | None = None,
+    ) -> None:
+        del text, context_id, attachments
         raise RuntimeError("socket offline")
 
     monkeypatch.setattr(dummy_app.client, "send_message", fake_send_message)
@@ -608,6 +627,67 @@ async def test_send_failure_restores_draft_and_previous_state(
     assert dummy_app.agent_active is False
     assert body.current == "splash-view"
     assert notices == [("Error sending message: socket offline", True)]
+
+
+async def test_attachment_only_submission_sends_attachment_refs(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+
+    calls: list[tuple[str, str | None, list[str] | None]] = []
+
+    async def fake_send_message(
+        text: str,
+        context_id: str | None,
+        attachments: list[str] | None = None,
+    ) -> None:
+        calls.append((text, context_id, attachments))
+
+    monkeypatch.setattr(dummy_app.client, "send_message", fake_send_message)
+    input_widget = dummy_app._test_widgets["#message-input"]  # type: ignore[index]
+    attachment = AttachmentRef(
+        path="/a0/usr/uploads/clipboard.png",
+        name="clipboard.png",
+        mime_type="image/png",
+    )
+
+    await dummy_app.on_chat_input_submitted(
+        ChatInput.Submitted(value="", input=input_widget, attachments=[attachment])
+    )
+
+    assert calls == [("", "ctx-1", ["/a0/usr/uploads/clipboard.png"])]
+    assert dummy_app.current_context_has_messages is True
+
+
+async def test_attach_clipboard_image_adds_pending_attachment(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notices: list[tuple[str, bool]] = []
+    attachment = AttachmentRef(
+        path="/a0/usr/uploads/clipboard.png",
+        name="clipboard.png",
+        mime_type="image/png",
+    )
+
+    monkeypatch.setattr(
+        "agent_zero_cli.app.save_clipboard_image_attachment",
+        lambda: attachment,
+    )
+    monkeypatch.setattr(
+        dummy_app,
+        "_show_notice",
+        lambda message, *, error=False: notices.append((message, error)),
+    )
+
+    handled = await dummy_app.attach_clipboard_image()
+
+    input_widget = dummy_app._test_widgets["#message-input"]  # type: ignore[index]
+    assert handled is True
+    assert input_widget.attachments == [attachment]
+    assert notices == [("Attached clipboard.png.", False)]
 
 
 async def test_profile_command_dispatches_profile_menu(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import json
 import os
@@ -32,7 +31,6 @@ _CONTAINER_ARTIFACT_ROOT_ENV = "A0_COMPUTER_USE_CONTAINER_ARTIFACT_ROOT"
 _DEBUG_ENV = "A0_COMPUTER_USE_DEBUG"
 _DEBUG_LOG_ENV = "A0_COMPUTER_USE_DEBUG_LOG"
 _DEFAULT_CONTAINER_ARTIFACT_ROOT = "/a0/tmp/_a0_connector/computer_use"
-_LEGACY_HOST_ARTIFACT_ROOT = Path("/home/eclypso/agentdocker/tmp/_a0_connector/computer_use")
 _CAPTURE_RETENTION_MAX_FILES = 24
 _CAPTURE_RETENTION_MAX_AGE_SECONDS = 60 * 60 * 24
 _HELPER_PROTOCOL_NOISE_MAX_LINES = 8
@@ -183,8 +181,6 @@ def _default_host_artifact_root(container_root: str) -> Path:
 
     if os.name == "nt" or sys.platform == "darwin":
         return Path(tempfile.gettempdir()) / "_a0_connector" / "computer_use"
-
-    return _LEGACY_HOST_ARTIFACT_ROOT
 
 
 CONTAINER_ARTIFACT_ROOT = _normalize_container_artifact_root(
@@ -953,9 +949,6 @@ class ComputerUseManager:
         return self._error(op_id, code or "COMPUTER_USE_ERROR", message=message, result=result_dict or None)
 
     def _normalize_capture_result(self, result: dict[str, Any]) -> dict[str, Any]:
-        if str(result.get("png_base64", "") or "").strip():
-            return result
-
         candidates = [
             str(result.get("capture_path", "") or "").strip(),
             str(result.get("container_path", "") or "").strip(),
@@ -969,5 +962,9 @@ class ComputerUseManager:
                 continue
             normalized = dict(result)
             normalized.setdefault("capture_path", candidate)
+            normalized.pop("png_base64", None)
             return normalized
-        return result
+
+        normalized = dict(result)
+        normalized.pop("png_base64", None)
+        return normalized

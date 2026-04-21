@@ -512,6 +512,20 @@ async def test_send_message_uses_prefixed_ws_event() -> None:
     assert payload["client_message_id"]
 
 
+async def test_send_message_includes_attachment_refs() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.sio = FakeSocketIOClient(
+        call_response={
+            "results": [{"ok": True, "data": {"context_id": "ctx-1", "status": "accepted"}}]
+        }
+    )
+
+    await client.send_message("see attached", "ctx-1", attachments=["/a0/usr/uploads/clipboard.png"])
+
+    _event, payload, _namespace = client.sio.call_calls[0]
+    assert payload["attachments"] == ["/a0/usr/uploads/clipboard.png"]
+
+
 async def test_send_hello_returns_exec_config_payload() -> None:
     client = A0Client("http://127.0.0.1:50001")
     client.sio = FakeSocketIOClient(

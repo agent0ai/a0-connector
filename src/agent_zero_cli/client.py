@@ -613,15 +613,20 @@ class A0Client:
             {"context_id": context_id},
         )
 
-    async def send_message(self, text: str, context_id: str) -> dict[str, Any]:
-        return await self._call(
-            _EVENT_SEND_MESSAGE,
-            {
-                "context_id": context_id,
-                "message": text,
-                "client_message_id": str(uuid.uuid4()),
-            },
-        )
+    async def send_message(
+        self,
+        text: str,
+        context_id: str,
+        attachments: list[str] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "context_id": context_id,
+            "message": text,
+            "client_message_id": str(uuid.uuid4()),
+        }
+        if attachments:
+            payload["attachments"] = list(attachments)
+        return await self._call(_EVENT_SEND_MESSAGE, payload)
 
     async def create_chat(self, *, current_context_id: str | None = None) -> str:
         payload = {}

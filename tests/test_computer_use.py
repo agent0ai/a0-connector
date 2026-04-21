@@ -355,7 +355,7 @@ async def test_status_snapshot_includes_backend_fields(
     assert status["result"]["support_reason"] == "Wayland portal backend is available."
 
 
-async def test_capture_normalizes_inline_png_base64_response(
+async def test_capture_strips_inline_png_base64_response_when_artifact_path_is_advertised(
     _temp_env: Path,
 ) -> None:
     manager = _manager(enabled=True)
@@ -380,7 +380,7 @@ async def test_capture_normalizes_inline_png_base64_response(
     )
 
     assert result["ok"] is True
-    assert result["result"]["png_base64"] == base64.b64encode(payload).decode("ascii")
+    assert "png_base64" not in result["result"]
     assert result["result"]["host_path"].startswith(str(computer_use_mod.HOST_ARTIFACT_ROOT / "ctx-1"))
     assert result["result"]["capture_path"] == result["result"]["host_path"]
     assert result["result"]["container_path"].startswith(f"{computer_use_mod.CONTAINER_ARTIFACT_ROOT}/ctx-1/")

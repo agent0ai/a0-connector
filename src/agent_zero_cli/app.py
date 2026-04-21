@@ -25,6 +25,10 @@ from agent_zero_cli import (
     splash_helpers,
 )
 from agent_zero_cli.client import A0Client, DEFAULT_HOST
+from agent_zero_cli.attachments import (
+    AttachmentError,
+    save_clipboard_image_attachment,
+)
 from agent_zero_cli.clipboard import (
     copy_text_to_windows_clipboard,
     should_use_native_windows_clipboard,
@@ -203,6 +207,22 @@ class AgentZeroCLI(App):
         super().copy_to_clipboard(text)
         if should_use_native_windows_clipboard():
             copy_text_to_windows_clipboard(text)
+
+    async def attach_clipboard_image(self) -> bool:
+        try:
+            attachment = await asyncio.to_thread(save_clipboard_image_attachment)
+        except AttachmentError:
+            return False
+        except Exception as exc:
+            self._show_notice(f"Error attaching clipboard image: {exc}", error=True)
+            return True
+
+        try:
+            self.query_one("#message-input", ChatInput).add_attachment(attachment)
+        except Exception:
+            return False
+        self._show_notice(f"Attached {attachment.name}.")
+        return True
 
     async def on_mount(self) -> None:
         input_widget = self.query_one("#message-input", ChatInput)
@@ -1116,7 +1136,9 @@ class AgentZeroCLI(App):
     async def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
         raw_text = event.value
         text = raw_text.strip()
-        if not text:
+        attachments = list(getattr(event, "attachments", []) or [])
+        attachment_paths = [attachment.path for attachment in attachments]
+        if not text and not attachment_paths:
             self._slash_palette_query = None
             return
 
@@ -1148,7 +1170,7 @@ class AgentZeroCLI(App):
         self._sync_ready_actions()
 
         try:
-            await self.client.send_message(text, self.current_context)
+            await self.client.send_message(text, self.current_context, attachments=attachment_paths)
         except Exception as exc:
             self.current_context_has_messages = previous_context_has_messages
             self._response_delivered = previous_response_delivered
@@ -1157,6 +1179,7 @@ class AgentZeroCLI(App):
             self._set_pause_latched(previous_pause_latched)
             self._sync_body_mode()
             event.input.value = raw_text
+            event.input.set_attachments(attachments)
             self._focus_message_input()
             self._show_notice(f"Error sending message: {exc}", error=True)
             self._sync_ready_actions()

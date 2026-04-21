@@ -48,7 +48,7 @@ All routes: `POST /api/plugins/_a0_connector/v1/<endpoint>`
 | `chat_delete` | Session | Delete a context |
 | `pause` | Session | Pause the currently running context |
 | `nudge` | Session | Continue a stopped or paused context run |
-| `message_send` | Session | Send a message with optional base64 attachments |
+| `message_send` | Session | Send a message with optional path/URL attachments; HTTP base64 uploads are saved to files before agent history |
 | `log_tail` | Session | Paginated context log entries |
 | `projects` | Session | Project list, activate, deactivate, load, update |
 | `settings_get` | Session | Optional runtime settings surface |
