@@ -67,6 +67,16 @@ class _FakeStream:
         return b""
 
 
+class _FakeLineStream:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = [line.encode("utf-8") for line in lines]
+
+    async def readline(self) -> bytes:
+        if not self._lines:
+            return b""
+        return self._lines.pop(0)
+
+
 def _manager(
     *,
     enabled: bool = False,
@@ -132,6 +142,35 @@ def _selection(
         supported=detected,
         support_reason=support_reason,
     )
+
+
+def test_default_host_artifact_root_uses_dockervolume_mapping_on_macos(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    volume_root = tmp_path / "dockervolume"
+    volume_root.mkdir()
+    monkeypatch.delenv(computer_use_mod._HOST_ARTIFACT_ROOT_ENV, raising=False)
+    monkeypatch.setattr(computer_use_mod, "_find_dockervolume_root", lambda: volume_root)
+    monkeypatch.setattr(computer_use_mod.sys, "platform", "darwin")
+
+    host_root = computer_use_mod._default_host_artifact_root("/a0/tmp/_a0_connector/computer_use")
+
+    assert host_root == volume_root / "tmp" / "_a0_connector" / "computer_use"
+
+
+def test_default_host_artifact_root_uses_tempdir_fallback_on_macos(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(computer_use_mod._HOST_ARTIFACT_ROOT_ENV, raising=False)
+    monkeypatch.setattr(computer_use_mod, "_find_dockervolume_root", lambda: None)
+    monkeypatch.setattr(computer_use_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(computer_use_mod.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    host_root = computer_use_mod._default_host_artifact_root("/a0/tmp/_a0_connector/computer_use")
+
+    assert host_root == tmp_path / "_a0_connector" / "computer_use"
 
 
 async def test_status_is_allowed_while_disabled_but_other_actions_are_rejected(
@@ -527,6 +566,31 @@ async def test_ensure_helper_uses_expanded_stdio_limit_for_large_capture_payload
     assert session.process is not None
     assert calls
     assert calls[0]["kwargs"]["limit"] == _HELPER_STDIO_LIMIT
+
+
+async def test_helper_stderr_is_forwarded_when_debug_is_enabled(
+    _temp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("A0_COMPUTER_USE_DEBUG", "1")
+    manager = _manager(enabled=True)
+
+    process = type(
+        "FakeProcess",
+        (),
+        {
+            "stderr": _FakeLineStream(["waiting for permissions\n"]),
+            "pid": 4242,
+        },
+    )()
+
+    await manager._drain_stderr(process)
+
+    stderr = capsys.readouterr().err
+    assert "helper.stderr" in stderr
+    assert "waiting for permissions" in stderr
+    assert "4242" in stderr
 
 
 async def test_move_click_scroll_key_type_normalize_payloads(

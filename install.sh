@@ -3,6 +3,7 @@
 set -eu
 
 PACKAGE_SPEC="${A0_PACKAGE_SPEC:-a0}"
+PYTHON_SPEC="${A0_PYTHON_SPEC:-3.11}"
 UV_INSTALL_URL="${UV_INSTALL_URL:-https://astral.sh/uv/install.sh}"
 
 have_cmd() {
@@ -41,7 +42,7 @@ main() {
     export PATH="$uv_bin_dir:$PATH"
 
     uv tool update-shell >/dev/null 2>&1 || true
-    uv tool install --upgrade "$PACKAGE_SPEC"
+    uv tool install --python "$PYTHON_SPEC" --managed-python --upgrade "$PACKAGE_SPEC"
 
     cat <<EOF
 
@@ -49,6 +50,9 @@ a0 is installed.
 
 Run:
   a0
+
+Managed Python:
+  $PYTHON_SPEC
 
 If 'a0' is not available in your current shell yet, open a new terminal.
 uv installs tool executables in:

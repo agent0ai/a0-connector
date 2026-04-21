@@ -31,19 +31,20 @@ irm https://raw.githubusercontent.com/agent0ai/a0-connector/main/install.ps1 | i
 a0
 ```
 
-The `a0` release pulls in the matching computer-use backend automatically: `a0-computer-use-wayland` on Linux and `a0-computer-use-windows` on Windows. Package names are already reserved for `a0-computer-use-x11` and `a0-computer-use-macos`.
+The `a0` release pulls in the matching computer-use backend automatically: `a0-computer-use-wayland` on Linux, `a0-computer-use-macos` on macOS, and `a0-computer-use-windows` on Windows. The `a0-computer-use-x11` name remains reserved for a future X11-specific backend.
 
 ## Manual install
 
 If you already use `uv`, you can install the stable `a0` release directly.
-`uv` will pick a compatible Python for the tool environment and can download
-one if needed, without requiring `git` to be installed:
+The installer and update flow default to a managed CPython 3.11 tool
+environment across macOS, Linux, and Windows, and `uv` can download it
+automatically without requiring `git` to be installed:
 
 ```bash
-uv tool install --upgrade a0
+uv tool install --python 3.11 --managed-python --upgrade a0
 ```
 
-Advanced one-off runs with `uvx` also work, but they are intentionally not the primary install path for this project. For development channels, set `A0_PACKAGE_SPEC` to a source or archive spec before running `uv tool install` or `a0 update`.
+Set `A0_PYTHON_SPEC` if you need to override that interpreter request, or `A0_PACKAGE_SPEC` if you want a different package source. Advanced one-off runs with `uvx` also work, but they are intentionally not the primary install path for this project.
 
 ## Update
 
@@ -53,7 +54,7 @@ If you installed `a0` with the standard `uv tool` flow, update it in place with:
 a0 update
 ```
 
-By default `a0 update` follows the stable `a0` release channel used by the installer and manual `uv tool install --upgrade` command above. For advanced cases you can override the package source by setting `A0_PACKAGE_SPEC` before running `a0 update`.
+By default `a0 update` follows the stable `a0` release channel and managed CPython 3.11 tool runtime used by the installer. For advanced cases you can override the package source with `A0_PACKAGE_SPEC` or the interpreter request with `A0_PYTHON_SPEC` before running `a0 update`.
 
 `a0 update` requires `uv` to be available on your `PATH`.
 

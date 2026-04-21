@@ -29,6 +29,8 @@ from agent_zero_cli.config import (
 HELPER_PYTHON = "/usr/bin/python3"
 _HOST_ARTIFACT_ROOT_ENV = "A0_COMPUTER_USE_HOST_ARTIFACT_ROOT"
 _CONTAINER_ARTIFACT_ROOT_ENV = "A0_COMPUTER_USE_CONTAINER_ARTIFACT_ROOT"
+_DEBUG_ENV = "A0_COMPUTER_USE_DEBUG"
+_DEBUG_LOG_ENV = "A0_COMPUTER_USE_DEBUG_LOG"
 _DEFAULT_CONTAINER_ARTIFACT_ROOT = "/a0/tmp/_a0_connector/computer_use"
 _LEGACY_HOST_ARTIFACT_ROOT = Path("/home/eclypso/agentdocker/tmp/_a0_connector/computer_use")
 _CAPTURE_RETENTION_MAX_FILES = 24
@@ -51,6 +53,81 @@ _DISABLED_ERROR = "COMPUTER_USE_DISABLED"
 _REARM_REQUIRED_ERROR = "COMPUTER_USE_REARM_REQUIRED"
 _SESSION_REQUIRED_ERROR = "COMPUTER_USE_SESSION_REQUIRED"
 _UNSUPPORTED_ERROR = "COMPUTER_USE_UNSUPPORTED"
+
+
+def _env_flag(name: str) -> bool:
+    value = str(os.environ.get(name, "")).strip().lower()
+    return value in {"1", "true", "yes", "on", "debug"}
+
+
+def _resolve_debug_log_path() -> Path | None:
+    configured = str(os.environ.get(_DEBUG_LOG_ENV, "")).strip()
+    if not configured:
+        return None
+    return Path(configured).expanduser()
+
+
+def _debug_timestamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + f".{int(time.time_ns() % 1_000_000_000):09d}Z"
+
+
+def _debug_value(value: object) -> object:
+    if isinstance(value, str):
+        text = value.replace("\n", "\\n")
+        if len(text) > 240:
+            return text[:237] + "..."
+        return text
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return [_debug_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _debug_value(item) for key, item in value.items()}
+    return value
+
+
+def _request_debug_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    action = str(payload.get("action", "") or "")
+    fields: dict[str, Any] = {
+        "action": action,
+        "context_id": str(payload.get("context_id", "") or ""),
+        "request_id": str(payload.get("request_id", "") or ""),
+    }
+    if "session_id" in payload:
+        fields["session_id"] = str(payload.get("session_id", "") or "")
+    if action == "start_session":
+        fields["trust_mode"] = str(payload.get("trust_mode", "") or "")
+        fields["allow_prompt"] = bool(payload.get("allow_prompt"))
+        fields["request_timeout_seconds"] = payload.get("request_timeout_seconds")
+        fields["restore_token_present"] = bool(str(payload.get("restore_token", "") or "").strip())
+    if action == "capture" and "capture_path" in payload:
+        fields["capture_path"] = str(payload.get("capture_path", "") or "")
+    return fields
+
+
+def _response_debug_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "ok": bool(payload.get("ok")),
+        "code": str(payload.get("code", "") or ""),
+        "error": str(payload.get("error", "") or ""),
+    }
+    result = payload.get("result")
+    if isinstance(result, dict):
+        for key in (
+            "session_id",
+            "status",
+            "context_id",
+            "width",
+            "height",
+            "capture_path",
+            "host_path",
+            "container_path",
+        ):
+            if key in result:
+                fields[key] = result.get(key)
+        if "restore_token" in result:
+            fields["restore_token_present"] = bool(str(result.get("restore_token", "") or "").strip())
+    return fields
 
 
 def _normalize_container_artifact_root(value: object) -> str:
@@ -100,10 +177,11 @@ def _default_host_artifact_root(container_root: str) -> Path:
     if configured:
         return Path(configured).expanduser()
 
-    if os.name == "nt":
-        volume_root = _find_dockervolume_root()
-        if volume_root is not None:
-            return _host_artifact_root_from_container_root(container_root, volume_root=volume_root)
+    volume_root = _find_dockervolume_root()
+    if volume_root is not None:
+        return _host_artifact_root_from_container_root(container_root, volume_root=volume_root)
+
+    if os.name == "nt" or sys.platform == "darwin":
         return Path(tempfile.gettempdir()) / "_a0_connector" / "computer_use"
 
     return _LEGACY_HOST_ARTIFACT_ROOT
@@ -227,6 +305,8 @@ class ComputerUseManager:
         self.last_error = ""
         self._sessions: dict[str, _HelperSession] = {}
         self._status_callback: Callable[[str, str], None] | None = None
+        self._debug_enabled = _env_flag(_DEBUG_ENV)
+        self._debug_log_path = _resolve_debug_log_path()
 
     @property
     def status_label(self) -> str:
@@ -308,6 +388,23 @@ class ComputerUseManager:
         }
         snapshot.update(self._backend_metadata)
         return snapshot
+
+    def _debug(self, event: str, **fields: object) -> None:
+        if not self._debug_enabled:
+            return
+        line = f"[a0 computer_use] {_debug_timestamp()} {event}"
+        if fields:
+            formatted = " ".join(
+                f"{key}={json.dumps(_debug_value(value), ensure_ascii=True, sort_keys=True)}"
+                for key, value in sorted(fields.items())
+            )
+            line = f"{line} {formatted}"
+        if self._debug_log_path is not None:
+            self._debug_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._debug_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        sys.stderr.write(line + "\n")
+        sys.stderr.flush()
 
     def _success(self, op_id: str, result: dict[str, Any]) -> dict[str, Any]:
         return {"op_id": op_id, "ok": True, "result": result}
@@ -492,6 +589,12 @@ class ComputerUseManager:
     async def _ensure_helper(self, session: _HelperSession) -> _HelperSession:
         process = session.process
         if process is not None and process.returncode is None:
+            self._debug(
+                "helper.reuse",
+                context_id=session.context_id,
+                session_id=session.session_id,
+                status=session.status,
+            )
             return session
 
         helper_target = str(getattr(self._backend_spec, "helper_target", "") or "").strip()
@@ -503,6 +606,13 @@ class ComputerUseManager:
         else:
             helper_python = HELPER_PYTHON
 
+        self._debug(
+            "helper.launch",
+            context_id=session.context_id,
+            helper_python=helper_python,
+            helper_target=helper_target,
+            interpreter_strategy=interpreter_strategy or "default",
+        )
         process = await asyncio.create_subprocess_exec(
             helper_python,
             helper_target,
@@ -517,6 +627,7 @@ class ComputerUseManager:
         session.active = False
         session.status = "idle"
         session.session_id = ""
+        self._debug("helper.launch.ok", context_id=session.context_id, pid=getattr(process, "pid", None))
         return session
 
     async def _drain_stderr(self, process: asyncio.subprocess.Process) -> None:
@@ -527,6 +638,9 @@ class ComputerUseManager:
                 line = await process.stderr.readline()
                 if not line:
                     return
+                text = line.decode("utf-8", errors="replace").rstrip()
+                if text:
+                    self._debug("helper.stderr", line=text, pid=getattr(process, "pid", None))
         except Exception:
             return
 
@@ -541,6 +655,8 @@ class ComputerUseManager:
         payload = dict(request)
         payload.setdefault("request_id", uuid.uuid4().hex)
         expected_request_id = str(payload.get("request_id", "") or "")
+        started_at = time.monotonic()
+        self._debug("helper.request.send", **_request_debug_fields(payload))
 
         async with session.lock:
             process.stdin.write((json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8"))
@@ -559,9 +675,21 @@ class ComputerUseManager:
                     response = json.loads(raw_text)
                 except json.JSONDecodeError:
                     stray_stdout.append(raw_text)
+                    self._debug(
+                        "helper.stdout.noise",
+                        request_id=expected_request_id,
+                        line=raw_text,
+                        noise_lines=len(stray_stdout),
+                    )
                 else:
                     if not isinstance(response, dict):
                         stray_stdout.append(raw_text)
+                        self._debug(
+                            "helper.stdout.noise",
+                            request_id=expected_request_id,
+                            line=raw_text,
+                            noise_lines=len(stray_stdout),
+                        )
                     else:
                         response_request_id = str(response.get("request_id", "") or "")
                         if (
@@ -570,6 +698,12 @@ class ComputerUseManager:
                             and response_request_id != expected_request_id
                         ):
                             stray_stdout.append(raw_text)
+                            self._debug(
+                                "helper.stdout.noise",
+                                request_id=expected_request_id,
+                                line=raw_text,
+                                noise_lines=len(stray_stdout),
+                            )
                         else:
                             break
 
@@ -583,6 +717,11 @@ class ComputerUseManager:
         if not isinstance(response, dict):
             raise RuntimeError("computer use helper returned an invalid response")
         session.last_result = response
+        self._debug(
+            "helper.request.recv",
+            elapsed_ms=round((time.monotonic() - started_at) * 1000, 1),
+            **_response_debug_fields(response),
+        )
         return response
 
     async def _dispatch_session_action(
@@ -630,6 +769,12 @@ class ComputerUseManager:
 
     async def _start_session(self, op_id: str, session: _HelperSession) -> dict[str, Any]:
         restore_token = self._current_restore_token()
+        self._debug(
+            "start_session.begin",
+            context_id=session.context_id,
+            trust_mode=self.trust_mode,
+            restore_token_present=bool(restore_token),
+        )
         if self.trust_mode == "free_run" and not restore_token:
             self._set_status("rearm required", error=_REARM_REQUIRED_ERROR)
             return self._error(op_id, _REARM_REQUIRED_ERROR, result=self._session_snapshot())
@@ -695,6 +840,11 @@ class ComputerUseManager:
         session.active = False
         session.session_id = ""
         session.status = "stopped"
+        self._debug(
+            "helper.close.begin",
+            context_id=session.context_id,
+            pid=getattr(process, "pid", None),
+        )
 
         if process is not None and process.returncode is None:
             with contextlib.suppress(Exception):
@@ -717,6 +867,7 @@ class ComputerUseManager:
             stderr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await stderr_task
+        self._debug("helper.close.done", context_id=session.context_id)
 
     def _normalize_helper_response(
         self,

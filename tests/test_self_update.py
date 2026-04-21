@@ -48,9 +48,18 @@ def test_resolve_package_spec_defaults_to_stable_release() -> None:
     assert self_update.resolve_package_spec({}) == self_update.DEFAULT_PACKAGE_SPEC
 
 
+def test_resolve_python_spec_defaults_to_managed_python_release() -> None:
+    assert self_update.resolve_python_spec({}) == self_update.DEFAULT_PYTHON_SPEC
+
+
 def test_resolve_package_spec_honors_environment_override() -> None:
     env = {"A0_PACKAGE_SPEC": "a0 @ https://example.invalid/custom.zip"}
     assert self_update.resolve_package_spec(env) == env["A0_PACKAGE_SPEC"]
+
+
+def test_resolve_python_spec_honors_environment_override() -> None:
+    env = {"A0_PYTHON_SPEC": "3.12"}
+    assert self_update.resolve_python_spec(env) == env["A0_PYTHON_SPEC"]
 
 
 def test_detect_install_provenance_flags_local_editable_checkout(
@@ -116,7 +125,10 @@ def test_run_self_update_handoff_writes_script_and_spawns_updater(
             return SimpleNamespace(pid=4321)
 
         monkeypatch.setattr(self_update.subprocess, "Popen", fake_popen)
-        env = {"A0_PACKAGE_SPEC": "a0 @ https://example.invalid/build.zip"}
+        env = {
+            "A0_PACKAGE_SPEC": "a0 @ https://example.invalid/build.zip",
+            "A0_PYTHON_SPEC": "3.12",
+        }
 
         exit_code = self_update.run_self_update_handoff(env=env, temp_dir=temp_dir)
 
@@ -130,13 +142,19 @@ def test_run_self_update_handoff_writes_script_and_spawns_updater(
         assert argv[0] == sys.executable
         assert argv[2] == str(os.getpid())
         assert argv[3] == env["A0_PACKAGE_SPEC"]
+        assert argv[4] == env["A0_PYTHON_SPEC"]
         assert kwargs["stdin"] is subprocess.DEVNULL
 
         script_path = Path(argv[1])
         assert script_path.parent == temp_dir
         script_text = script_path.read_text(encoding="utf-8")
         assert "agent_zero_cli" not in script_text
-        assert '"tool", "install", "--upgrade", package_spec' in script_text
+        assert '"tool"' in script_text
+        assert '"--python"' in script_text
+        assert "python_spec" in script_text
+        assert '"--managed-python"' in script_text
+        assert '"--upgrade"' in script_text
+        assert "package_spec" in script_text
         assert "Update complete. Run a0." in script_text
 
 
@@ -165,13 +183,13 @@ def test_generated_updater_script_waits_then_runs_uv_on_success(
     monkeypatch.setattr(namespace["shutil"], "which", lambda name: "uv")
     monkeypatch.setattr(namespace["subprocess"], "run", fake_run)
 
-    exit_code = namespace["main"](["123", "a0"])
+    exit_code = namespace["main"](["123", "a0", "3.11"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert sleep_calls == [0.1, 0.1]
     assert run_calls == [
-        (["uv", "tool", "install", "--upgrade", "a0"], False)
+        (["uv", "tool", "install", "--python", "3.11", "--managed-python", "--upgrade", "a0"], False)
     ]
     assert captured.out.strip().endswith("Update complete. Run a0.")
 
@@ -190,7 +208,7 @@ def test_generated_updater_script_propagates_uv_exit_code_and_ignores_cleanup_fa
         lambda argv, *, check: SimpleNamespace(returncode=7),
     )
     monkeypatch.setattr(Path, "unlink", lambda self: (_ for _ in ()).throw(OSError("locked")))
-    monkeypatch.setattr(sys, "argv", ["a0-update-temp.py", "321", "a0 @ https://example.invalid/fail.zip"])
+    monkeypatch.setattr(sys, "argv", ["a0-update-temp.py", "321", "a0 @ https://example.invalid/fail.zip", "3.11"])
 
     with pytest.raises(SystemExit) as exc_info:
         exec(

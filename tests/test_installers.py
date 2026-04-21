@@ -13,14 +13,12 @@ def test_package_keeps_python_floor_at_310() -> None:
     assert '{ name = "agent0ai" }' in pyproject
 
 
-def test_unix_installer_lets_uv_manage_python() -> None:
+def test_unix_installer_pins_managed_python() -> None:
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
-    assert "ensure_python" not in installer
-    assert "python_ok" not in installer
     assert "--no-python-downloads" not in installer
-    assert '--python "$PYTHON_CMD"' not in installer
     assert 'PACKAGE_SPEC="${A0_PACKAGE_SPEC:-a0}"' in installer
-    assert 'uv tool install --upgrade "$PACKAGE_SPEC"' in installer
+    assert 'PYTHON_SPEC="${A0_PYTHON_SPEC:-3.11}"' in installer
+    assert 'uv tool install --python "$PYTHON_SPEC" --managed-python --upgrade "$PACKAGE_SPEC"' in installer
 
 
 def test_unix_installer_is_sh_compatible() -> None:
@@ -33,20 +31,19 @@ def test_unix_installer_is_sh_compatible() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_windows_installer_lets_uv_manage_python() -> None:
+def test_windows_installer_pins_managed_python() -> None:
     installer = (ROOT / "install.ps1").read_text(encoding="utf-8")
-    assert "Resolve-PythonCommand" not in installer
-    assert "Test-PythonCommand" not in installer
     assert "--no-python-downloads" not in installer
-    assert '"--python"' not in installer
     assert '"a0"' in installer
-    assert '$installArgs = @("tool", "install", "--upgrade", $PackageSpec)' in installer
+    assert '$PythonSpec = if ($env:A0_PYTHON_SPEC) { $env:A0_PYTHON_SPEC } else { "3.11" }' in installer
+    assert '$installArgs = @("tool", "install", "--python", $PythonSpec, "--managed-python", "--upgrade", $PackageSpec)' in installer
     assert 'if ($LASTEXITCODE -ne 0)' in installer
 
 
 def test_root_package_declares_platform_backend_dependencies() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'a0-computer-use-wayland>=1.5; platform_system == "Linux"' in pyproject
+    assert 'a0-computer-use-macos>=1.5; platform_system == "Darwin"' in pyproject
     assert 'a0-computer-use-windows>=1.5; platform_system == "Windows"' in pyproject
 
 
@@ -55,6 +52,7 @@ def test_development_docs_show_workspace_backend_editable_installs() -> None:
     compact = " ".join(development.split())
     assert "pip install -e .\\packages\\a0-computer-use-windows -e ." in development
     assert "pip install -e ./packages/a0-computer-use-wayland -e ." in development
+    assert "pip install -e ./packages/a0-computer-use-macos -e ." in development
     assert "Repo-local editable installs need the matching backend package" in compact
 
 
@@ -81,9 +79,10 @@ def test_readme_documents_uv_managed_python_and_git_install() -> None:
     assert "install the stable `a0` release directly" in compact
     assert "a0-computer-use-wayland" in compact
     assert "a0-computer-use-windows" in compact
-    assert "will pick a compatible Python" in compact
-    assert "download one if needed" in compact
+    assert "managed CPython 3.11 tool environment" in compact
+    assert "download it automatically" in compact
     assert "without requiring `git` to be installed" in readme
     assert "`a0 update`" in readme
     assert "`A0_PACKAGE_SPEC`" in readme
+    assert "`A0_PYTHON_SPEC`" in readme
     assert "Install `uv` or rerun the existing installer." in readme

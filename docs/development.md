@@ -58,9 +58,22 @@ export AGENT_ZERO_HOST=http://localhost:50001
 a0
 ```
 
+macOS:
+
+```bash
+uv venv --python 3.11 .venv && source .venv/bin/activate
+pip install -e ./packages/a0-computer-use-macos -e .
+export AGENT_ZERO_HOST=http://localhost:50001
+a0
+```
+
 When you are developing against a Docker-detected local Agent Zero instance, prefer `localhost` over `127.0.0.1` so the saved host matches the discovered host exactly.
 
-The published `a0` wheel uses environment markers to pull the matching computer-use backend automatically. Linux installs `a0-computer-use-wayland`, Windows installs `a0-computer-use-windows`, and the reserved names `a0-computer-use-x11` and `a0-computer-use-macos` are held for later releases.
+The published `a0` wheel uses environment markers to pull the matching computer-use backend automatically. Linux installs `a0-computer-use-wayland`, macOS installs `a0-computer-use-macos`, Windows installs `a0-computer-use-windows`, and `a0-computer-use-x11` remains reserved for a future X11-specific backend.
+
+The standalone installers and `a0 update` default to a managed CPython 3.11
+runtime via `uv`, so end users do not need a preinstalled Python 3.10+ on the
+host to get a consistent tool environment.
 
 ### Backend source of truth
 

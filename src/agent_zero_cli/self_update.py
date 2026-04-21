@@ -16,6 +16,7 @@ from urllib.request import url2pathname
 
 
 DEFAULT_PACKAGE_SPEC = "a0"
+DEFAULT_PYTHON_SPEC = "3.11"
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,13 @@ def resolve_package_spec(env: Mapping[str, str] | None = None) -> str:
     if "A0_PACKAGE_SPEC" in source:
         return source["A0_PACKAGE_SPEC"]
     return DEFAULT_PACKAGE_SPEC
+
+
+def resolve_python_spec(env: Mapping[str, str] | None = None) -> str:
+    source = os.environ if env is None else env
+    if "A0_PYTHON_SPEC" in source:
+        return source["A0_PYTHON_SPEC"]
+    return DEFAULT_PYTHON_SPEC
 
 
 def detect_install_provenance(distribution_name: str = "a0") -> InstallProvenance:
@@ -71,6 +79,7 @@ def run_self_update_handoff(
     temp_dir: str | os.PathLike[str] | None = None,
 ) -> int:
     package_spec = resolve_package_spec(env)
+    python_spec = resolve_python_spec(env)
     provenance = detect_install_provenance()
     if provenance.is_local_checkout:
         print(_format_local_checkout_notice(provenance))
@@ -81,7 +90,7 @@ def run_self_update_handoff(
         return 1
 
     script_path = _write_updater_script(temp_dir=temp_dir)
-    argv = [sys.executable, str(script_path), str(os.getpid()), package_spec]
+    argv = [sys.executable, str(script_path), str(os.getpid()), package_spec, python_spec]
     try:
         subprocess.Popen(argv, stdin=subprocess.DEVNULL)
     except OSError as exc:
@@ -137,7 +146,7 @@ def _build_updater_script() -> str:
 
 
         def main(argv):
-            if len(argv) != 2:
+            if len(argv) != 3:
                 print("Invalid updater invocation.", file=sys.stderr)
                 return 2
 
@@ -148,6 +157,7 @@ def _build_updater_script() -> str:
                 return 2
 
             package_spec = argv[1]
+            python_spec = argv[2]
             _wait_for_parent_exit(parent_pid)
 
             uv_executable = shutil.which("uv")
@@ -157,7 +167,16 @@ def _build_updater_script() -> str:
 
             try:
                 result = subprocess.run(
-                    [uv_executable, "tool", "install", "--upgrade", package_spec],
+                    [
+                        uv_executable,
+                        "tool",
+                        "install",
+                        "--python",
+                        python_spec,
+                        "--managed-python",
+                        "--upgrade",
+                        package_spec,
+                    ],
                     check=False,
                 )
             except OSError as exc:
