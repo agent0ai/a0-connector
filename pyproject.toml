@@ -29,10 +29,13 @@ dependencies = [
     "python-socketio[asyncio_client]>=5.0.0",
     "httpx>=0.27.0",
     "aiohttp>=3.11.0",
-    'a0-computer-use-wayland>=1.5; platform_system == "Linux"',
-    'a0-computer-use-x11>=1.5; platform_system == "Linux"',
-    'a0-computer-use-macos>=1.5; platform_system == "Darwin"',
-    'a0-computer-use-windows>=1.5; platform_system == "Windows"',
+    'mss>=10.1.0; platform_system == "Linux"',
+    'python-xlib>=0.33; platform_system == "Linux"',
+    'pyobjc-framework-ApplicationServices; platform_system == "Darwin"',
+    'pyobjc-framework-Quartz; platform_system == "Darwin"',
+    'dxcam; platform_system == "Windows"',
+    'pillow; platform_system == "Windows"',
+    'pywinauto; platform_system == "Windows"',
 ]
 
 [project.urls]
@@ -43,5 +46,17 @@ Issues = "https://github.com/agent0ai/a0-connector/issues"
 [project.scripts]
 a0 = "agent_zero_cli.__main__:main"
 
+[project.entry-points."a0.computer_use_backends"]
+wayland = "a0_computer_use_wayland.backend:WAYLAND_BACKEND_SPEC"
+x11 = "a0_computer_use_x11.backend:X11_BACKEND_SPEC"
+macos = "a0_computer_use_macos.backend:MACOS_BACKEND_SPEC"
+windows = "a0_computer_use_windows.backend:WINDOWS_BACKEND_SPEC"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_zero_cli"]
+packages = [
+    "src/agent_zero_cli",
+    "packages/a0-computer-use-wayland/src/a0_computer_use_wayland",
+    "packages/a0-computer-use-x11/src/a0_computer_use_x11",
+    "packages/a0-computer-use-macos/src/a0_computer_use_macos",
+    "packages/a0-computer-use-windows/src/a0_computer_use_windows",
+]

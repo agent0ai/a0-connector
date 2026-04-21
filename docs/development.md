@@ -5,7 +5,7 @@
 ```
 a0-connector/
 ├── src/agent_zero_cli/     # CLI (Textual, httpx, python-socketio)
-├── packages/               # Published backend packages and metadata
+├── packages/               # Embedded computer-use backend source and metadata
 ├── tests/                  # pytest
 └── docs/                   # You are here
 ```
@@ -34,17 +34,16 @@ To test a protected instance, start Agent Zero with `AUTH_LOGIN` and `AUTH_PASSW
 
 ### CLI
 
-Repo-local editable installs need the matching backend package from `packages/`
-in the same `pip` invocation. The published `a0` wheel can pull the platform
-backend from an index, but a workspace checkout cannot infer that sibling
-package automatically.
+The root editable install includes the embedded computer-use backends from
+`packages/`, matching the release wheel model where the CLI and local
+computer-use support update as one unit.
 
 Windows PowerShell:
 
 ```powershell
 py -3.10 -m venv .venv
 . .\.venv\Scripts\Activate.ps1
-pip install -e .\packages\a0-computer-use-windows -e .
+pip install -e .
 $env:AGENT_ZERO_HOST = "http://localhost:50001"
 a0
 ```
@@ -53,7 +52,7 @@ Linux / Wayland:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ./packages/a0-computer-use-wayland -e .
+pip install -e .
 export AGENT_ZERO_HOST=http://localhost:50001
 a0
 ```
@@ -62,7 +61,7 @@ Linux / X11:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ./packages/a0-computer-use-x11 -e .
+pip install -e .
 export AGENT_ZERO_HOST=http://localhost:50001
 a0
 ```
@@ -71,14 +70,16 @@ macOS:
 
 ```bash
 uv venv --python 3.11 .venv && source .venv/bin/activate
-pip install -e ./packages/a0-computer-use-macos -e .
+pip install -e .
 export AGENT_ZERO_HOST=http://localhost:50001
 a0
 ```
 
 When you are developing against a Docker-detected local Agent Zero instance, prefer `localhost` over `127.0.0.1` so the saved host matches the discovered host exactly.
 
-The published `a0` wheel uses environment markers to pull the matching computer-use backend automatically. Linux installs both `a0-computer-use-wayland` and `a0-computer-use-x11`; the backend resolver picks Wayland for Wayland sessions and X11 for Xorg/X11 sessions. macOS installs `a0-computer-use-macos`, and Windows installs `a0-computer-use-windows`.
+The published `a0` wheel embeds the Wayland, X11, macOS, and Windows backend modules. Environment markers install only the third-party runtime libraries relevant to the current platform. Linux includes both Wayland and X11 backend code; the backend resolver picks Wayland for Wayland sessions and X11 for Xorg/X11 sessions.
+
+The sibling `packages/a0-computer-use-*` manifests remain useful for isolated backend package development, but end-user installs should use the root `a0` package.
 
 The standalone installers and `a0 update` default to a managed CPython 3.11
 runtime via `uv`, so end users do not need a preinstalled Python 3.10+ on the

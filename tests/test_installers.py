@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,22 +41,47 @@ def test_windows_installer_pins_managed_python() -> None:
     assert 'if ($LASTEXITCODE -ne 0)' in installer
 
 
-def test_root_package_declares_platform_backend_dependencies() -> None:
-    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'a0-computer-use-wayland>=1.5; platform_system == "Linux"' in pyproject
-    assert 'a0-computer-use-x11>=1.5; platform_system == "Linux"' in pyproject
-    assert 'a0-computer-use-macos>=1.5; platform_system == "Darwin"' in pyproject
-    assert 'a0-computer-use-windows>=1.5; platform_system == "Windows"' in pyproject
+def test_root_package_embeds_platform_backends() -> None:
+    pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject = tomllib.loads(pyproject_text)
+
+    dependencies = pyproject["project"]["dependencies"]
+    dependency_text = "\n".join(dependencies)
+    assert "a0-computer-use-wayland" not in dependency_text
+    assert "a0-computer-use-x11" not in dependency_text
+    assert "a0-computer-use-macos" not in dependency_text
+    assert "a0-computer-use-windows" not in dependency_text
+
+    assert 'mss>=10.1.0; platform_system == "Linux"' in dependencies
+    assert 'python-xlib>=0.33; platform_system == "Linux"' in dependencies
+    assert 'pyobjc-framework-ApplicationServices; platform_system == "Darwin"' in dependencies
+    assert 'pyobjc-framework-Quartz; platform_system == "Darwin"' in dependencies
+    assert 'dxcam; platform_system == "Windows"' in dependencies
+    assert 'pillow; platform_system == "Windows"' in dependencies
+    assert 'pywinauto; platform_system == "Windows"' in dependencies
+
+    entry_points = pyproject["project"]["entry-points"]["a0.computer_use_backends"]
+    assert entry_points == {
+        "wayland": "a0_computer_use_wayland.backend:WAYLAND_BACKEND_SPEC",
+        "x11": "a0_computer_use_x11.backend:X11_BACKEND_SPEC",
+        "macos": "a0_computer_use_macos.backend:MACOS_BACKEND_SPEC",
+        "windows": "a0_computer_use_windows.backend:WINDOWS_BACKEND_SPEC",
+    }
+
+    wheel_packages = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
+    assert "src/agent_zero_cli" in wheel_packages
+    assert "packages/a0-computer-use-wayland/src/a0_computer_use_wayland" in wheel_packages
+    assert "packages/a0-computer-use-x11/src/a0_computer_use_x11" in wheel_packages
+    assert "packages/a0-computer-use-macos/src/a0_computer_use_macos" in wheel_packages
+    assert "packages/a0-computer-use-windows/src/a0_computer_use_windows" in wheel_packages
 
 
 def test_development_docs_show_workspace_backend_editable_installs() -> None:
     development = (ROOT / "docs" / "development.md").read_text(encoding="utf-8")
     compact = " ".join(development.split())
-    assert "pip install -e .\\packages\\a0-computer-use-windows -e ." in development
-    assert "pip install -e ./packages/a0-computer-use-wayland -e ." in development
-    assert "pip install -e ./packages/a0-computer-use-x11 -e ." in development
-    assert "pip install -e ./packages/a0-computer-use-macos -e ." in development
-    assert "Repo-local editable installs need the matching backend package" in compact
+    assert "pip install -e ." in development
+    assert "The root editable install includes the embedded computer-use backends" in compact
+    assert "isolated backend package development" in compact
 
 
 def test_backend_packages_keep_release_names_and_modules() -> None:
@@ -79,9 +105,7 @@ def test_readme_documents_uv_managed_python_and_git_install() -> None:
     assert "raw.githubusercontent.com/agent0ai/a0-connector/main/install.sh" in compact
     assert "raw.githubusercontent.com/agent0ai/a0-connector/main/install.ps1" in compact
     assert "install the stable `a0` release directly" in compact
-    assert "a0-computer-use-wayland" in compact
-    assert "a0-computer-use-x11" in compact
-    assert "a0-computer-use-windows" in compact
+    assert "Computer-use backends are embedded in the `a0` wheel" in compact
     assert "managed CPython 3.11 tool environment" in compact
     assert "download it automatically" in compact
     assert "without requiring `git` to be installed" in readme
