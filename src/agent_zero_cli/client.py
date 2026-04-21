@@ -39,6 +39,7 @@ _EVENT_ERROR = "connector_error"
 
 _SOCKET_IO_PROBE_QUERY = {"transport": "polling", "EIO": "4"}
 _BLANK_SOCKET_IO_REJECTION = "server rejected the Socket.IO connection without an error message"
+_ALREADY_CONNECTED_REJECTION = "Already connected"
 # Mirror the browser/manual-URL posture: accept self-signed or privately-issued
 # certificates instead of blocking HTTPS connections outright.
 _VERIFY_TLS_CERTIFICATES = False
@@ -77,10 +78,14 @@ class A0Client:
             timeout=httpx.Timeout(10.0),
             verify=_VERIFY_TLS_CERTIFICATES,
         )
-        self.sio = socketio.AsyncClient(ssl_verify=_VERIFY_TLS_CERTIFICATES)
+        self.sio = socketio.AsyncClient(
+            ssl_verify=_VERIFY_TLS_CERTIFICATES,
+            reconnection=False,
+        )
         self.connected = False
         self._events_registered = False
         self._last_connect_error: Any = None
+        self._suppress_disconnect_callback = False
 
         self.on_connect: Callable[[], None] | None = None
         self.on_disconnect: Callable[[], None] | None = None
@@ -219,6 +224,14 @@ class A0Client:
 
         return _BLANK_SOCKET_IO_REJECTION
 
+    def _is_already_connected_error(
+        self,
+        exc: BaseException | None = None,
+        payload: Any = None,
+    ) -> bool:
+        reason = self._format_connect_error(exc, payload)
+        return reason.strip().lower() == _ALREADY_CONNECTED_REJECTION.lower()
+
     async def _probe_socketio_transport(self) -> None:
         probe_url = self._socket_io_url()
 
@@ -257,6 +270,13 @@ class A0Client:
 
     def _format_namespace_rejection_error(self, exc: BaseException | None = None) -> str:
         reason = self._format_connect_error(exc, self._last_connect_error)
+        if reason.strip().lower() == _ALREADY_CONNECTED_REJECTION.lower():
+            return (
+                "Socket.IO could not start a clean connector session because the previous "
+                "transport still appeared connected. Retry will reset the transport before "
+                "opening a fresh /ws session."
+            )
+
         guidance = (
             "This usually means an Origin/Referer or proxy host mismatch. Check that "
             "AGENT_ZERO_HOST exactly matches the Agent Zero URL (for example localhost vs "
@@ -307,6 +327,8 @@ class A0Client:
         @self.sio.on("disconnect", namespace=WS_NAMESPACE)
         async def _on_disconnect() -> None:
             self.connected = False
+            if self._suppress_disconnect_callback:
+                return
             callback = self.on_disconnect
             if callback is not None:
                 callback()
@@ -500,18 +522,35 @@ class A0Client:
         response.raise_for_status()
         return False
 
+    async def _open_websocket(self) -> None:
+        self._last_connect_error = None
+        await self.sio.connect(
+            self.base_url,
+            namespaces=[WS_NAMESPACE],
+            headers=self._ws_headers(),
+            auth=self._ws_auth(),
+        )
+
     async def connect_websocket(self) -> None:
         self._register_event_handlers()
-        self._last_connect_error = None
+        await self.disconnect(close_http=False, notify=False)
         await self._probe_socketio_transport()
         try:
-            await self.sio.connect(
-                self.base_url,
-                namespaces=[WS_NAMESPACE],
-                headers=self._ws_headers(),
-                auth=self._ws_auth(),
-            )
+            await self._open_websocket()
         except Exception as exc:
+            if self._is_already_connected_error(exc, self._last_connect_error):
+                await self.disconnect(close_http=False, notify=False)
+                await self._probe_socketio_transport()
+                try:
+                    await self._open_websocket()
+                    return
+                except Exception as retry_exc:
+                    await self.disconnect(close_http=False, notify=False)
+                    raise A0WebSocketConnectionError(
+                        self._format_namespace_rejection_error(retry_exc)
+                    ) from retry_exc
+
+            await self.disconnect(close_http=False, notify=False)
             raise A0WebSocketConnectionError(self._format_namespace_rejection_error(exc)) from exc
 
     async def send_hello(
@@ -802,9 +841,16 @@ class A0Client:
             data["ok"] = True
         return data
 
-    async def disconnect(self, *, close_http: bool = True) -> None:
-        if self.sio.connected:
-            await self.sio.disconnect()
+    async def disconnect(self, *, close_http: bool = True, notify: bool = True) -> None:
+        previous_suppression = self._suppress_disconnect_callback
+        if not notify:
+            self._suppress_disconnect_callback = True
+        try:
+            if self.sio.connected:
+                await self.sio.disconnect()
+        finally:
+            self._suppress_disconnect_callback = previous_suppression
+            self.connected = False
         if close_http:
             await self.http.aclose()
 

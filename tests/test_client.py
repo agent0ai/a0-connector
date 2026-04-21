@@ -114,13 +114,19 @@ class FakeSocketIOClient:
         *,
         call_response: dict | None = None,
         connect_exception: Exception | None = None,
+        connect_exceptions: list[Exception] | None = None,
+        connected: bool = False,
     ) -> None:
         self.handlers: dict[tuple[str | None, str], object] = {}
         self.connect_calls: list[tuple[str, dict]] = []
+        self.disconnect_calls = 0
         self.call_calls: list[tuple[str, dict, str | None]] = []
         self.emit_calls: list[tuple[str, dict, str | None]] = []
         self.call_response = call_response or {"results": [{"ok": True, "data": {}}]}
-        self.connect_exception = connect_exception
+        self.connect_exceptions = list(connect_exceptions or [])
+        if connect_exception is not None:
+            self.connect_exceptions.append(connect_exception)
+        self.connected = connected
 
     def on(self, event: str, namespace: str | None = None):
         def decorator(func):
@@ -131,8 +137,20 @@ class FakeSocketIOClient:
 
     async def connect(self, url: str, **kwargs) -> None:
         self.connect_calls.append((url, kwargs))
-        if self.connect_exception is not None:
-            raise self.connect_exception
+        if self.connect_exceptions:
+            raise self.connect_exceptions.pop(0)
+        self.connected = True
+        handler = self.handlers.get(("/ws", "connect"))
+        if handler is not None:
+            await handler()
+
+    async def disconnect(self) -> None:
+        self.disconnect_calls += 1
+        was_connected = self.connected
+        self.connected = False
+        handler = self.handlers.get(("/ws", "disconnect"))
+        if was_connected and handler is not None:
+            await handler()
 
     async def call(
         self,
@@ -354,6 +372,56 @@ async def test_connect_websocket_forwards_session_cookie_and_handler_auth() -> N
             },
         )
     ]
+
+
+async def test_connect_websocket_resets_existing_socket_without_disconnect_callback() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.http = Mock()
+    client.http.cookies = httpx.Cookies()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    fake_sio = FakeSocketIOClient(connected=True)
+    client.sio = fake_sio
+    disconnect_callbacks = 0
+
+    def nonlocal_increment() -> None:
+        nonlocal disconnect_callbacks
+        disconnect_callbacks += 1
+
+    client.on_disconnect = nonlocal_increment
+
+    await client.connect_websocket()
+
+    assert fake_sio.disconnect_calls == 1
+    assert fake_sio.connected is True
+    assert client.connected is True
+    assert disconnect_callbacks == 0
+
+
+async def test_connect_websocket_recovers_from_already_connected_race() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.http = Mock()
+    client.http.cookies = httpx.Cookies()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    fake_sio = FakeSocketIOClient(
+        connect_exceptions=[socketio.exceptions.ConnectionError("Already connected")]
+    )
+    client.sio = fake_sio
+
+    await client.connect_websocket()
+
+    assert len(fake_sio.connect_calls) == 2
+    assert fake_sio.connected is True
+    assert client.connected is True
 
 
 async def test_connect_websocket_accepts_self_signed_https_connector() -> None:

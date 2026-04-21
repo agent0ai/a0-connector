@@ -46,6 +46,13 @@ async def fetch_capabilities(app: AgentZeroCLI) -> tuple[dict[str, Any] | None, 
         return None, False, str(exc)
 
 
+async def _silently_disconnect_websocket(app: AgentZeroCLI) -> None:
+    try:
+        await app.client.disconnect(close_http=False, notify=False)
+    except Exception:
+        pass
+
+
 def validate_capabilities(
     capabilities: dict[str, Any],
     protocol_version: str = PROTOCOL_VERSION,
@@ -122,6 +129,7 @@ async def begin_connection(
     normalized_host = app._normalize_host(host)
     app.config.instance_url = normalized_host
     app.client.base_url = normalized_host.rstrip("/")
+    await _silently_disconnect_websocket(app)
     app._sync_connection_status("connecting", normalized_host)
     app.query_one("#message-input", ChatInput).disabled = True
     app._slash_palette_query = None
@@ -244,6 +252,7 @@ async def begin_connection(
         )
         app._python_tty.set_exec_config(hello.get("exec_config") if isinstance(hello, dict) else None)
     except Exception as exc:
+        await _silently_disconnect_websocket(app)
         app._sync_connection_status("disconnected", normalized_host)
         app._set_splash_stage(
             "error",
@@ -256,6 +265,7 @@ async def begin_connection(
     try:
         context_id, has_messages_hint = await _resolve_initial_context(app, normalized_host)
     except Exception as exc:
+        await _silently_disconnect_websocket(app)
         app._sync_connection_status("disconnected", normalized_host)
         app._set_splash_stage(
             "error",
@@ -276,6 +286,7 @@ async def begin_connection(
     try:
         await app.client.subscribe_context(context_id)
     except Exception as exc:
+        await _silently_disconnect_websocket(app)
         app._sync_connection_status("disconnected", normalized_host)
         app._set_splash_stage(
             "error",
