@@ -1161,6 +1161,28 @@ async def test_chat_log_regular_entries_copy_selected_text() -> None:
         assert "Copy me from the live transcript" in app.clipboard
 
 
+async def test_chat_log_render_width_respects_scrollbar_gutter() -> None:
+    app = TranscriptSelectionApp()
+
+    async with app.run_test(size=(80, 20)) as pilot:
+        log = app.query_one("#chat-log", ChatLog)
+        for sequence in range(20):
+            log.append_or_update(
+                sequence,
+                Panel(f"scroll row {sequence}", border_style="#555555", padding=(0, 1)),
+            )
+        await pilot.pause()
+
+        widget = log._seq_to_widget[19]
+        lines = widget.render().plain.splitlines()
+
+        assert widget.size.width < log.size.width
+        assert lines
+        assert max(len(line) for line in lines) <= widget.size.width
+        assert lines[0].endswith("╮")
+        assert lines[-1].endswith("╯")
+
+
 async def test_chat_log_status_entries_copy_selected_text() -> None:
     app = TranscriptSelectionApp()
 

@@ -246,13 +246,32 @@ def _renderable_to_content(widget: Static, renderable: RenderableType) -> Conten
         return Content.from_text(renderable)
 
     ansi_theme = None
-    width = 1
+    # Child width already accounts for scrollbars; app width can clip panel borders.
+    width = max(widget.content_region.width, widget.size.width, 0)
     try:
         app = widget.app
         ansi_theme = app.ansi_theme
-        width = max(widget.content_region.width, widget.size.width, app.size.width, 1)
     except Exception:
-        width = max(widget.size.width, 1)
+        app = None
+
+    if width <= 1:
+        try:
+            parent = widget.parent
+            gutter = parent.scrollbar_gutter if parent is not None else None
+            gutter_right = gutter.right if gutter is not None else 0
+            parent_width = (
+                max(parent.content_region.width, parent.size.width)
+                if parent is not None
+                else 0
+            )
+            width = max(width, parent_width - gutter_right)
+        except Exception:
+            pass
+
+    if width <= 1 and app is not None:
+        width = app.size.width
+
+    width = max(width, 1)
 
     console = Console(
         width=width,
