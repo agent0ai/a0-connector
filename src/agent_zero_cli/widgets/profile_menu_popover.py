@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Mapping, Sequence
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
@@ -56,7 +57,8 @@ class ProfileMenuItem(Static):
         else:
             self.remove_class("-disabled")
 
-    def on_click(self) -> None:
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
         self._select()
 
     def on_key(self, event) -> None:

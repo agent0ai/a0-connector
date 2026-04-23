@@ -4,12 +4,15 @@ Tools for web-like development of the Textual TUI.
 
 ## Prerequisites
 
+Use the project venv. `textual-serve` is part of the workspace dependencies now.
+If an older venv is missing it, refresh the environment:
+
 ```bash
 # Windows
-.\.venv\Scripts\python -m pip install textual-serve
+.\.venv\Scripts\python -m pip install -e .
 
 # Linux / macOS
-./.venv/bin/python -m pip install textual-serve
+./.venv/bin/python -m pip install -e .
 ```
 
 ---

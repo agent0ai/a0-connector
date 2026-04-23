@@ -53,7 +53,7 @@ def main() -> None:
         from textual_serve.server import Server
     except ImportError:
         python = _resolve_python()
-        print("textual-serve is not installed. Run:")
+        print("textual-serve is not installed in this interpreter. Reinstall the workspace deps or run:")
         print(f"  {python} -m pip install textual-serve")
         sys.exit(1)
 

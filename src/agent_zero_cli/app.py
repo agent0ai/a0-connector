@@ -46,6 +46,7 @@ from agent_zero_cli.widgets.command_palette import (
 )
 from agent_zero_cli.widgets import (
     ChatInput,
+    ComputerUseBanner,
     ConnectionStatus,
     DynamicFooter,
     ModelSwitcherBar,
@@ -220,6 +221,7 @@ class AgentZeroCLI(App):
         with ContentSwitcher(initial="splash-view", id="body-switcher"):
             yield SplashView()
             yield ChatLog(id="chat-log")
+        yield ComputerUseBanner(id="computer-use-banner")
         yield ModelSwitcherBar(id="model-switcher-bar")
         yield ChatInput(id="message-input")
         yield DynamicFooter()
@@ -779,10 +781,21 @@ class AgentZeroCLI(App):
         self._sync_computer_use_status()
 
     def _sync_computer_use_status(self) -> None:
+        show_composer = self.connected and (
+            self.current_context_has_messages or self._splash_state.stage == "ready"
+        )
         try:
             self.query_one("#connection-status", ConnectionStatus).set_computer_use_state(
                 _computer_use_label(self._computer_use.status_label),
                 self._computer_use.status_detail,
+            )
+        except Exception:
+            pass
+
+        try:
+            self.query_one("#computer-use-banner", ComputerUseBanner).set_state(
+                enabled=show_composer and self._computer_use.enabled,
+                status=_computer_use_label(self._computer_use.status_label),
             )
         except Exception:
             return

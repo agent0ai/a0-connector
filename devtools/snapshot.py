@@ -19,14 +19,17 @@ from pathlib import Path
 _OUT_DIR = Path(__file__).resolve().parent / "snapshots"
 
 
-async def _capture(output: Path, width: int, height: int, wait: float) -> None:
-    from agent_zero_cli.app import AgentZeroCLI
+def _snapshot_config():
     from agent_zero_cli.config import CLIConfig
 
-    # Use a dummy config so the app doesn't actually connect.
-    app = AgentZeroCLI(
-        config=CLIConfig(instance_url="http://127.0.0.1:19999", api_key="snapshot-mode")
-    )
+    # Use a dummy config so the app does not connect to a live Agent Zero instance.
+    return CLIConfig(instance_url="http://127.0.0.1:19999")
+
+
+async def _capture(output: Path, width: int, height: int, wait: float) -> None:
+    from agent_zero_cli.app import AgentZeroCLI
+
+    app = AgentZeroCLI(config=_snapshot_config())
 
     async with app.run_test(size=(width, height)) as pilot:
         # Give the app time to mount and render initial frame.

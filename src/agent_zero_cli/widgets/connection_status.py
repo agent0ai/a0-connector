@@ -190,11 +190,6 @@ class ConnectionStatus(Horizontal):
             (" ", "dim"),
             ("•", dot_color),
         )
-        computer_use = self.computer_use_status.strip()
-        if computer_use:
-            endpoint.append("  ")
-            endpoint.append("CU ", style="dim")
-            endpoint.append(computer_use, style="#d9e2ec")
         return endpoint
 
     def _sync_segments(self) -> None:

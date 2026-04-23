@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from textual.widgets import ContentSwitcher
 
 from agent_zero_cli.client import DEFAULT_HOST
-from agent_zero_cli.widgets import ChatInput, DynamicFooter, SplashAction, SplashView
+from agent_zero_cli.widgets import ChatInput, ComputerUseBanner, DynamicFooter, SplashAction, SplashView
 from agent_zero_cli.widgets.chat_log import ChatLog
 
 if TYPE_CHECKING:
@@ -130,6 +130,15 @@ def sync_composer_visibility(app: AgentZeroCLI) -> None:
         if not show_composer:
             input_widget.disabled = True
             input_widget.set_idle()
+    except Exception:
+        pass
+
+    try:
+        banner = app.query_one("#computer-use-banner", ComputerUseBanner)
+        if not show_composer:
+            banner.display = False
+        else:
+            app._sync_computer_use_status()
     except Exception:
         pass
 

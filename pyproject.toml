@@ -26,6 +26,7 @@ classifiers = [
 ]
 dependencies = [
     "textual>=0.50.0",
+    "textual-serve>=1.1.3",
     "python-socketio[asyncio_client]>=5.0.0",
     "httpx>=0.27.0",
     "aiohttp>=3.11.0",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from rich.panel import Panel
@@ -15,7 +16,7 @@ from agent_zero_cli.client import DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.instance_discovery import DiscoveredInstance, DiscoveryResult
 from agent_zero_cli.widgets.chat_log import ChatLog, SelectableStatic
-from agent_zero_cli.widgets import ChatInput, SplashState
+from agent_zero_cli.widgets import ChatInput, ConnectionStatus, ProfileMenuItem, ProjectMenuItem, SplashState
 
 
 pytestmark = pytest.mark.anyio
@@ -160,6 +161,32 @@ class FakeConnectionStatus:
         return None
 
 
+class FakeComputerUseBanner:
+    def __init__(self) -> None:
+        self.display = False
+        self.message = ""
+
+    def set_state(self, *, enabled: bool, status: str = "") -> None:
+        if not enabled or status == "Disabled":
+            self.display = False
+            self.message = ""
+            return
+        if status == "Active":
+            self.message = "Agent Zero CLI is controlling your computer. Leave your mouse free."
+        elif status == "Approval Required":
+            self.message = (
+                "Agent Zero CLI is requesting computer control. Leave your mouse free if you approve the step."
+            )
+        elif status == "Rearm Required":
+            self.message = "Computer use needs re-arming before Agent Zero can control your computer again."
+        else:
+            self.message = (
+                "Agent Zero CLI can control your computer in this session. Leave your mouse free during "
+                "computer-use steps."
+            )
+        self.display = True
+
+
 class FakeComputerUseManager:
     def __init__(self) -> None:
         self.enabled = False
@@ -247,6 +274,7 @@ def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
         "#message-input": FakeInput(),
         "#body-switcher": FakeBodySwitcher(),
         "#splash-view": FakeSplash(),
+        "#computer-use-banner": FakeComputerUseBanner(),
         "#connection-status": FakeConnectionStatus(),
     }
 
@@ -272,6 +300,34 @@ def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
 def test_default_client_host_uses_splash_default() -> None:
     app = AgentZeroCLI(config=CLIConfig(instance_url=""))
     assert app.client.base_url == DEFAULT_HOST
+
+
+def test_profile_menu_item_click_stops_event_and_posts_selection() -> None:
+    item = ProfileMenuItem("Developer", profile_key="developer")
+    captured: list[object] = []
+    stopped: list[bool] = []
+    item.post_message = lambda message: captured.append(message)  # type: ignore[method-assign]
+    event = SimpleNamespace(stop=lambda: stopped.append(True))
+
+    item.on_click(event)
+
+    assert stopped == [True]
+    assert len(captured) == 1
+    assert isinstance(captured[0], ProfileMenuItem.Selected)
+
+
+def test_project_menu_item_click_stops_event_and_posts_selection() -> None:
+    item = ProjectMenuItem("Plugins 1", action="activate", project_name="plugins_1")
+    captured: list[object] = []
+    stopped: list[bool] = []
+    item.post_message = lambda message: captured.append(message)  # type: ignore[method-assign]
+    event = SimpleNamespace(stop=lambda: stopped.append(True))
+
+    item.on_click(event)
+
+    assert stopped == [True]
+    assert len(captured) == 1
+    assert isinstance(captured[0], ProjectMenuItem.Selected)
 
 
 def test_shortcut_bindings_use_textual_canonical_key_names() -> None:
@@ -971,14 +1027,19 @@ async def test_action_toggle_computer_use_updates_notice_and_status(
     dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context_has_messages = True
     notices: list[tuple[str, bool]] = []
     monkeypatch.setattr(dummy_app, "_show_notice", lambda message, *, error=False: notices.append((message, error)))
 
     await dummy_app.action_toggle_computer_use()
 
     status = dummy_app._test_widgets["#connection-status"]  # type: ignore[index]
+    banner = dummy_app._test_widgets["#computer-use-banner"]  # type: ignore[index]
     assert dummy_app._computer_use.enabled is True
     assert status.computer_use_status == "Confirm with User"
+    assert banner.display is True
+    assert "can control your computer in this session" in banner.message
     assert notices == [("Computer use enabled for this CLI session (Confirm with User).", False)]
 
     await dummy_app.action_toggle_computer_use()
@@ -986,6 +1047,8 @@ async def test_action_toggle_computer_use_updates_notice_and_status(
     assert dummy_app._computer_use.enabled is False
     assert dummy_app._computer_use.disconnect_calls == 1
     assert status.computer_use_status == "Disabled"
+    assert banner.display is False
+    assert banner.message == ""
 
 
 async def test_action_toggle_computer_use_refreshes_hello_metadata_when_connected(
@@ -1083,6 +1146,19 @@ async def test_set_computer_use_mode_updates_status_for_free_run_and_confirm(
         ("Computer use set to Free Run.", False),
         ("Computer use set to Confirm with User.", False),
     ]
+
+
+def test_connection_status_endpoint_indicator_omits_computer_use_summary() -> None:
+    status = ConnectionStatus()
+    status.status = "connected"
+    status.url = "http://localhost:32080"
+    status.set_computer_use_state("Confirm with User", "")
+
+    rendered = status._render_endpoint_indicator().plain
+
+    assert rendered == "http://localhost:32080 •"
+    assert "CU" not in rendered
+    assert "Confirm with User" not in rendered
 
 
 async def test_set_computer_use_mode_refreshes_hello_metadata_when_connected(
@@ -1219,8 +1295,26 @@ def test_sync_computer_use_status_surfaces_rearm_required_state(
     dummy_app._sync_computer_use_status()
 
     status = dummy_app._test_widgets["#connection-status"]  # type: ignore[index]
+    banner = dummy_app._test_widgets["#computer-use-banner"]  # type: ignore[index]
     assert status.computer_use_status == "Rearm Required"
     assert status.computer_use_detail == "COMPUTER_USE_REARM_REQUIRED"
+    assert banner.display is False
+    assert banner.message == ""
+
+
+def test_sync_computer_use_status_shows_active_banner_copy(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context_has_messages = True
+    dummy_app._computer_use.enabled = True
+    dummy_app._computer_use.status_label = "active"
+
+    dummy_app._sync_computer_use_status()
+
+    banner = dummy_app._test_widgets["#computer-use-banner"]  # type: ignore[index]
+    assert banner.display is True
+    assert banner.message == "Agent Zero CLI is controlling your computer. Leave your mouse free."
 
 
 async def test_reset_disconnected_state_disconnects_computer_use_manager(

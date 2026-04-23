@@ -59,6 +59,7 @@ def test_root_package_embeds_platform_backends() -> None:
     assert 'dxcam; platform_system == "Windows"' in dependencies
     assert 'pillow; platform_system == "Windows"' in dependencies
     assert 'pywinauto; platform_system == "Windows"' in dependencies
+    assert 'textual-serve>=1.1.3' in dependencies
 
     entry_points = pyproject["project"]["entry-points"]["a0.computer_use_backends"]
     assert entry_points == {

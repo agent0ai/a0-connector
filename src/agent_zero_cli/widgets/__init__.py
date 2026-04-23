@@ -1,4 +1,5 @@
 from agent_zero_cli.widgets.chat_input import ChatInput
+from agent_zero_cli.widgets.computer_use_banner import ComputerUseBanner
 from agent_zero_cli.widgets.connection_status import ConnectionStatus
 from agent_zero_cli.widgets.dynamic_footer import DynamicFooter
 from agent_zero_cli.widgets.model_switcher_bar import (
@@ -19,6 +20,7 @@ from agent_zero_cli.widgets.splash_view import (
 
 __all__ = [
     "ChatInput",
+    "ComputerUseBanner",
     "ConnectionStatus",
     "DynamicFooter",
     "ModelIdentity",
