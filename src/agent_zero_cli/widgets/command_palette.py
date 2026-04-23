@@ -3,6 +3,9 @@ from __future__ import annotations
 from textual.command import CommandPalette, DiscoveryHit, Hit, Provider
 from textual.widgets import Input
 
+from agent_zero_cli import project_commands
+from agent_zero_cli.project_utils import display_project_title, normalize_project_list, project_name
+
 
 class OrderedSystemCommandsProvider(Provider):
     """Expose app system commands without Textual's default discovery sorting."""
@@ -13,10 +16,50 @@ class OrderedSystemCommandsProvider(Provider):
                 yield DiscoveryHit(title, callback, help=help_text)
 
     async def search(self, query: str):
+        async for hit in self._search_project_targets(query):
+            yield hit
+
         matcher = self.matcher(query)
         for title, help_text, callback, *_ in self.app.get_system_commands(self.screen):
             if (match := matcher.match(title)) > 0:
                 yield Hit(match, matcher.highlight(title), callback, help=help_text)
+
+    async def _search_project_targets(self, query: str):
+        token, _, project_query = query.partition(" ")
+        if token.lower() not in {"/project", "/projects"} or not project_query.strip():
+            return
+
+        availability = self.app._project_availability()
+        if not availability.available:
+            return
+
+        matcher = self.matcher(query)
+        projects = normalize_project_list(getattr(self.app, "project_list", []))
+        current_name = project_name(getattr(self.app, "current_project", None))
+        for project in projects:
+            name = project_name(project)
+            if not name or name == current_name:
+                continue
+
+            title = display_project_title(project, default=name)
+            label = f"/project {title}"
+            if name != title:
+                label = f"/project {title} ({name})"
+
+            if (match := matcher.match(label)) <= 0:
+                continue
+
+            worker_name = f"palette-project-{name.replace('/', '-').replace(' ', '-')}"
+            yield Hit(
+                match,
+                matcher.highlight(label),
+                lambda name=name, worker_name=worker_name: self.app.run_worker(
+                    project_commands.cmd_project(self.app, query=name),
+                    exclusive=True,
+                    name=worker_name,
+                ),
+                help=f"Switch to {title}.",
+            )
 
 
 class AgentCommandPalette(CommandPalette):
