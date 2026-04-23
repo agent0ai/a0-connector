@@ -20,6 +20,7 @@ from agent_zero_cli.client import (
 )
 from agent_zero_cli.config import (
     load_config,
+    normalize_computer_use_trust_mode,
     save_computer_use_enabled,
     save_computer_use_restore_token,
     save_computer_use_trust_mode,
@@ -269,7 +270,7 @@ def test_load_config_reads_computer_use_defaults_and_overrides(
 
     dotenv_config = load_config()
     assert dotenv_config.computer_use_enabled is True
-    assert dotenv_config.computer_use_trust_mode == "interactive"
+    assert dotenv_config.computer_use_trust_mode == "persistent"
     assert dotenv_config.computer_use_restore_token == "dotenv-token"
 
     monkeypatch.setenv("AGENT_ZERO_COMPUTER_USE_ENABLED", "0")
@@ -304,6 +305,12 @@ def test_save_computer_use_settings_persist_to_dotenv(
     assert "AGENT_ZERO_COMPUTER_USE_ENABLED=1" in contents
     assert "AGENT_ZERO_COMPUTER_USE_TRUST_MODE=free_run" in contents
     assert not any(line.startswith("AGENT_ZERO_COMPUTER_USE_RESTORE_TOKEN=") for line in contents)
+
+
+def test_normalize_computer_use_trust_mode_accepts_two_mode_labels() -> None:
+    assert normalize_computer_use_trust_mode("Confirm with User") == "persistent"
+    assert normalize_computer_use_trust_mode("interactive") == "persistent"
+    assert normalize_computer_use_trust_mode("Free Run") == "free_run"
 
 
 async def test_fetch_capabilities_raises_plugin_missing_on_404() -> None:

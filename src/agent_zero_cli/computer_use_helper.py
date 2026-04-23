@@ -641,7 +641,7 @@ class PortalComputerUseHelper:
             if free_run:
                 raise PortalError(
                     "COMPUTER_USE_REARM_REQUIRED",
-                    "Silent restore was not available. Re-arm computer use in persistent mode.",
+                    "Silent restore was not available. Re-arm computer use with Confirm with User.",
                 )
             raise PortalError(
                 "COMPUTER_USE_REQUEST_TIMEOUT",

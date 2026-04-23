@@ -1003,7 +1003,7 @@ class MacOSComputerUseRuntime:
         if free_run:
             raise MacOSComputerUseError(
                 "COMPUTER_USE_REARM_REQUIRED",
-                "macOS Accessibility permission is not available. Re-arm computer use in persistent mode.",
+                "macOS Accessibility permission is not available. Re-arm computer use with Confirm with User.",
             )
         raise MacOSComputerUseError(
             "COMPUTER_USE_APPROVAL_REQUIRED",
@@ -1053,7 +1053,7 @@ class MacOSComputerUseRuntime:
                 if free_run:
                     raise MacOSComputerUseError(
                         "COMPUTER_USE_REARM_REQUIRED",
-                        "Silent screen capture was not available. Re-arm computer use in persistent mode.",
+                        "Silent screen capture was not available. Re-arm computer use with Confirm with User.",
                     ) from exc
                 if exc.code == "COMPUTER_USE_CAPTURE_UNAVAILABLE":
                     raise MacOSComputerUseError(

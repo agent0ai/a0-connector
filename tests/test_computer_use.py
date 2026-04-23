@@ -455,6 +455,80 @@ async def test_capture_requests_shared_artifact_path_and_adds_container_path(
     )
 
 
+async def test_capture_prunes_previous_artifacts_and_disconnect_removes_current(
+    _temp_env: Path,
+) -> None:
+    manager = _manager(enabled=True)
+    captured_paths: list[Path] = []
+
+    async def helper_request(_session: _HelperSession, request: dict[str, object]) -> dict[str, object]:
+        capture_path = Path(str(request.get("capture_path") or ""))
+        capture_path.parent.mkdir(parents=True, exist_ok=True)
+        capture_path.write_bytes(f"capture-{len(captured_paths)}".encode("utf-8"))
+        captured_paths.append(capture_path)
+        return {
+            "ok": True,
+            "result": {
+                "capture_path": str(capture_path),
+                "width": 640,
+                "height": 480,
+                "session_id": "sess-1",
+            },
+        }
+
+    manager._helper_request = helper_request  # type: ignore[method-assign]
+    session = _HelperSession(context_id="ctx-1", session_id="sess-1", active=True)
+    session.process = type("FakeProcess", (), {"returncode": 0})()
+    manager._sessions["ctx-1"] = session
+
+    first = await manager.handle_op(
+        {"op_id": "cap-1", "action": "capture", "context_id": "ctx-1", "session_id": "sess-1"}
+    )
+    second = await manager.handle_op(
+        {"op_id": "cap-2", "action": "capture", "context_id": "ctx-1", "session_id": "sess-1"}
+    )
+
+    first_path = Path(str(first["result"]["capture_path"]))
+    second_path = Path(str(second["result"]["capture_path"]))
+    assert first_path != second_path
+    assert not first_path.exists()
+    assert second_path.exists()
+    assert list(computer_use_mod.HOST_ARTIFACT_ROOT.rglob("*.png")) == [second_path]
+
+    await manager.disconnect()
+
+    assert not second_path.exists()
+    assert not computer_use_mod.HOST_ARTIFACT_ROOT.exists()
+
+
+async def test_failed_capture_removes_stale_artifacts(
+    _temp_env: Path,
+) -> None:
+    stale_path = computer_use_mod.HOST_ARTIFACT_ROOT / "ctx-1" / "stale.png"
+    stale_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_path.write_bytes(b"stale")
+
+    manager = _manager(enabled=True)
+    manager._helper_request = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "ok": False,
+            "code": "COMPUTER_USE_ERROR",
+            "error": "capture failed",
+        }
+    )
+    session = _HelperSession(context_id="ctx-1", session_id="sess-1", active=True)
+    session.process = type("FakeProcess", (), {"returncode": 0})()
+    manager._sessions["ctx-1"] = session
+
+    result = await manager.handle_op(
+        {"op_id": "cap-1", "action": "capture", "context_id": "ctx-1", "session_id": "sess-1"}
+    )
+
+    assert result["ok"] is False
+    assert not stale_path.exists()
+    assert not computer_use_mod.HOST_ARTIFACT_ROOT.exists()
+
+
 async def test_capture_failure_preserves_active_session_for_retry(
     _temp_env: Path,
 ) -> None:

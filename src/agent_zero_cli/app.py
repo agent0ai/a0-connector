@@ -73,6 +73,28 @@ from agent_zero_cli.token_usage import (
 
 _HIDDEN_SLASH_COMMANDS = frozenset({"/pause", "/resume", "/nudge"})
 _SPLASH_HIDDEN_COMMANDS = frozenset({"/profile"})
+_COMPUTER_USE_MODE_LABELS = {
+    "interactive": "Confirm with User",
+    "persistent": "Confirm with User",
+    "free_run": "Free Run",
+}
+_COMPUTER_USE_STATUS_LABELS = {
+    **_COMPUTER_USE_MODE_LABELS,
+    "active": "Active",
+    "approval required": "Approval Required",
+    "disabled": "Disabled",
+    "rearm required": "Rearm Required",
+}
+
+
+def _computer_use_label(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return _COMPUTER_USE_STATUS_LABELS.get(normalized, str(value or "").strip())
+
+
+def _computer_use_mode_label(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return _COMPUTER_USE_MODE_LABELS.get(normalized, str(value or "").strip())
 
 
 class AgentZeroCLI(App):
@@ -257,26 +279,17 @@ class AgentZeroCLI(App):
                 ),
             )
         yield SystemCommand(
-            "Computer Use: Interactive",
-            "Switch local computer use to interactive approvals.",
-            lambda: self.run_worker(
-                self._set_computer_use_mode("interactive"),
-                exclusive=True,
-                name="palette-computer-use-interactive",
-            ),
-        )
-        yield SystemCommand(
-            "Computer Use: Persistent",
-            "Switch local computer use to persistent portal restore mode.",
+            "Computer Use: Confirm with User",
+            "Ask before local computer-use access and remember the approval for future Free Run.",
             lambda: self.run_worker(
                 self._set_computer_use_mode("persistent"),
                 exclusive=True,
-                name="palette-computer-use-persistent",
+                name="palette-computer-use-confirm",
             ),
         )
         yield SystemCommand(
-            "Computer Use: Free-Run",
-            "Switch local computer use to restore-only free_run mode.",
+            "Computer Use: Free Run",
+            "Use previously approved computer-use access without prompting.",
             lambda: self.run_worker(
                 self._set_computer_use_mode("free_run"),
                 exclusive=True,
@@ -303,7 +316,7 @@ class AgentZeroCLI(App):
             CommandSpec(
                 "/project",
                 ("/projects",),
-                "Open the project menu and edit current project instructions.",
+                "Open the project menu, or switch directly with /project <name>.",
                 lambda app: availability.project_availability(app),
                 lambda app: project_commands.cmd_project(app),
             ),
@@ -768,7 +781,7 @@ class AgentZeroCLI(App):
     def _sync_computer_use_status(self) -> None:
         try:
             self.query_one("#connection-status", ConnectionStatus).set_computer_use_state(
-                self._computer_use.status_label,
+                _computer_use_label(self._computer_use.status_label),
                 self._computer_use.status_detail,
             )
         except Exception:
@@ -1063,6 +1076,12 @@ class AgentZeroCLI(App):
         if token == "/profile":
             _, _, query = text.partition(" ")
             await profile_commands.cmd_profile(self, query=query.strip())
+            self._sync_ready_actions()
+            return
+
+        if token in {"/project", "/projects"}:
+            _, _, query = text.partition(" ")
+            await project_commands.cmd_project(self, query=query.strip())
             self._sync_ready_actions()
             return
 
@@ -1377,7 +1396,7 @@ class AgentZeroCLI(App):
     async def _set_computer_use_mode(self, mode: str) -> None:
         selected = self._computer_use.set_trust_mode(mode)
         await self._refresh_remote_tool_metadata()
-        self._show_notice(f"Computer use trust mode set to {selected}.")
+        self._show_notice(f"Computer use set to {_computer_use_mode_label(selected)}.")
         self._sync_computer_use_status()
 
     async def _disconnect_and_exit(self) -> None:
@@ -1397,7 +1416,8 @@ class AgentZeroCLI(App):
         await self._refresh_remote_tool_metadata()
         state = "enabled" if self._computer_use.enabled else "disabled"
         self._show_notice(
-            f"Computer use {state} for this CLI session ({self._computer_use.trust_mode})."
+            f"Computer use {state} for this CLI session "
+            f"({_computer_use_mode_label(self._computer_use.trust_mode)})."
         )
         self._sync_computer_use_status()
 

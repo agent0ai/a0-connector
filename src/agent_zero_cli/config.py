@@ -10,7 +10,16 @@ _COMPUTER_USE_ENABLED_KEY = "AGENT_ZERO_COMPUTER_USE_ENABLED"
 _COMPUTER_USE_TRUST_MODE_KEY = "AGENT_ZERO_COMPUTER_USE_TRUST_MODE"
 _COMPUTER_USE_RESTORE_TOKEN_KEY = "AGENT_ZERO_COMPUTER_USE_RESTORE_TOKEN"
 _DEFAULT_COMPUTER_USE_TRUST_MODE = "persistent"
-_VALID_COMPUTER_USE_TRUST_MODES = {"interactive", "persistent", "free_run"}
+_VALID_COMPUTER_USE_TRUST_MODES = {"persistent", "free_run"}
+_COMPUTER_USE_TRUST_MODE_ALIASES = {
+    "confirm": "persistent",
+    "confirm with user": "persistent",
+    "confirm_with_user": "persistent",
+    "confirm-with-user": "persistent",
+    "interactive": "persistent",
+    "free run": "free_run",
+    "free-run": "free_run",
+}
 
 
 @dataclass
@@ -95,6 +104,7 @@ def _parse_bool(value: object, default: bool = False) -> bool:
 
 def normalize_computer_use_trust_mode(value: object) -> str:
     normalized = str(value or "").strip().lower()
+    normalized = _COMPUTER_USE_TRUST_MODE_ALIASES.get(normalized, normalized)
     if normalized in _VALID_COMPUTER_USE_TRUST_MODES:
         return normalized
     return _DEFAULT_COMPUTER_USE_TRUST_MODE

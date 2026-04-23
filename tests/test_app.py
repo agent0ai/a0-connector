@@ -795,6 +795,161 @@ async def test_chat_list_command_rejects_unknown_flags(
     assert notices == [("Usage: /chats [--project|--all-projects] [--sort=updated|created|name]", True)]
 
 
+async def test_project_command_with_query_activates_matching_project(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"projects"}
+
+    projects_payload = {
+        "ok": True,
+        "projects": [
+            {
+                "name": "plugins_1",
+                "title": "Plugins 1",
+                "description": "",
+                "color": "#00bbf9",
+            }
+        ],
+        "current_project": None,
+    }
+    activate_calls: list[tuple[str, str]] = []
+
+    async def fake_get_projects(context_id: str) -> dict[str, object]:
+        assert context_id == "ctx-1"
+        return dict(projects_payload)
+
+    async def fake_activate_project(context_id: str, name: str) -> dict[str, object]:
+        activate_calls.append((context_id, name))
+        return {
+            "ok": True,
+            "projects": list(projects_payload["projects"]),
+            "current_project": dict(projects_payload["projects"][0]),
+        }
+
+    monkeypatch.setattr(dummy_app.client, "get_projects", fake_get_projects)
+    monkeypatch.setattr(dummy_app.client, "activate_project", fake_activate_project)
+
+    await dummy_app._dispatch_command("/project plugins")
+
+    assert activate_calls == [("ctx-1", "plugins_1")]
+    assert dummy_app.current_project == {
+        "name": "plugins_1",
+        "title": "Plugins 1",
+        "description": "",
+        "color": "#00bbf9",
+    }
+    assert dummy_app._test_widgets["#message-input"].focused is True  # type: ignore[index]
+
+
+async def test_project_command_with_clear_value_deactivates_active_project(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"projects"}
+
+    current_project = {
+        "name": "plugins_1",
+        "title": "Plugins 1",
+        "description": "",
+        "color": "#00bbf9",
+    }
+    deactivate_calls: list[str] = []
+
+    async def fake_get_projects(context_id: str) -> dict[str, object]:
+        assert context_id == "ctx-1"
+        return {
+            "ok": True,
+            "projects": [dict(current_project)],
+            "current_project": dict(current_project),
+        }
+
+    async def fake_deactivate_project(context_id: str) -> dict[str, object]:
+        deactivate_calls.append(context_id)
+        return {
+            "ok": True,
+            "projects": [dict(current_project)],
+            "current_project": None,
+        }
+
+    monkeypatch.setattr(dummy_app.client, "get_projects", fake_get_projects)
+    monkeypatch.setattr(dummy_app.client, "deactivate_project", fake_deactivate_project)
+
+    await dummy_app._dispatch_command("/project none")
+
+    assert deactivate_calls == ["ctx-1"]
+    assert dummy_app.current_project is None
+
+
+async def test_project_command_reports_ambiguous_matches(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"projects"}
+
+    notices: list[tuple[str, bool]] = []
+
+    async def fake_get_projects(context_id: str) -> dict[str, object]:
+        assert context_id == "ctx-1"
+        return {
+            "ok": True,
+            "projects": [
+                {"name": "plugins_1", "title": "Plugins 1", "description": "", "color": "#00bbf9"},
+                {"name": "plugins_2", "title": "Plugins 2", "description": "", "color": "#00f5d4"},
+            ],
+            "current_project": None,
+        }
+
+    monkeypatch.setattr(dummy_app.client, "get_projects", fake_get_projects)
+    monkeypatch.setattr(
+        dummy_app,
+        "_show_notice",
+        lambda message, *, error=False: notices.append((message, error)),
+    )
+
+    await dummy_app._dispatch_command("/project plugins")
+
+    assert notices == [("Project name is ambiguous. Matches: Plugins 1 (plugins_1), Plugins 2 (plugins_2)", True)]
+
+
+async def test_project_command_reports_missing_project(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"projects"}
+
+    notices: list[tuple[str, bool]] = []
+
+    async def fake_get_projects(context_id: str) -> dict[str, object]:
+        assert context_id == "ctx-1"
+        return {
+            "ok": True,
+            "projects": [
+                {"name": "plugins_1", "title": "Plugins 1", "description": "", "color": "#00bbf9"},
+            ],
+            "current_project": None,
+        }
+
+    monkeypatch.setattr(dummy_app.client, "get_projects", fake_get_projects)
+    monkeypatch.setattr(
+        dummy_app,
+        "_show_notice",
+        lambda message, *, error=False: notices.append((message, error)),
+    )
+
+    await dummy_app._dispatch_command("/project missing")
+
+    assert notices == [("Project 'missing' was not found. Available projects: Plugins 1 (plugins_1)", True)]
+
+
 async def test_remote_safety_toggles_update_local_permissions(
     dummy_app: DummyAgentZeroCLI,
 ) -> None:
@@ -823,14 +978,14 @@ async def test_action_toggle_computer_use_updates_notice_and_status(
 
     status = dummy_app._test_widgets["#connection-status"]  # type: ignore[index]
     assert dummy_app._computer_use.enabled is True
-    assert status.computer_use_status == "persistent"
-    assert notices == [("Computer use enabled for this CLI session (persistent).", False)]
+    assert status.computer_use_status == "Confirm with User"
+    assert notices == [("Computer use enabled for this CLI session (Confirm with User).", False)]
 
     await dummy_app.action_toggle_computer_use()
 
     assert dummy_app._computer_use.enabled is False
     assert dummy_app._computer_use.disconnect_calls == 1
-    assert status.computer_use_status == "disabled"
+    assert status.computer_use_status == "Disabled"
 
 
 async def test_action_toggle_computer_use_refreshes_hello_metadata_when_connected(
@@ -895,18 +1050,20 @@ async def test_action_toggle_computer_use_refreshes_hello_metadata_when_connecte
     ]
 
 
-def test_system_commands_include_interactive_persistent_and_free_run(
+def test_system_commands_include_confirm_with_user_and_free_run(
     dummy_app: DummyAgentZeroCLI,
 ) -> None:
     commands = list(dummy_app.get_system_commands(None))
     titles = {getattr(command, "title", getattr(command, "name", "")) for command in commands}
 
-    assert "Computer Use: Interactive" in titles
-    assert "Computer Use: Persistent" in titles
-    assert "Computer Use: Free-Run" in titles
+    assert "Computer Use: Confirm with User" in titles
+    assert "Computer Use: Free Run" in titles
+    assert "Computer Use: Interactive" not in titles
+    assert "Computer Use: Persistent" not in titles
+    assert "Computer Use: Free-Run" not in titles
 
 
-async def test_set_computer_use_mode_updates_status_for_free_run_and_persistent(
+async def test_set_computer_use_mode_updates_status_for_free_run_and_confirm(
     dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -917,14 +1074,14 @@ async def test_set_computer_use_mode_updates_status_for_free_run_and_persistent(
     await dummy_app._set_computer_use_mode("free_run")
     status = dummy_app._test_widgets["#connection-status"]  # type: ignore[index]
     assert dummy_app._computer_use.trust_mode == "free_run"
-    assert status.computer_use_status == "free_run"
+    assert status.computer_use_status == "Free Run"
 
     await dummy_app._set_computer_use_mode("persistent")
     assert dummy_app._computer_use.trust_mode == "persistent"
-    assert status.computer_use_status == "persistent"
+    assert status.computer_use_status == "Confirm with User"
     assert notices == [
-        ("Computer use trust mode set to free_run.", False),
-        ("Computer use trust mode set to persistent.", False),
+        ("Computer use set to Free Run.", False),
+        ("Computer use set to Confirm with User.", False),
     ]
 
 
@@ -1062,7 +1219,7 @@ def test_sync_computer_use_status_surfaces_rearm_required_state(
     dummy_app._sync_computer_use_status()
 
     status = dummy_app._test_widgets["#connection-status"]  # type: ignore[index]
-    assert status.computer_use_status == "rearm required"
+    assert status.computer_use_status == "Rearm Required"
     assert status.computer_use_detail == "COMPUTER_USE_REARM_REQUIRED"
 
 

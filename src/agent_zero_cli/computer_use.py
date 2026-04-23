@@ -31,8 +31,6 @@ _CONTAINER_ARTIFACT_ROOT_ENV = "A0_COMPUTER_USE_CONTAINER_ARTIFACT_ROOT"
 _DEBUG_ENV = "A0_COMPUTER_USE_DEBUG"
 _DEBUG_LOG_ENV = "A0_COMPUTER_USE_DEBUG_LOG"
 _DEFAULT_CONTAINER_ARTIFACT_ROOT = "/a0/tmp/_a0_connector/computer_use"
-_CAPTURE_RETENTION_MAX_FILES = 24
-_CAPTURE_RETENTION_MAX_AGE_SECONDS = 60 * 60 * 24
 _HELPER_PROTOCOL_NOISE_MAX_LINES = 8
 _HELPER_STDIO_LIMIT = 32 * 1024 * 1024
 _SUPPORTED_ACTIONS = {
@@ -427,6 +425,7 @@ class ComputerUseManager:
         for session in list(self._sessions.values()):
             await self._close_helper_session(session)
         self._sessions.clear()
+        self._prune_capture_artifacts()
         if self.enabled:
             self._set_status(self.trust_mode)
         else:
@@ -547,40 +546,36 @@ class ComputerUseManager:
         container_path = f"{CONTAINER_ARTIFACT_ROOT}/{context_segment}/{filename}"
         return str(host_path), container_path
 
-    def _prune_capture_artifacts(self, context_id: str, *, keep_path: str = "") -> None:
-        context_segment = _safe_context_segment(context_id)
-        host_dir = HOST_ARTIFACT_ROOT / context_segment
-        if not host_dir.exists():
+    def _paths_match(self, left: Path, right: Path) -> bool:
+        try:
+            return left.resolve() == right.resolve()
+        except OSError:
+            return left == right
+
+    def _prune_capture_artifacts(self, *, keep_path: str = "") -> None:
+        artifact_root = HOST_ARTIFACT_ROOT
+        if not artifact_root.exists():
             return
 
         keep_target = Path(keep_path) if keep_path else None
-        captures: list[tuple[Path, float]] = []
-        now = time.time()
 
-        for entry in host_dir.iterdir():
-            if not entry.is_file() or entry.suffix.lower() != ".png":
+        for entry in artifact_root.rglob("*.png"):
+            if not entry.is_file():
+                continue
+            if keep_target is not None and self._paths_match(entry, keep_target):
                 continue
             with contextlib.suppress(OSError):
-                stat = entry.stat()
-                if keep_target is not None and entry == keep_target:
-                    captures.append((entry, stat.st_mtime))
-                    continue
-                if now - stat.st_mtime > _CAPTURE_RETENTION_MAX_AGE_SECONDS:
-                    entry.unlink(missing_ok=True)
-                    continue
-                captures.append((entry, stat.st_mtime))
+                entry.unlink(missing_ok=True)
 
-        if len(captures) > _CAPTURE_RETENTION_MAX_FILES:
-            captures.sort(key=lambda item: (item[1], item[0].name), reverse=True)
-            for stale_path, _ in captures[_CAPTURE_RETENTION_MAX_FILES :]:
-                if keep_target is not None and stale_path == keep_target:
-                    continue
-                with contextlib.suppress(OSError):
-                    stale_path.unlink(missing_ok=True)
-
+        for directory in sorted(
+            (path for path in artifact_root.rglob("*") if path.is_dir()),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        ):
+            with contextlib.suppress(OSError):
+                directory.rmdir()
         with contextlib.suppress(OSError):
-            if not any(host_dir.iterdir()):
-                host_dir.rmdir()
+            artifact_root.rmdir()
 
     async def _ensure_helper(self, session: _HelperSession) -> _HelperSession:
         process = session.process
@@ -746,10 +741,13 @@ class ComputerUseManager:
         capture_host_path = ""
         capture_container_path = ""
         if action_name == "capture":
+            self._prune_capture_artifacts()
             capture_host_path, capture_container_path = self._next_capture_paths(session.context_id)
             helper_request["capture_path"] = capture_host_path
 
         response = await self._helper_request(session, helper_request)
+        if action_name == "capture" and not bool(response.get("ok")):
+            self._prune_capture_artifacts()
         if action_name == "capture" and bool(response.get("ok")) and isinstance(response.get("result"), dict):
             result_dict = dict(response["result"])
             if capture_host_path:
@@ -917,7 +915,7 @@ class ComputerUseManager:
                     or ""
                 ).strip()
                 if keep_path:
-                    self._prune_capture_artifacts(session.context_id, keep_path=keep_path)
+                    self._prune_capture_artifacts(keep_path=keep_path)
             self._set_status("active" if session.active else self.trust_mode)
             return self._success(op_id, result_dict)
 
