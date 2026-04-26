@@ -80,9 +80,11 @@ def project_availability(app: AgentZeroCLI) -> CommandAvailability:
 
 
 def profile_availability(app: AgentZeroCLI) -> CommandAvailability:
-    base = app._require_features("settings_get", "settings_set")
+    base = app._require_features("settings_get", "agent_profile_set")
     if not base.available:
         return base
+    if not app.current_context:
+        return CommandAvailability(False, "Open or create a chat context first.")
     if app.agent_active:
         return CommandAvailability(False, "Wait for the current run to finish before changing the agent profile.")
     return CommandAvailability(True)

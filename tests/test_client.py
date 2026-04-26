@@ -622,6 +622,32 @@ async def test_pause_agent_normalizes_http_failure() -> None:
     }
 
 
+async def test_set_agent_profile_posts_context_scoped_payload() -> None:
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            json_data={
+                "ok": True,
+                "agent_profile": "developer",
+                "agent_profile_label": "Developer",
+            }
+        )
+    )
+
+    result = await client.set_agent_profile("ctx-1", "developer")
+
+    client.http.post.assert_awaited_once_with(
+        "http://localhost:5080/api/plugins/_a0_connector/v1/agent_profile_set",
+        json={"context_id": "ctx-1", "agent_profile": "developer"},
+    )
+    assert result == {
+        "ok": True,
+        "agent_profile": "developer",
+        "agent_profile_label": "Developer",
+    }
+
+
 async def test_file_op_requests_are_returned_via_result_event() -> None:
     client = A0Client("http://127.0.0.1:50001")
     client.http = Mock()

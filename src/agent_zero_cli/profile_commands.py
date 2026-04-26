@@ -33,6 +33,8 @@ def _normalize_profile_options(raw_options: object) -> list[ProfileOption]:
 
 def profile_menu_state_from_settings(
     payload: Mapping[str, Any] | None,
+    *,
+    current_profile: str | None = None,
 ) -> tuple[str, list[ProfileOption]]:
     if not isinstance(payload, Mapping):
         return "", []
@@ -40,15 +42,15 @@ def profile_menu_state_from_settings(
     settings = payload.get("settings", payload)
     additional = payload.get("additional")
 
-    current_profile = ""
-    if isinstance(settings, Mapping):
-        current_profile = str(settings.get("agent_profile") or "").strip()
+    selected_profile = str(current_profile or "").strip()
+    if not selected_profile and isinstance(settings, Mapping):
+        selected_profile = str(settings.get("agent_profile") or "").strip()
 
     raw_options = additional.get("agent_subdirs") if isinstance(additional, Mapping) else None
     options = _normalize_profile_options(raw_options)
-    if current_profile and current_profile not in {option["key"] for option in options}:
-        options.insert(0, {"key": current_profile, "label": current_profile})
-    return current_profile, options
+    if selected_profile and selected_profile not in {option["key"] for option in options}:
+        options.insert(0, {"key": selected_profile, "label": selected_profile})
+    return selected_profile, options
 
 
 def profile_label(options: Sequence[Mapping[str, object]], profile_key: str) -> str:
@@ -130,10 +132,28 @@ async def load_profile_menu_state(
             app._show_notice(f"Failed to load agent profiles: {exc}", error=True)
         return "", []
 
-    current_profile, options = profile_menu_state_from_settings(payload)
+    default_profile, options = profile_menu_state_from_settings(payload)
+    current_profile = await _load_current_context_profile(app, fallback=default_profile)
+    current_profile, options = profile_menu_state_from_settings(payload, current_profile=current_profile)
     if not options and not silent:
         app._show_notice("No agent profiles are available from Agent Zero Core.", error=True)
     return current_profile, options
+
+
+async def _load_current_context_profile(app: AgentZeroCLI, *, fallback: str = "") -> str:
+    context_id = app.current_context or ""
+    if not context_id or "chat_get" not in app.connector_features:
+        return fallback
+
+    try:
+        payload = await app.client.get_chat(context_id)
+    except Exception:
+        return fallback
+
+    if not isinstance(payload, Mapping):
+        return fallback
+    profile = str(payload.get("agent_profile") or "").strip()
+    return profile or fallback
 
 
 async def apply_profile_selection(
@@ -147,16 +167,28 @@ async def apply_profile_selection(
         app._show_notice("Choose an agent profile first.", error=True)
         return False
 
+    context_id = app.current_context or ""
+    if not context_id:
+        app._show_notice("Open or create a chat context before changing the agent profile.", error=True)
+        return False
+
     try:
-        payload = await app.client.set_settings({"agent_profile": normalized_key})
+        payload = await app.client.set_agent_profile(context_id, normalized_key)
     except Exception as exc:
         app._show_notice(f"Failed to update agent profile: {exc}", error=True)
         return False
 
-    updated_profile, updated_options = profile_menu_state_from_settings(payload)
-    await app._refresh_settings_snapshot(payload)
-    label = profile_label(updated_options or list(options or ()), updated_profile or normalized_key)
+    if not payload.get("ok"):
+        app._show_notice(str(payload.get("message") or "Failed to update agent profile."), error=True)
+        return False
+
+    updated_profile = str(payload.get("agent_profile") or normalized_key).strip()
+    label = str(payload.get("agent_profile_label") or "").strip()
+    if not label:
+        label = profile_label(list(options or ()), updated_profile or normalized_key)
     app._show_notice(f"Agent profile set to {label}.")
+    await app._refresh_model_switcher(silent=True)
+    await app._refresh_token_usage(context_id=context_id)
     return True
 
 

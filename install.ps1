@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$PackageSpec = if ($env:A0_PACKAGE_SPEC) { $env:A0_PACKAGE_SPEC } else { "a0" }
+$PackageSpec = if ($env:A0_PACKAGE_SPEC) { $env:A0_PACKAGE_SPEC } else { "a0 @ https://github.com/agent0ai/a0-connector/archive/refs/tags/v1.5.zip" }
 $PythonSpec = if ($env:A0_PYTHON_SPEC) { $env:A0_PYTHON_SPEC } else { "3.11" }
 $UvInstallUrl = if ($env:UV_INSTALL_URL) { $env:UV_INSTALL_URL } else { "https://astral.sh/uv/install.ps1" }
 

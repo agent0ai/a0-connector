@@ -2,7 +2,7 @@
 
 set -eu
 
-PACKAGE_SPEC="${A0_PACKAGE_SPEC:-a0}"
+PACKAGE_SPEC="${A0_PACKAGE_SPEC:-a0 @ https://github.com/agent0ai/a0-connector/archive/refs/tags/v1.5.zip}"
 PYTHON_SPEC="${A0_PYTHON_SPEC:-3.11}"
 UV_INSTALL_URL="${UV_INSTALL_URL:-https://astral.sh/uv/install.sh}"
 

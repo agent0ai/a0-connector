@@ -53,6 +53,7 @@ All routes: `POST /api/plugins/_a0_connector/v1/<endpoint>`
 | `projects` | Session | Project list, activate, deactivate, load, update |
 | `settings_get` | Session | Optional runtime settings surface |
 | `settings_set` | Session | Optional runtime settings surface |
+| `agent_profile_set` | Session | Context-scoped Agent Zero Core profile switch |
 | `agents_list` | Session | Optional agent-profile list |
 | `skills_list` | Session | Optional installed-skill list |
 | `skills_delete` | Session | Optional installed-skill delete |

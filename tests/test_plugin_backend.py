@@ -51,7 +51,7 @@ from agent_zero_cli.remote_files import RemoteFileUtility
 
 def _purge_modules() -> None:
     for name in list(sys.modules):
-        if name == "agent" or name.startswith(("agent.", "helpers", "plugins")):
+        if name in {"agent", "api"} or name.startswith(("agent.", "api.", "helpers", "plugins")):
             sys.modules.pop(name, None)
 
 
@@ -76,6 +76,7 @@ def _install_fake_helpers(
     shared_ws_manager: object | None = None,
 ) -> None:
     plugins_pkg = _make_package("plugins", path=PLUGIN_ROOT)
+    api_pkg = _make_package("api")
     _make_package("plugins._model_config")
     _make_package("plugins._model_config.helpers")
     _make_package("plugins._chat_compaction")
@@ -210,6 +211,7 @@ def _install_fake_helpers(
         "helpers.files",
         "helpers.projects",
         "helpers.runtime",
+        "api.agent_profile_set",
         "plugins._model_config.helpers.model_config",
         "plugins._chat_compaction.helpers.compactor",
     ):
@@ -217,6 +219,7 @@ def _install_fake_helpers(
 
     plugins_pkg._model_config = sys.modules["plugins._model_config"]
     plugins_pkg._chat_compaction = sys.modules["plugins._chat_compaction"]
+    api_pkg.agent_profile_set = sys.modules["api.agent_profile_set"]
 
 
 def _reload(module_name: str):
@@ -447,7 +450,14 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert payload["websocket_namespace"] == "/ws"
     assert payload["websocket_handlers"] == ["plugins/_a0_connector/ws_connector"]
     assert {"pause", "nudge", "remote_file_tree", "code_execution_remote", "computer_use_remote"} <= set(payload["features"])
-    assert {"settings_get", "settings_set", "agents_list", "model_switcher", "compact_chat"} <= set(payload["features"])
+    assert {
+        "settings_get",
+        "settings_set",
+        "agent_profile_set",
+        "agents_list",
+        "model_switcher",
+        "compact_chat",
+    } <= set(payload["features"])
 
 
 def test_capabilities_reflect_core_login_requirement() -> None:

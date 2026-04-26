@@ -769,7 +769,8 @@ async def test_profile_command_dispatches_profile_menu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dummy_app.connected = True
-    dummy_app.connector_features = {"settings_get", "settings_set"}
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"settings_get", "agent_profile_set"}
 
     opened: list[str] = []
 
@@ -788,9 +789,10 @@ async def test_profile_command_with_argument_sets_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dummy_app.connected = True
-    dummy_app.connector_features = {"settings_get", "settings_set"}
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"settings_get", "agent_profile_set", "chat_get"}
 
-    calls: list[dict[str, str]] = []
+    calls: list[tuple[str, str]] = []
     notices: list[tuple[str, bool]] = []
 
     async def fake_get_settings() -> dict[str, object]:
@@ -804,28 +806,27 @@ async def test_profile_command_with_argument_sets_profile(
             },
         }
 
-    async def fake_set_settings(settings: dict[str, str]) -> dict[str, object]:
-        calls.append(settings)
+    async def fake_get_chat(context_id: str) -> dict[str, object]:
+        assert context_id == "ctx-1"
+        return {"agent_profile": "agent0"}
+
+    async def fake_set_agent_profile(context_id: str, profile_key: str) -> dict[str, object]:
+        calls.append((context_id, profile_key))
         return {
-            "settings": {"agent_profile": "developer", "workdir_path": "/a0/usr/workdir"},
-            "additional": {
-                "agent_subdirs": [
-                    {"value": "agent0", "label": "Agent 0"},
-                    {"value": "developer", "label": "Developer"},
-                ]
-            },
+            "ok": True,
+            "agent_profile": "developer",
+            "agent_profile_label": "Developer",
         }
 
     monkeypatch.setattr(dummy_app.client, "get_settings", fake_get_settings)
-    monkeypatch.setattr(dummy_app.client, "set_settings", fake_set_settings)
+    monkeypatch.setattr(dummy_app.client, "get_chat", fake_get_chat)
+    monkeypatch.setattr(dummy_app.client, "set_agent_profile", fake_set_agent_profile)
     monkeypatch.setattr(dummy_app, "_show_notice", lambda message, *, error=False: notices.append((message, error)))
 
     await dummy_app._dispatch_command("/profile dev")
 
-    assert calls == [{"agent_profile": "developer"}]
+    assert calls == [("ctx-1", "developer")]
     assert notices == [("Agent profile set to Developer.", False)]
-    assert dummy_app._remote_workspace == "/a0/usr/workdir"
-    assert dummy_app._settings_snapshot_signature
 
 
 async def test_settings_snapshot_rehydrates_workspace_without_duplicate_refresh(

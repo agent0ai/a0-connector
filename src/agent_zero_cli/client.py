@@ -765,6 +765,23 @@ class A0Client:
         response.raise_for_status()
         return self._json(response)
 
+    async def set_agent_profile(self, context_id: str, profile_key: str) -> dict[str, Any]:
+        response = await self._post(
+            "agent_profile_set",
+            {"context_id": context_id, "agent_profile": profile_key},
+        )
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "message": self._response_message(response),
+                "status_code": response.status_code,
+            }
+
+        data = self._json(response)
+        if "ok" not in data:
+            data["ok"] = True
+        return data
+
     async def get_model_presets(self) -> list[dict[str, Any]]:
         response = await self._post("model_presets")
         response.raise_for_status()

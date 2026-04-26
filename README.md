@@ -35,13 +35,15 @@ Computer-use backends are embedded in the `a0` wheel, so the CLI and local compu
 
 ## Manual install
 
-If you already use `uv`, you can install the stable `a0` release directly.
+If you already use `uv`, you can install the stable `a0` release directly from
+the GitHub release archive.
 The installer and update flow default to a managed CPython 3.11 tool
 environment across macOS, Linux, and Windows, and `uv` can download it
 automatically without requiring `git` to be installed:
 
 ```bash
-uv tool install --python 3.11 --managed-python --upgrade a0
+uv tool install --python 3.11 --managed-python --upgrade \
+  "a0 @ https://github.com/agent0ai/a0-connector/archive/refs/tags/v1.5.zip"
 ```
 
 Set `A0_PYTHON_SPEC` if you need to override that interpreter request, or `A0_PACKAGE_SPEC` if you want a different package source. Advanced one-off runs with `uvx` also work, but they are intentionally not the primary install path for this project.
@@ -54,7 +56,7 @@ If you installed `a0` with the standard `uv tool` flow, update it in place with:
 a0 update
 ```
 
-By default `a0 update` follows the stable `a0` release channel and managed CPython 3.11 tool runtime used by the installer. For advanced cases you can override the package source with `A0_PACKAGE_SPEC` or the interpreter request with `A0_PYTHON_SPEC` before running `a0 update`.
+By default `a0 update` follows the same GitHub release archive and managed CPython 3.11 tool runtime used by the installer. For advanced cases you can override the package source with `A0_PACKAGE_SPEC` or the interpreter request with `A0_PYTHON_SPEC` before running `a0 update`.
 
 `a0 update` requires `uv` to be available on your `PATH`.
 

@@ -183,13 +183,25 @@ def test_generated_updater_script_waits_then_runs_uv_on_success(
     monkeypatch.setattr(namespace["shutil"], "which", lambda name: "uv")
     monkeypatch.setattr(namespace["subprocess"], "run", fake_run)
 
-    exit_code = namespace["main"](["123", "a0", "3.11"])
+    exit_code = namespace["main"](["123", self_update.DEFAULT_PACKAGE_SPEC, "3.11"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert sleep_calls == [0.1, 0.1]
     assert run_calls == [
-        (["uv", "tool", "install", "--python", "3.11", "--managed-python", "--upgrade", "a0"], False)
+        (
+            [
+                "uv",
+                "tool",
+                "install",
+                "--python",
+                "3.11",
+                "--managed-python",
+                "--upgrade",
+                self_update.DEFAULT_PACKAGE_SPEC,
+            ],
+            False,
+        )
     ]
     assert captured.out.strip().endswith("Update complete. Run a0.")
 
