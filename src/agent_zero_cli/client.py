@@ -28,6 +28,7 @@ _EVENT_SEND_MESSAGE = "connector_send_message"
 _EVENT_CONTEXT_SNAPSHOT = "connector_context_snapshot"
 _EVENT_CONTEXT_EVENT = "connector_context_event"
 _EVENT_CONTEXT_COMPLETE = "connector_context_complete"
+_EVENT_SETTINGS_UPDATED = "connector_settings_updated"
 _EVENT_FILE_OP = "connector_file_op"
 _EVENT_FILE_OP_RESULT = "connector_file_op_result"
 _EVENT_EXEC_OP = "connector_exec_op"
@@ -108,6 +109,7 @@ class A0Client:
         self.on_context_event: Callable[[dict[str, Any]], None] | None = None
         self.on_context_snapshot: Callable[[dict[str, Any]], None] | None = None
         self.on_context_complete: Callable[[dict[str, Any]], None] | None = None
+        self.on_settings_updated: Callable[[dict[str, Any]], None] | None = None
         self.on_error: Callable[[dict[str, Any]], None] | None = None
         self.on_file_op: Callable[[dict[str, Any]], Any] | None = None
         self.on_exec_op: Callable[[dict[str, Any]], Any] | None = None
@@ -381,6 +383,12 @@ class A0Client:
         @self.sio.on(_EVENT_CONTEXT_COMPLETE, namespace=WS_NAMESPACE)
         async def _on_context_complete(payload: dict[str, Any]) -> None:
             callback = self.on_context_complete
+            if callback is not None:
+                callback(self._unwrap_envelope(payload))
+
+        @self.sio.on(_EVENT_SETTINGS_UPDATED, namespace=WS_NAMESPACE)
+        async def _on_settings_updated(payload: dict[str, Any]) -> None:
+            callback = self.on_settings_updated
             if callback is not None:
                 callback(self._unwrap_envelope(payload))
 

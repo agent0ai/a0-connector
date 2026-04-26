@@ -23,6 +23,7 @@ from agent_zero_cli import (
     profile_commands,
     project_commands,
     splash_helpers,
+    state_sync,
 )
 from agent_zero_cli.client import A0Client, DEFAULT_HOST
 from agent_zero_cli.attachments import (
@@ -193,6 +194,7 @@ class AgentZeroCLI(App):
         self._local_workspace = self._remote_files.scan_root
         self._remote_workspace = ""
         self._token_refresh_task: asyncio.Task[None] | None = None
+        self._state_sync_task: asyncio.Task[None] | None = None
         self._splash_state = SplashState(
             stage="host",
             host=self.config.instance_url or DEFAULT_HOST,
@@ -208,6 +210,8 @@ class AgentZeroCLI(App):
         self._remote_tree_task: asyncio.Task[None] | None = None
         self._last_remote_tree_hash = ""
         self._model_switch_allowed = False
+        self._settings_snapshot_signature = ""
+        self._model_switcher_signature = ""
         self._pause_latched = False
         self._slash_palette_query: str | None = None
         self._compaction_refresh_context: str | None = None
@@ -512,6 +516,23 @@ class AgentZeroCLI(App):
 
     async def _refresh_workspace_from_settings(self) -> None:
         await splash_helpers.refresh_workspace_from_settings(self)
+
+    async def _refresh_settings_snapshot(
+        self,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        silent: bool = True,
+    ) -> bool:
+        return await state_sync.refresh_settings_snapshot(self, payload, silent=silent)
+
+    async def _refresh_state_snapshot(self, *, silent: bool = True) -> None:
+        await state_sync.refresh_state_snapshot(self, silent=silent)
+
+    def _start_state_sync(self) -> None:
+        state_sync.start_state_sync(self)
+
+    def _stop_state_sync(self) -> None:
+        state_sync.stop_state_sync(self)
 
     async def _open_project_menu(self) -> None:
         await self._hide_profile_menu()
@@ -851,6 +872,7 @@ class AgentZeroCLI(App):
     def _apply_model_switcher_state(self, payload: dict[str, Any]) -> None:
         from agent_zero_cli.model_config import apply_model_switcher_state
         allowed, state_kwargs = apply_model_switcher_state(payload)
+        self._model_switcher_signature = state_sync.snapshot_signature(payload)
         self._model_switch_allowed = allowed
         try:
             widget = self.query_one("#model-switcher-bar", ModelSwitcherBar)
@@ -1014,6 +1036,13 @@ class AgentZeroCLI(App):
 
     def _handle_connector_error(self, data: dict[str, Any]) -> None:
         event_handlers.handle_connector_error(self, data)
+
+    def _handle_settings_updated(self, data: dict[str, Any]) -> None:
+        self.run_worker(
+            self._refresh_settings_snapshot(data),
+            exclusive=True,
+            name="settings-updated",
+        )
 
     def _handle_file_op(self, data: dict[str, Any]) -> dict[str, Any]:
         return event_handlers.handle_file_op(self, data)

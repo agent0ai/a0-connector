@@ -187,6 +187,23 @@ class FakeComputerUseBanner:
         self.display = True
 
 
+class FakeModelSwitcher:
+    def __init__(self) -> None:
+        self.busy = False
+        self.cleared = False
+        self.state_calls: list[dict[str, object]] = []
+
+    def clear(self) -> None:
+        self.cleared = True
+
+    def set_busy(self, busy: bool) -> None:
+        self.busy = busy
+
+    def set_state(self, **kwargs: object) -> None:
+        self.state_calls.append(dict(kwargs))
+        self.cleared = False
+
+
 class FakeComputerUseManager:
     def __init__(self) -> None:
         self.enabled = False
@@ -275,6 +292,7 @@ def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
         "#body-switcher": FakeBodySwitcher(),
         "#splash-view": FakeSplash(),
         "#computer-use-banner": FakeComputerUseBanner(),
+        "#model-switcher-bar": FakeModelSwitcher(),
         "#connection-status": FakeConnectionStatus(),
     }
 
@@ -789,7 +807,7 @@ async def test_profile_command_with_argument_sets_profile(
     async def fake_set_settings(settings: dict[str, str]) -> dict[str, object]:
         calls.append(settings)
         return {
-            "settings": {"agent_profile": "developer"},
+            "settings": {"agent_profile": "developer", "workdir_path": "/a0/usr/workdir"},
             "additional": {
                 "agent_subdirs": [
                     {"value": "agent0", "label": "Agent 0"},
@@ -806,6 +824,94 @@ async def test_profile_command_with_argument_sets_profile(
 
     assert calls == [{"agent_profile": "developer"}]
     assert notices == [("Agent profile set to Developer.", False)]
+    assert dummy_app._remote_workspace == "/a0/usr/workdir"
+    assert dummy_app._settings_snapshot_signature
+
+
+async def test_settings_snapshot_rehydrates_workspace_without_duplicate_refresh(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connector_features = {"settings_get"}
+    payload = {
+        "settings": {
+            "agent_profile": "developer",
+            "workdir_path": "/a0/workspaces/research",
+        },
+        "additional": {
+            "agent_subdirs": [{"value": "developer", "label": "Developer"}],
+        },
+    }
+    token_refreshes = 0
+
+    async def fake_get_settings() -> dict[str, object]:
+        return payload
+
+    async def fake_refresh_token_usage(*args, **kwargs) -> None:
+        nonlocal token_refreshes
+        del args, kwargs
+        token_refreshes += 1
+
+    monkeypatch.setattr(dummy_app.client, "get_settings", fake_get_settings)
+    monkeypatch.setattr(dummy_app, "_refresh_token_usage", fake_refresh_token_usage)
+
+    changed = await dummy_app._refresh_settings_snapshot()
+    unchanged = await dummy_app._refresh_settings_snapshot()
+
+    assert changed is True
+    assert unchanged is False
+    assert dummy_app._remote_workspace == "/a0/workspaces/research"
+    assert token_refreshes == 0
+
+
+async def test_state_snapshot_applies_changed_model_switcher_state(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connector_features = {"model_switcher"}
+    payloads = [
+        {
+            "ok": True,
+            "allowed": True,
+            "override": {"preset_name": "fast"},
+            "presets": [{"name": "fast", "label": "Fast"}],
+            "main_model": {"provider": "openai", "name": "gpt-5.4"},
+            "utility_model": {"provider": "openai", "name": "gpt-5.4-mini"},
+        },
+        {
+            "ok": True,
+            "allowed": True,
+            "override": {"preset_name": "deep"},
+            "presets": [{"name": "deep", "label": "Deep"}],
+            "main_model": {"provider": "anthropic", "name": "claude-sonnet"},
+            "utility_model": {"provider": "openai", "name": "gpt-5.4-mini"},
+        },
+    ]
+    token_refreshes = 0
+
+    async def fake_get_model_switcher(context_id: str) -> dict[str, object]:
+        assert context_id == "ctx-1"
+        return payloads[0]
+
+    async def fake_refresh_token_usage(*args, **kwargs) -> None:
+        nonlocal token_refreshes
+        del args, kwargs
+        token_refreshes += 1
+
+    monkeypatch.setattr(dummy_app.client, "get_model_switcher", fake_get_model_switcher)
+    monkeypatch.setattr(dummy_app, "_refresh_token_usage", fake_refresh_token_usage)
+
+    await dummy_app._refresh_state_snapshot()
+    await dummy_app._refresh_state_snapshot()
+    payloads.pop(0)
+    await dummy_app._refresh_state_snapshot()
+
+    switcher = dummy_app._test_widgets["#model-switcher-bar"]  # type: ignore[index]
+    assert len(switcher.state_calls) == 2
+    assert switcher.state_calls[-1]["selected_preset"] == "deep"
+    assert token_refreshes == 2
 
 
 async def test_chat_list_command_supports_project_filter_and_sort_flags(

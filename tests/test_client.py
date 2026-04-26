@@ -651,6 +651,27 @@ async def test_file_op_requests_are_returned_via_result_event() -> None:
     ]
 
 
+async def test_settings_updated_event_unwraps_payload() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    client.sio = FakeSocketIOClient()
+    seen: list[dict[str, object]] = []
+    client.on_settings_updated = lambda payload: seen.append(payload)
+
+    await client.connect_websocket()
+
+    handler = client.sio.handlers[("/ws", "connector_settings_updated")]
+    await handler({"data": {"settings": {"agent_profile": "developer"}}})
+
+    assert seen == [{"settings": {"agent_profile": "developer"}}]
+
+
 async def test_exec_op_requests_are_returned_via_result_event() -> None:
     client = A0Client("http://127.0.0.1:50001")
     client.http = Mock()

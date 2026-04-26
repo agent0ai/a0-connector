@@ -121,6 +121,7 @@ async def begin_connection(
 ) -> None:
     app._stop_remote_tree_publisher()
     app._stop_token_refresh()
+    app._stop_state_sync()
     app._clear_token_usage()
     await app._hide_project_menu()
     await app._hide_profile_menu()
@@ -239,6 +240,7 @@ async def begin_connection(
     app.client.on_context_event = lambda data: app._run_on_ui(app._handle_context_event, data)
     app.client.on_context_complete = lambda data: app._run_on_ui(app._handle_context_complete, data)
     app.client.on_error = lambda data: app._run_on_ui(app._handle_connector_error, data)
+    app.client.on_settings_updated = lambda data: app._run_on_ui(app._handle_settings_updated, data)
     app.client.on_file_op = app._handle_file_op
     app.client.on_exec_op = app._handle_exec_op
     app.client.on_computer_use_op = app._handle_computer_use_op
@@ -317,9 +319,10 @@ async def begin_connection(
         actions=app._welcome_actions(),
     )
     await app._refresh_model_switcher()
-    await app._refresh_workspace_from_settings()
+    await app._refresh_settings_snapshot()
     await app._refresh_projects(context_id=context_id)
     await app._refresh_token_usage(context_id=context_id)
+    app._start_state_sync()
     app._start_token_refresh()
     app._sync_body_mode()
     app._focus_message_input()
@@ -348,9 +351,12 @@ def _reset_disconnected_state(app: AgentZeroCLI) -> None:
     app._set_pause_latched(False)
     app._stop_remote_tree_publisher()
     app._stop_token_refresh()
+    app._stop_state_sync()
     app._clear_token_usage()
     app._clear_project_state()
     app._set_workspace_context(remote_workspace="")
+    app._settings_snapshot_signature = ""
+    app._model_switcher_signature = ""
     app._python_tty.set_exec_config(None)
     asyncio.create_task(app._python_tty.close())
     asyncio.create_task(app._computer_use.disconnect())
@@ -424,6 +430,7 @@ async def disconnect_to_login(app: AgentZeroCLI) -> None:
 async def disconnect_and_exit(app: AgentZeroCLI) -> None:
     app._stop_remote_tree_publisher()
     app._stop_token_refresh()
+    app._stop_state_sync()
     await app._python_tty.close()
     await app._computer_use.disconnect()
     try:

@@ -154,6 +154,7 @@ async def apply_profile_selection(
         return False
 
     updated_profile, updated_options = profile_menu_state_from_settings(payload)
+    await app._refresh_settings_snapshot(payload)
     label = profile_label(updated_options or list(options or ()), updated_profile or normalized_key)
     app._show_notice(f"Agent profile set to {label}.")
     return True

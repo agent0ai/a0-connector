@@ -84,6 +84,7 @@ All events are `connector_`-prefixed to avoid collisions on the shared `/ws` nam
 | `connector_context_snapshot` | Batch of historical events on subscribe |
 | `connector_context_event` | Single streamed event from a running agent |
 | `connector_context_complete` | Agent finished responding |
+| `connector_settings_updated` | Optional canonical settings snapshot for CLI rehydration |
 | `connector_error` | Application-level error for a context |
 | `connector_file_op` | Request a local file operation |
 | `connector_exec_op` | Request a shell-backed frontend execution operation |
@@ -169,6 +170,10 @@ Supported runtimes:
 - `dialog_patterns`
 
 The backend owns that execution policy. The CLI owns the local shell session and all platform-specific TTY behavior.
+
+## Settings rehydration
+
+Agent Zero remains the canonical settings source. On connect and at a low-frequency interval, the CLI refreshes `settings_get` plus the current `model_switcher` state and repaints only when the canonical payload changes. If a newer connector backend emits `connector_settings_updated`, the CLI applies that same snapshot path immediately.
 
 ## Security
 
