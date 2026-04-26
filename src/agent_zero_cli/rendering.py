@@ -4,6 +4,7 @@ from typing import Any
 from rich.align import Align
 from rich import box
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.padding import Padding
 
@@ -168,7 +169,7 @@ def render_connector_event(log: ChatLog, event: dict[str, Any]) -> bool:
 
     if category == "user":
         if text:
-            panel = Panel(text, border_style="#555555", padding=(0, 1))
+            panel = Panel(escape(text), border_style="#555555", padding=(0, 1))
             log.append_or_update(seq, Align.right(panel))
             return True
         return False
@@ -194,14 +195,14 @@ def render_connector_event(log: ChatLog, event: dict[str, Any]) -> bool:
     if category == "info":
         msg = f"{heading}: {text}" if heading else text
         if msg:
-            log.append_or_update(seq, Padding(f"[dim]{msg}[/dim]", (0, 0, 0, 2)))
+            log.append_or_update(seq, Padding(f"[dim]{escape(msg)}[/dim]", (0, 0, 0, 2)))
             return True
         return False
 
     if category == "util":
         msg = f"{heading}: {text}" if heading and text else heading or text
         if msg:
-            log.append_or_update(seq, Padding(f"[dim]{msg}[/dim]", (0, 0, 0, 2)))
+            log.append_or_update(seq, Padding(f"[dim]{escape(msg)}[/dim]", (0, 0, 0, 2)))
             return True
         return False
 
