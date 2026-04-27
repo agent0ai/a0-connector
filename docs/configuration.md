@@ -4,7 +4,7 @@
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `AGENT_ZERO_HOST` | Agent Zero base URL | `http://127.0.0.1` |
+| `AGENT_ZERO_HOST` | Agent Zero base URL | `http://localhost:5080` |
 
 ## Resolution order
 

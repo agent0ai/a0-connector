@@ -14,8 +14,8 @@ import socketio
 from agent_zero_cli import __version__
 
 _PLUGIN_API = "/api/plugins/_a0_connector/v1"
-# Local placeholder only (no fixed WebUI port). Real ports come from Docker discovery or AGENT_ZERO_HOST.
-DEFAULT_HOST = "http://127.0.0.1"
+# Agent Zero's installer defaults to the first free port starting at 5080.
+DEFAULT_HOST = "http://localhost:5080"
 PROTOCOL_VERSION = "a0-connector.v1"
 _SOCKET_IO_PATH = "/socket.io"
 WS_NAMESPACE = "/ws"
