@@ -9,7 +9,7 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Callable
 
 from agent_zero_cli import computer_use_wayland as _builtin_computer_use_wayland  # noqa: F401
@@ -136,52 +136,12 @@ def _normalize_container_artifact_root(value: object) -> str:
     return root.rstrip("/")
 
 
-def _path_search_roots() -> list[Path]:
-    roots: list[Path] = []
-    for candidate in (Path.cwd(), Path(__file__).resolve(), Path(sys.executable).resolve()):
-        resolved = Path(candidate)
-        if resolved not in roots:
-            roots.append(resolved)
-    return roots
-
-
-def _find_dockervolume_root() -> Path | None:
-    seen: set[str] = set()
-    for anchor in _path_search_roots():
-        for candidate in (anchor, *anchor.parents):
-            marker = str(candidate).lower()
-            if marker in seen:
-                continue
-            seen.add(marker)
-            if candidate.name.lower() == "dockervolume" and candidate.is_dir():
-                return candidate
-            sibling = candidate / "dockervolume"
-            if sibling.is_dir():
-                return sibling
-    return None
-
-
-def _host_artifact_root_from_container_root(container_root: str, *, volume_root: Path) -> Path:
-    normalized = _normalize_container_artifact_root(container_root)
-    try:
-        relative_root = PurePosixPath(normalized).relative_to("/a0")
-    except ValueError:
-        segments = [part for part in PurePosixPath(normalized).parts if part not in {"/", "\\"}]
-        return volume_root.joinpath(*segments)
-    return volume_root.joinpath(*relative_root.parts)
-
-
-def _default_host_artifact_root(container_root: str) -> Path:
+def _default_host_artifact_root(_container_root: str) -> Path:
     configured = str(os.environ.get(_HOST_ARTIFACT_ROOT_ENV, "")).strip()
     if configured:
         return Path(configured).expanduser()
 
-    volume_root = _find_dockervolume_root()
-    if volume_root is not None:
-        return _host_artifact_root_from_container_root(container_root, volume_root=volume_root)
-
-    if os.name == "nt" or sys.platform == "darwin":
-        return Path(tempfile.gettempdir()) / "_a0_connector" / "computer_use"
+    return Path(tempfile.gettempdir()) / "_a0_connector" / "computer_use"
 
 
 CONTAINER_ARTIFACT_ROOT = _normalize_container_artifact_root(

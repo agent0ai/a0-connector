@@ -145,19 +145,16 @@ def _selection(
     )
 
 
-def test_default_host_artifact_root_uses_dockervolume_mapping_on_macos(
+def test_default_host_artifact_root_honors_explicit_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    volume_root = tmp_path / "dockervolume"
-    volume_root.mkdir()
-    monkeypatch.delenv(computer_use_mod._HOST_ARTIFACT_ROOT_ENV, raising=False)
-    monkeypatch.setattr(computer_use_mod, "_find_dockervolume_root", lambda: volume_root)
-    monkeypatch.setattr(computer_use_mod.sys, "platform", "darwin")
+    artifact_root = tmp_path / "configured-artifacts"
+    monkeypatch.setenv(computer_use_mod._HOST_ARTIFACT_ROOT_ENV, str(artifact_root))
 
     host_root = computer_use_mod._default_host_artifact_root("/a0/tmp/_a0_connector/computer_use")
 
-    assert host_root == volume_root / "tmp" / "_a0_connector" / "computer_use"
+    assert host_root == artifact_root
 
 
 def test_default_host_artifact_root_uses_tempdir_fallback_on_macos(
@@ -165,8 +162,20 @@ def test_default_host_artifact_root_uses_tempdir_fallback_on_macos(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv(computer_use_mod._HOST_ARTIFACT_ROOT_ENV, raising=False)
-    monkeypatch.setattr(computer_use_mod, "_find_dockervolume_root", lambda: None)
     monkeypatch.setattr(computer_use_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(computer_use_mod.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    host_root = computer_use_mod._default_host_artifact_root("/a0/tmp/_a0_connector/computer_use")
+
+    assert host_root == tmp_path / "_a0_connector" / "computer_use"
+
+
+def test_default_host_artifact_root_uses_tempdir_fallback_on_linux(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(computer_use_mod._HOST_ARTIFACT_ROOT_ENV, raising=False)
+    monkeypatch.setattr(computer_use_mod.sys, "platform", "linux")
     monkeypatch.setattr(computer_use_mod.tempfile, "gettempdir", lambda: str(tmp_path))
 
     host_root = computer_use_mod._default_host_artifact_root("/a0/tmp/_a0_connector/computer_use")
