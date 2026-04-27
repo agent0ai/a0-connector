@@ -112,7 +112,7 @@ class AgentZeroCLI(App):
             "f2",
             "toggle_computer_use",
             "Comp-use OFF",
-            show=True,
+            show=False,
             priority=True,
             key_display="F2",
         ),

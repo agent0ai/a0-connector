@@ -353,6 +353,7 @@ def test_shortcut_bindings_use_textual_canonical_key_names() -> None:
 
     assert bindings["toggle_computer_use"].key == "f2"
     assert bindings["toggle_computer_use"].key_display == "F2"
+    assert bindings["toggle_computer_use"].show is False
     assert bindings["toggle_remote_file_mode"].key == "f3"
     assert bindings["toggle_remote_file_mode"].key_display == "F3"
     assert bindings["toggle_remote_exec"].key == "f4"
