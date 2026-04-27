@@ -515,6 +515,29 @@ async def test_capture_prunes_previous_artifacts_and_disconnect_removes_current(
     assert not computer_use_mod.HOST_ARTIFACT_ROOT.exists()
 
 
+async def test_disconnect_allows_missing_host_artifact_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(computer_use_mod, "HOST_ARTIFACT_ROOT", None)
+    manager = _manager(enabled=True)
+
+    await manager.disconnect()
+
+    assert manager.status == "persistent"
+
+
+async def test_status_snapshot_allows_missing_host_artifact_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(computer_use_mod, "HOST_ARTIFACT_ROOT", None)
+    manager = _manager(enabled=True)
+
+    result = await manager.handle_op({"op_id": "status-1", "action": "status"})
+
+    assert result["ok"] is True
+    assert result["result"]["host_artifact_root"] is None
+
+
 async def test_failed_capture_removes_stale_artifacts(
     _temp_env: Path,
 ) -> None:

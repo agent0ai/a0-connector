@@ -147,7 +147,13 @@ def _default_host_artifact_root(_container_root: str) -> Path:
 CONTAINER_ARTIFACT_ROOT = _normalize_container_artifact_root(
     os.environ.get(_CONTAINER_ARTIFACT_ROOT_ENV, _DEFAULT_CONTAINER_ARTIFACT_ROOT)
 )
-HOST_ARTIFACT_ROOT = _default_host_artifact_root(CONTAINER_ARTIFACT_ROOT)
+HOST_ARTIFACT_ROOT: Path | None = _default_host_artifact_root(CONTAINER_ARTIFACT_ROOT)
+
+
+def _host_artifact_root() -> Path | None:
+    if HOST_ARTIFACT_ROOT is None:
+        return None
+    return Path(HOST_ARTIFACT_ROOT)
 
 
 def _normalize_context_id(value: object) -> str:
@@ -342,6 +348,7 @@ class ComputerUseManager:
         active_contexts = sorted(
             session.context_id for session in self._sessions.values() if session.active
         )
+        host_artifact_root = _host_artifact_root()
         snapshot = {
             "supported": self.supported,
             "enabled": self.enabled,
@@ -349,7 +356,7 @@ class ComputerUseManager:
             "status": self.status,
             "restore_token_present": bool(_normalize_restore_token(self.restore_token)),
             "artifact_root": CONTAINER_ARTIFACT_ROOT,
-            "host_artifact_root": str(HOST_ARTIFACT_ROOT),
+            "host_artifact_root": str(host_artifact_root) if host_artifact_root else None,
             "active_contexts": active_contexts,
             "last_error": self.last_error or None,
         }
@@ -519,9 +526,12 @@ class ComputerUseManager:
         raise ValueError(f"Unsupported action: {action}")
 
     def _next_capture_paths(self, context_id: str) -> tuple[str, str]:
+        artifact_root = _host_artifact_root()
+        if artifact_root is None:
+            raise ValueError("Computer-use host artifact root is unavailable")
         stamp = uuid.uuid4().hex
         context_segment = _safe_context_segment(context_id)
-        host_dir = HOST_ARTIFACT_ROOT / context_segment
+        host_dir = artifact_root / context_segment
         host_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{stamp}.png"
         host_path = host_dir / filename
@@ -535,8 +545,8 @@ class ComputerUseManager:
             return left == right
 
     def _prune_capture_artifacts(self, *, keep_path: str = "") -> None:
-        artifact_root = HOST_ARTIFACT_ROOT
-        if not artifact_root.exists():
+        artifact_root = _host_artifact_root()
+        if artifact_root is None or not artifact_root.exists():
             return
 
         keep_target = Path(keep_path) if keep_path else None
