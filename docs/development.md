@@ -66,6 +66,12 @@ export AGENT_ZERO_HOST=http://localhost:50001
 a0
 ```
 
+One-off host overrides can also be passed directly:
+
+```bash
+a0 --host http://localhost:50001
+```
+
 macOS:
 
 ```bash
@@ -76,6 +82,8 @@ a0
 ```
 
 When you are developing against a Docker-detected local Agent Zero instance, prefer `localhost` over `127.0.0.1` so the saved host matches the discovered host exactly.
+
+For connection-flow testing, `a0 --no-auto-connect` keeps the picker open when a single Docker instance is detected, and `a0 --no-docker-discovery` opens the manual URL path without inspecting Docker.
 
 The published `a0` wheel embeds the Wayland, X11, macOS, and Windows backend modules. Environment markers install only the third-party runtime libraries relevant to the current platform. Linux includes both Wayland and X11 backend code; the backend resolver picks Wayland for Wayland sessions and X11 for Xorg/X11 sessions.
 

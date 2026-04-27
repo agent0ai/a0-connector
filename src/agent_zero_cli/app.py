@@ -150,7 +150,13 @@ class AgentZeroCLI(App):
     connected = reactive(False)
     agent_active = reactive(False)
 
-    def __init__(self, config: CLIConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: CLIConfig | None = None,
+        *,
+        auto_connect_single_instance: bool = True,
+        discover_instances: bool = True,
+    ) -> None:
         super().__init__()
         self.register_theme(
             Theme(
@@ -218,6 +224,8 @@ class AgentZeroCLI(App):
         self._profile_menu_popover: ProfileMenuPopover | None = None
         self._project_menu_popover: ProjectMenuPopover | None = None
         self._instance_discovery_generation = 0
+        self._auto_connect_single_instance = auto_connect_single_instance
+        self._discover_instances = discover_instances
         self._splash_hidden_commands = _SPLASH_HIDDEN_COMMANDS
 
     def compose(self) -> ComposeResult:
@@ -939,6 +947,17 @@ class AgentZeroCLI(App):
         return splash_helpers.welcome_actions(self)
 
     def _start_instance_discovery(self, *, auto_connect_single: bool = False) -> None:
+        if not self._discover_instances:
+            self._instance_discovery_generation += 1
+            self._set_splash_state(
+                discovered_instances=(),
+                discovery_status="unavailable",
+                discovery_detail="Docker discovery disabled by --no-docker-discovery.",
+                selected_host_url="",
+                manual_entry_expanded=True,
+            )
+            return
+
         self._instance_discovery_generation += 1
         generation = self._instance_discovery_generation
         self._set_splash_state(

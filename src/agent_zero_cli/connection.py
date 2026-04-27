@@ -34,7 +34,7 @@ async def startup(app: AgentZeroCLI) -> None:
     )
     app._sync_connection_status("disconnected", "")
     app._focus_splash_primary()
-    app._start_instance_discovery(auto_connect_single=True)
+    app._start_instance_discovery(auto_connect_single=app._auto_connect_single_instance)
 
 
 async def fetch_capabilities(app: AgentZeroCLI) -> tuple[dict[str, Any] | None, bool, str]:

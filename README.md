@@ -92,6 +92,14 @@ export AGENT_ZERO_HOST=http://localhost:50001
 a0
 ```
 
+Or pass it directly for a one-off launch:
+
+```bash
+a0 --host http://localhost:5080
+```
+
+Use `a0 --no-auto-connect` to keep the picker open even when Docker finds exactly one local instance. Use `a0 --no-docker-discovery` to skip Docker inspection and open manual URL entry immediately, which is useful for remote hosts, HTTPS tunnels such as Cloudflare, or machines without Docker.
+
 You can optionally remember only the chosen host in `~/.agent-zero/.env` from inside the app. The CLI never stores usernames, passwords, session cookies, or connector tokens.
 
 ## Usage

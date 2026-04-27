@@ -10,8 +10,10 @@
 
 For `AGENT_ZERO_HOST`:
 
-1. Process environment
-2. `~/.agent-zero/.env`
+1. `a0 --host URL`
+2. Process environment
+3. `~/.agent-zero/.env`
+4. Builtin default `http://localhost:5080`
 
 `AGENT_ZERO_API_KEY` is ignored. The CLI no longer reads, writes, or uses it.
 
@@ -36,6 +38,8 @@ For frontend remote execution, the CLI no longer runtime-imports a local Agent Z
   - a bind mount targeting `/a0`
 - Wildcard Docker bindings such as `0.0.0.0`, `::`, or empty host bindings are shown as `http://localhost:<port>`.
 - If Docker discovery shows `localhost`, prefer keeping `AGENT_ZERO_HOST` on `localhost` too. Mixing `localhost` and `127.0.0.1` can trigger host and origin mismatches for the session login or WebSocket flow.
+- `a0 --no-auto-connect` keeps the picker open even when Docker finds exactly one local instance.
+- `a0 --no-docker-discovery` skips Docker inspection and opens manual URL entry immediately.
 
 ## Persisted file
 

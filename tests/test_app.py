@@ -403,6 +403,148 @@ def test_apply_instance_discovery_result_autoconnects_single_instance(
     assert splash.state.manual_entry_expanded is False
 
 
+def test_apply_instance_discovery_result_opens_manual_when_docker_unavailable(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    dummy_app._set_splash_state(host=DEFAULT_HOST, manual_entry_expanded=False)
+
+    target = dummy_app._apply_instance_discovery_result(
+        DiscoveryResult(
+            status="unavailable",
+            detail="Docker CLI was not found. Enter a URL manually.",
+        ),
+        auto_connect_single=True,
+    )
+
+    splash = dummy_app._test_widgets["#splash-view"]  # type: ignore[index]
+    assert target == ""
+    assert splash.state.host == DEFAULT_HOST
+    assert splash.state.discovered_instances == ()
+    assert splash.state.discovery_status == "unavailable"
+    assert splash.state.selected_host_url == ""
+    assert splash.state.manual_entry_expanded is True
+
+
+def test_apply_instance_discovery_result_lists_multiple_instances_without_autoconnect(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    first = _instance("http://localhost:5080", host_port="5080")
+    second = _instance("http://localhost:5081", host_port="5081")
+    dummy_app._set_splash_state(host=DEFAULT_HOST, manual_entry_expanded=False)
+
+    target = dummy_app._apply_instance_discovery_result(
+        DiscoveryResult(
+            status="ready",
+            instances=(first, second),
+        ),
+        auto_connect_single=True,
+    )
+
+    splash = dummy_app._test_widgets["#splash-view"]  # type: ignore[index]
+    assert target == ""
+    assert splash.state.discovered_instances == (first, second)
+    assert splash.state.host == "http://localhost:5080"
+    assert splash.state.selected_host_url == "http://localhost:5080"
+    assert splash.state.manual_entry_expanded is False
+
+
+def test_apply_instance_discovery_result_keeps_agent_zero_host_in_manual_mode(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    cloudflare_host = "https://webmasters-ink-tribe-zope.trycloudflare.com"
+    dummy_app.config.instance_url = cloudflare_host
+    dummy_app._set_splash_state(host=cloudflare_host, manual_entry_expanded=False)
+
+    target = dummy_app._apply_instance_discovery_result(
+        DiscoveryResult(
+            status="ready",
+            instances=(_instance("http://localhost:5080", host_port="5080"),),
+        ),
+        auto_connect_single=True,
+    )
+
+    splash = dummy_app._test_widgets["#splash-view"]  # type: ignore[index]
+    assert target == ""
+    assert splash.state.host == cloudflare_host
+    assert splash.state.selected_host_url == "http://localhost:5080"
+    assert splash.state.manual_entry_expanded is True
+
+
+def test_start_instance_discovery_can_be_disabled_for_manual_url_testing(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    dummy_app._discover_instances = False
+    dummy_app._set_splash_state(host=DEFAULT_HOST, manual_entry_expanded=False)
+
+    dummy_app._start_instance_discovery(auto_connect_single=True)
+
+    splash = dummy_app._test_widgets["#splash-view"]  # type: ignore[index]
+    assert splash.state.discovered_instances == ()
+    assert splash.state.discovery_status == "unavailable"
+    assert splash.state.discovery_detail == "Docker discovery disabled by --no-docker-discovery."
+    assert splash.state.selected_host_url == ""
+    assert splash.state.manual_entry_expanded is True
+
+
+async def test_begin_connection_to_protected_instance_advances_to_login(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ProtectedClient:
+        def __init__(self) -> None:
+            self.base_url = ""
+            self.disconnect_calls = 0
+            self.verify_session_calls = 0
+
+        async def disconnect(self, *, close_http: bool = False, notify: bool = False) -> None:
+            del close_http, notify
+            self.disconnect_calls += 1
+
+        async def verify_session(self) -> bool:
+            self.verify_session_calls += 1
+            return False
+
+    async def async_noop(*args, **kwargs) -> None:
+        del args, kwargs
+
+    capabilities = {
+        "protocol": "a0-connector.v1",
+        "websocket_namespace": "/ws",
+        "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
+        "auth": ["session"],
+        "auth_required": True,
+        "features": [],
+    }
+    client = ProtectedClient()
+    dummy_app.client = client  # type: ignore[assignment]
+
+    async def fetch_capabilities() -> tuple[dict[str, object], bool, str]:
+        return capabilities, False, ""
+
+    monkeypatch.setattr(dummy_app, "_fetch_capabilities", fetch_capabilities)
+    monkeypatch.setattr(dummy_app, "_stop_remote_tree_publisher", lambda: None)
+    monkeypatch.setattr(dummy_app, "_stop_token_refresh", lambda: None)
+    monkeypatch.setattr(dummy_app, "_stop_state_sync", lambda: None)
+    monkeypatch.setattr(dummy_app, "_clear_token_usage", lambda: None)
+    monkeypatch.setattr(dummy_app, "_hide_project_menu", async_noop)
+    monkeypatch.setattr(dummy_app, "_hide_profile_menu", async_noop)
+    monkeypatch.setattr(dummy_app, "_clear_project_state", lambda: None)
+
+    await connection.begin_connection(dummy_app, "http://localhost:5080")
+
+    splash = dummy_app._test_widgets["#splash-view"]  # type: ignore[index]
+    status = dummy_app._test_widgets["#connection-status"]  # type: ignore[index]
+    input_widget = dummy_app._test_widgets["#message-input"]  # type: ignore[index]
+    assert client.base_url == "http://localhost:5080"
+    assert client.disconnect_calls == 1
+    assert client.verify_session_calls == 1
+    assert splash.state.stage == "login"
+    assert splash.state.host == "http://localhost:5080"
+    assert splash.state.login_error == ""
+    assert status.status == "disconnected"
+    assert input_widget.disabled is True
+
+
 def test_context_event_status_updates_activity_lane_without_rendering_message(
     dummy_app: DummyAgentZeroCLI,
 ) -> None:
