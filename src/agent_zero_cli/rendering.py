@@ -6,6 +6,7 @@ from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.padding import Padding
+from rich.text import Text
 
 from agent_zero_cli.widgets.chat_log import ChatLog
 
@@ -62,6 +63,16 @@ _OSC_CWD_PREFIX_RE = re.compile(
 _PROMPT_LINE_RE = re.compile(
     r"^\s*(?:\([^)\n]+\)\s*)?(?:[\w.-]+@[\w.-]+:)?[/~.\w-]*[#$]\s*$"
 )
+
+
+def _plain_text(value: object, *, style: str = "") -> Text:
+    return Text(str(value or ""), style=style)
+
+
+def _event_message(heading: object, text: object) -> str:
+    heading_text = str(heading or "")
+    body_text = str(text or "")
+    return f"{heading_text}: {body_text}" if heading_text else body_text
 
 
 def _normalize_code_heading(heading: str) -> str:
@@ -168,7 +179,7 @@ def render_connector_event(log: ChatLog, event: dict[str, Any]) -> bool:
 
     if category == "user":
         if text:
-            panel = Panel(text, border_style="#555555", padding=(0, 1))
+            panel = Panel(_plain_text(text), border_style="#555555", padding=(0, 1))
             log.append_or_update(seq, Align.right(panel))
             return True
         return False
@@ -176,32 +187,38 @@ def render_connector_event(log: ChatLog, event: dict[str, Any]) -> bool:
     if category == "response":
         if text:
             # Add markdown render inside Left aligned or normal layout
-            panel = Panel(Markdown(text), border_style="#233e54", padding=(0, 1))
+            panel = Panel(Markdown(str(text)), border_style="#233e54", padding=(0, 1))
             log.append_or_update(seq, panel)
             return True
         return False
 
     if category == "warning":
-        msg = f"{heading}: {text}" if heading else text
-        log.append_or_update(seq, f"[yellow]{msg}[/yellow]")
+        msg = _event_message(heading, text)
+        log.append_or_update(seq, _plain_text(msg, style="yellow"))
         return True
 
     if category == "error":
-        msg = f"{heading}: {text}" if heading else text
-        log.append_or_update(seq, f"[red]{msg}[/red]")
+        msg = _event_message(heading, text)
+        log.append_or_update(seq, _plain_text(msg, style="red"))
         return True
 
     if category == "info":
-        msg = f"{heading}: {text}" if heading else text
+        msg = _event_message(heading, text)
         if msg:
-            log.append_or_update(seq, Padding(f"[dim]{msg}[/dim]", (0, 0, 0, 2)))
+            log.append_or_update(seq, Padding(_plain_text(msg, style="dim"), (0, 0, 0, 2)))
             return True
         return False
 
     if category == "util":
-        msg = f"{heading}: {text}" if heading and text else heading or text
+        heading_text = str(heading or "")
+        body_text = str(text or "")
+        msg = (
+            f"{heading_text}: {body_text}"
+            if heading_text and body_text
+            else heading_text or body_text
+        )
         if msg:
-            log.append_or_update(seq, Padding(f"[dim]{msg}[/dim]", (0, 0, 0, 2)))
+            log.append_or_update(seq, Padding(_plain_text(msg, style="dim"), (0, 0, 0, 2)))
             return True
         return False
 

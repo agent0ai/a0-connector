@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Mapping
 
+from rich.text import Text
 from textual.widgets import ContentSwitcher
 
 from agent_zero_cli.client import DEFAULT_HOST
@@ -178,7 +179,7 @@ def show_notice(app: AgentZeroCLI, message: str, *, error: bool = False) -> None
         return
 
     log = app.query_one("#chat-log", ChatLog)
-    log.write(f"[red]{message}[/red]" if error else message)
+    log.write(Text(message, style="red") if error else message)
 
 
 def available_help_lines(app: AgentZeroCLI) -> tuple[list[str], list[str]]:
@@ -211,11 +212,11 @@ def surface_help(app: AgentZeroCLI) -> None:
         return
 
     log = app.query_one("#chat-log", ChatLog)
-    log.write("[bold]Available commands:[/bold]")
+    log.write(Text("Available commands:", style="bold"))
     for line in available:
         log.write(line)
     if unavailable:
-        log.write("[dim]Unavailable right now:[/dim]")
+        log.write(Text("Unavailable right now:", style="dim"))
         for line in unavailable:
             log.write(line)
 

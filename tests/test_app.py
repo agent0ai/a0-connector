@@ -7,6 +7,7 @@ import pytest
 from rich.panel import Panel
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.css.query import NoMatches
 from textual.selection import SELECT_ALL
 
 from agent_zero_cli import chat_commands, connection
@@ -15,6 +16,7 @@ from agent_zero_cli.attachments import AttachmentRef
 from agent_zero_cli.client import DEFAULT_HOST
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.instance_discovery import DiscoveredInstance, DiscoveryResult
+from agent_zero_cli.rendering import render_connector_event
 from agent_zero_cli.widgets.chat_log import ChatLog, SelectableStatic
 from agent_zero_cli.widgets import ChatInput, ConnectionStatus, ProfileMenuItem, ProjectMenuItem, SplashState
 
@@ -578,6 +580,17 @@ def test_context_event_status_updates_activity_lane_without_rendering_message(
     assert dummy_app.rendered_events == []
 
 
+def test_chat_input_activity_placeholder_renders_detail_literally() -> None:
+    input_widget = ChatInput()
+
+    input_widget.set_activity("Using tool", "[/a0/tests/test_a0_connector_prompt_gating.py]")
+
+    assert input_widget.placeholder == (
+        "|>  Using tool [[/a0/tests/test_a0_connector_prompt_gating.py]]"
+    )
+    assert "[dim]" not in input_widget.placeholder
+
+
 def test_context_event_after_complete_persists_status_without_reactivating_input(
     dummy_app: DummyAgentZeroCLI,
 ) -> None:
@@ -631,6 +644,33 @@ def test_assistant_message_switches_ready_view_to_chat(
     assert log.intro_visible is True
     assert input_widget.focused is True
     assert dummy_app.rendered_events[-1]["event"] == "assistant_message"
+
+
+def test_context_event_missing_chat_log_is_ignored(
+    dummy_app: DummyAgentZeroCLI,
+) -> None:
+    dummy_app.connected = True
+    dummy_app.current_context = "ctx-1"
+
+    original_query_one = dummy_app.query_one
+
+    def _query_one(selector: object, cls: object = None) -> object:
+        if selector == "#chat-log":
+            raise NoMatches("No nodes match '#chat-log'")
+        return original_query_one(selector, cls)
+
+    dummy_app.query_one = _query_one  # type: ignore[method-assign]
+
+    dummy_app._handle_context_event(
+        {
+            "context_id": "ctx-1",
+            "event": "info",
+            "sequence": 11,
+            "data": {"text": "[/a0/tests/test_a0_connector_prompt_gating.py]"},
+        }
+    )
+
+    assert dummy_app.rendered_events == []
 
 
 def test_remember_context_updates_config_and_persists(
@@ -1660,6 +1700,57 @@ async def test_chat_log_regular_entries_copy_selected_text() -> None:
         app.screen.action_copy_text()
 
         assert "Copy me from the live transcript" in app.clipboard
+
+
+async def test_chat_log_nested_plain_strings_render_brackets_literally() -> None:
+    app = TranscriptSelectionApp()
+    path_like_text = "[/a0/tests/test_a0_connector_prompt_gating.py]"
+
+    async with app.run_test() as pilot:
+        log = app.query_one("#chat-log", ChatLog)
+        log.append_or_update(
+            1,
+            Panel(path_like_text, border_style="#555555", padding=(0, 1)),
+        )
+        await pilot.pause()
+
+        widget = log._seq_to_widget[1]
+        assert path_like_text in widget.render().plain
+
+
+async def test_connector_events_render_markup_sensitive_text_literally() -> None:
+    app = TranscriptSelectionApp()
+    path_like_text = "[/a0/tests/test_a0_connector_prompt_gating.py]"
+    events = [
+        ("user_message", {"text": path_like_text}),
+        ("warning", {"heading": "Warning", "text": path_like_text}),
+        ("error", {"heading": "Error", "text": path_like_text}),
+        ("info", {"heading": "Info", "text": path_like_text}),
+        ("util_message", {"heading": "Utility", "text": path_like_text}),
+    ]
+
+    async with app.run_test() as pilot:
+        log = app.query_one("#chat-log", ChatLog)
+        for sequence, (event_type, data) in enumerate(events, start=1):
+            rendered = render_connector_event(
+                log,
+                {
+                    "event": event_type,
+                    "sequence": sequence,
+                    "data": data,
+                },
+            )
+            assert rendered is True
+        await pilot.pause()
+
+        transcript = "\n".join(
+            widget.render().plain for widget in log._seq_to_widget.values()
+        )
+
+    assert transcript.count(path_like_text) == len(events)
+    assert "[yellow]" not in transcript
+    assert "[red]" not in transcript
+    assert "[dim]" not in transcript
 
 
 async def test_chat_log_render_width_respects_scrollbar_gutter() -> None:

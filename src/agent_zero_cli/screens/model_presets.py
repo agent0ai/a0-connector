@@ -91,26 +91,26 @@ def _preset_options(presets: Sequence[ModelPresetChoice]) -> list[tuple[str, str
 
 
 def _render_default_details() -> Text:
-    return Text.from_markup(
-        "\n".join(
-            (
-                "[bold]Default LLM[/bold]",
-                "[dim]Main model:[/dim] Connector default",
-                "[dim]Utility model:[/dim] Connector default",
-            )
-        )
-    )
+    details = Text()
+    details.append("Default LLM", style="bold")
+    details.append("\nMain model:", style="dim")
+    details.append(" Connector default")
+    details.append("\nUtility model:", style="dim")
+    details.append(" Connector default")
+    return details
 
 
 def _render_preset_details(preset: ModelPresetChoice) -> Text:
-    lines = [
-        f"[bold]{preset.label or preset.name}[/bold]",
-        f"[dim]Main model:[/dim] {preset.main_model or 'Connector default'}",
-        f"[dim]Utility model:[/dim] {preset.utility_model or 'Connector default'}",
-    ]
+    details = Text()
+    details.append(preset.label or preset.name, style="bold")
+    details.append("\nMain model:", style="dim")
+    details.append(f" {preset.main_model or 'Connector default'}")
+    details.append("\nUtility model:", style="dim")
+    details.append(f" {preset.utility_model or 'Connector default'}")
     if preset.description:
-        lines.append(f"[dim]Description:[/dim] {preset.description}")
-    return Text.from_markup("\n".join(lines))
+        details.append("\nDescription:", style="dim")
+        details.append(f" {preset.description}")
+    return details
 
 
 class ModelPresetsScreen(ModalScreen[ModelPresetsResult | None]):
@@ -188,18 +188,20 @@ class ModelPresetsScreen(ModalScreen[ModelPresetsResult | None]):
     def _sync_status(self) -> None:
         status = self.query_one("#model-presets-status", Static)
         if not self._switch_allowed:
-            status.update(Text.from_markup(f"[yellow]{self._reason or 'Preset switching is unavailable.'}[/yellow]"))
+            status.update(Text(self._reason or "Preset switching is unavailable.", style="yellow"))
             return
         if self._current_override_label and not self._current_preset:
+            override = Text()
+            override.append("Current override:", style="dim")
+            override.append(f" {self._current_override_label}. Apply ")
+            override.append("Default LLM", style="bold")
+            override.append(" to clear it.")
             status.update(
-                Text.from_markup(
-                    f"[dim]Current override:[/dim] {self._current_override_label}. "
-                    "Apply [bold]Default LLM[/bold] to clear it."
-                )
+                override
             )
             return
         if self._selected_preset == self._current_preset:
-            status.update("[dim]Current preset selected.[/dim]")
+            status.update(Text("Current preset selected.", style="dim"))
             return
         status.update("")
 

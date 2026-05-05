@@ -279,6 +279,7 @@ def _renderable_to_content(widget: Static, renderable: RenderableType) -> Conten
         force_terminal=True,
         legacy_windows=False,
         color_system="truecolor",
+        markup=False,
     )
     lines = [
         _segments_to_content(line, ansi_theme=ansi_theme).rstrip_end(width)

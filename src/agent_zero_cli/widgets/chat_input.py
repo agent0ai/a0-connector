@@ -141,7 +141,7 @@ class ChatInput(TextArea):
 
     def _compose_activity_placeholder(self) -> str:
         detail = f" [{self._activity_detail}]" if self._activity_detail else ""
-        return f"[dim]{_PROGRESS_PREFIX}{self._activity_label}{detail}[/dim]"
+        return f"{_PROGRESS_PREFIX}{self._activity_label}{detail}"
 
     def _compose_placeholder(self) -> str:
         prefix = f"{attachment_label(len(self.attachments))} " if self.attachments else ""

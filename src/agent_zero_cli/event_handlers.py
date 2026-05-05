@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from textual.css.query import NoMatches
+
 from agent_zero_cli.rendering import (
     _EVENT_CATEGORY,
     _STATUS_LABEL,
@@ -13,6 +15,13 @@ from agent_zero_cli.widgets.chat_log import ChatLog
 
 if TYPE_CHECKING:
     from agent_zero_cli.app import AgentZeroCLI
+
+
+def _chat_log_or_none(app: AgentZeroCLI) -> ChatLog | None:
+    try:
+        return app.query_one("#chat-log", ChatLog)
+    except NoMatches:
+        return None
 
 
 async def _compaction_context_reload(app: AgentZeroCLI, context_id: str) -> None:
@@ -31,7 +40,10 @@ def handle_context_snapshot(app: AgentZeroCLI, data: dict[str, Any]) -> None:
     if context_id != app.current_context:
         return
 
-    log = app.query_one("#chat-log", ChatLog)
+    log = _chat_log_or_none(app)
+    if log is None:
+        return
+
     events = data.get("events", [])
 
     for event in events:
@@ -75,7 +87,10 @@ def handle_context_event(app: AgentZeroCLI, data: dict[str, Any]) -> None:
         app._mark_context_has_messages()
 
     category = _EVENT_CATEGORY.get(event_type, "info")
-    log = app.query_one("#chat-log", ChatLog)
+    log = _chat_log_or_none(app)
+    if log is None:
+        return
+
     sequence = data.get("sequence", -1)
 
     post_complete = app._context_run_complete
