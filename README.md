@@ -43,7 +43,7 @@ automatically without requiring `git` to be installed:
 
 ```bash
 uv tool install --python 3.11 --managed-python --upgrade \
-  "a0 @ https://github.com/agent0ai/a0-connector/archive/refs/tags/v1.5.zip"
+  "a0 @ https://github.com/agent0ai/a0-connector/archive/refs/tags/v1.6.zip"
 ```
 
 Set `A0_PYTHON_SPEC` if you need to override that interpreter request, or `A0_PACKAGE_SPEC` if you want a different package source. Advanced one-off runs with `uvx` also work, but they are intentionally not the primary install path for this project.
