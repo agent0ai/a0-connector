@@ -7,6 +7,7 @@ import pytest
 
 import agent_zero_cli.host_browser_common as host_browser_common
 import agent_zero_cli.host_browser_manager as host_browser_manager_module
+import agent_zero_cli.host_browser_session as host_browser_session_module
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.host_browser import (
     BrowserCandidate,
@@ -997,6 +998,45 @@ async def test_host_browser_manager_dispatches_open_and_screenshot_artifact(tmp_
     assert screenshot["result"]["ephemeral"] is True
     assert "host_path" not in screenshot["result"]
     assert playwright.chromium.launch_kwargs["user_data_dir"] == str(root)
+
+
+async def test_host_browser_rejects_oversized_screenshot_before_base64(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "Chrome"
+    (root / "Default").mkdir(parents=True)
+    executable = tmp_path / "chrome"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    playwright = FakePlaywright()
+    monkeypatch.setattr(host_browser_session_module, "_SCREENSHOT_ARTIFACT_MAX_BYTES", 4)
+    monkeypatch.setattr(FakePage, "screenshot", lambda self, **kwargs: _oversized_screenshot(kwargs))
+    manager = HostBrowserManager(
+        CLIConfig(
+            host_browser_enabled=True,
+            host_browser_family="chrome",
+            host_browser_profile_path=str(root),
+            host_browser_profile_label="Default",
+        ),
+        candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", str(executable), root)],
+        playwright_available=True,
+        playwright_starter=lambda: FakeStarter(playwright),
+    )
+
+    await manager.handle_op(
+        {"op_id": "op-open", "context_id": "ctx-1", "action": "open", "url": "https://example.com/"}
+    )
+    result = await manager.handle_op(
+        {"op_id": "op-shot", "context_id": "ctx-1", "action": "screenshot", "browser_id": 1}
+    )
+
+    assert result["ok"] is False
+    assert result["code"] == "HOST_BROWSER_ERROR"
+    assert "too large" in result["error"]
+
+
+async def _oversized_screenshot(_kwargs: dict[str, object]) -> bytes:
+    return b"12345"
 
 
 async def test_host_browser_manager_uses_agent_zero_supplied_content_helper(tmp_path: Path) -> None:

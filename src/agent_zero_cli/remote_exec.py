@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
 import locale
 import os
+from pathlib import Path
 import re
 import signal
 import shlex
@@ -96,6 +98,7 @@ _RESET_MESSAGE = "Terminal session has been reset."
 _PYTHON_CODE_ENV = "A0_PY_CODE"
 _NODE_CODE_ENV = "A0_NODE_CODE"
 _MARKER_PREFIX = "__A0_DONE__"
+EXEC_OUTPUT_MAX_BYTES = 256 * 1024
 
 
 @dataclass(frozen=True)
@@ -673,7 +676,57 @@ class RemoteExecManager:
         except Exception as exc:
             return {"op_id": op_id, "ok": False, "error": str(exc)}
 
+        try:
+            result = self._bound_exec_output(result, session=session)
+        except Exception as exc:
+            return {
+                "op_id": op_id,
+                "ok": False,
+                "error": f"Could not spill oversized execution output: {exc}",
+            }
         return {"op_id": op_id, "ok": True, "result": result}
+
+    def _bound_exec_output(
+        self,
+        result: dict[str, Any],
+        *,
+        session: int,
+    ) -> dict[str, Any]:
+        output = str(result.get("output") or "")
+        encoded = output.encode("utf-8")
+        if len(encoded) <= EXEC_OUTPUT_MAX_BYTES:
+            return result
+
+        output_path = Path(self.cwd) / (
+            f"a0-exec-output-{session}-{uuid.uuid4().hex[:12]}.log"
+        )
+        temp_path = output_path.with_name(f".{output_path.name}.partial-{uuid.uuid4().hex}")
+        try:
+            with temp_path.open("xb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, output_path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                temp_path.unlink()
+
+        notice = (
+            f"[Output truncated to the final bytes. Full output: {output_path}]\n"
+        )
+        budget = EXEC_OUTPUT_MAX_BYTES - len(notice.encode("utf-8"))
+        tail = encoded[-budget:].decode("utf-8", errors="ignore")
+        bounded = dict(result)
+        bounded.update(
+            {
+                "output": notice + tail,
+                "output_truncated": True,
+                "output_total_bytes": len(encoded),
+                "output_file": str(output_path),
+                "output_sha256": hashlib.sha256(encoded).hexdigest(),
+            }
+        )
+        return bounded
 
     async def execute_terminal(
         self,
@@ -957,11 +1010,8 @@ class RemoteExecManager:
         if not lines:
             return ""
 
-        last_line = lines[-1].strip()
-        for pattern in patterns:
-            if pattern.search(last_line):
-                lines = lines[:-1]
-                break
+        if self._detect_prompt(lines[-1], patterns):
+            lines = lines[:-1]
         return "\n".join(lines).strip()
 
 

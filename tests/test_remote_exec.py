@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import shlex
 import sys
@@ -41,6 +42,12 @@ class FakeShellSession:
 
         if command == "osc":
             self._full_output = "\x1b]8;;https://example.test\x07link\x1b]8;;\x07\r\n"
+            self._partial_output = self._full_output
+            self.command_completed = True
+            return
+
+        if command == "large":
+            self._full_output = "prefix\n" + "x" * (remote_exec.EXEC_OUTPUT_MAX_BYTES + 4096)
             self._partial_output = self._full_output
             self.command_completed = True
             return
@@ -112,6 +119,34 @@ def _manager(tmp_path: Path, *, enabled: bool = True) -> RemoteExecManager:
     return RemoteExecManager(cwd=str(tmp_path), enabled=enabled, poll_interval=0.01)
 
 
+@pytest.mark.parametrize(
+    "size",
+    [
+        0,
+        1,
+        remote_exec.EXEC_OUTPUT_MAX_BYTES - 1,
+        remote_exec.EXEC_OUTPUT_MAX_BYTES,
+        remote_exec.EXEC_OUTPUT_MAX_BYTES + 1,
+    ],
+)
+def test_exec_output_boundary_matrix(tmp_path: Path, size: int) -> None:
+    manager = _manager(tmp_path)
+    output = "x" * size
+
+    result = manager._bound_exec_output({"output": output}, session=7)
+
+    if size <= remote_exec.EXEC_OUTPUT_MAX_BYTES:
+        assert result == {"output": output}
+        assert list(tmp_path.glob("a0-exec-output-*.log")) == []
+    else:
+        output_file = Path(result["output_file"])
+        assert result["output_truncated"] is True
+        assert len(result["output"].encode("utf-8")) <= remote_exec.EXEC_OUTPUT_MAX_BYTES
+        assert result["output_total_bytes"] == size
+        assert result["output_sha256"] == hashlib.sha256(output.encode()).hexdigest()
+        assert output_file.read_text(encoding="utf-8") == output
+
+
 def test_default_timeout_config_matches_core_code_execution(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
 
@@ -170,6 +205,40 @@ async def test_remote_exec_strips_osc_terminal_sequences(
     assert result["ok"] is True
     assert result["result"]["output"] == "link"
     assert created_shells[0].commands == ["osc"]
+
+    await manager.close()
+
+
+async def test_remote_exec_spills_oversized_output_and_returns_bounded_tail(
+    tmp_path: Path,
+    created_shells: list[FakeShellSession],
+) -> None:
+    manager = _manager(tmp_path)
+
+    result = await manager.handle_exec_op(
+        {
+            "op_id": "exec-large",
+            "runtime": "terminal",
+            "session": 7,
+            "code": "large",
+        }
+    )
+
+    assert result["ok"] is True
+    output = result["result"]["output"]
+    output_path = Path(result["result"]["output_file"])
+    full_output = created_shells[0]._full_output
+    assert len(output.encode("utf-8")) <= remote_exec.EXEC_OUTPUT_MAX_BYTES
+    assert output.startswith("[Output truncated to the final bytes. Full output: ")
+    assert output.endswith("x" * 1024)
+    assert result["result"]["output_truncated"] is True
+    assert result["result"]["output_total_bytes"] == len(full_output.encode("utf-8"))
+    assert result["result"]["output_sha256"] == hashlib.sha256(
+        full_output.encode("utf-8")
+    ).hexdigest()
+    assert output_path.parent == tmp_path
+    assert output_path.read_text(encoding="utf-8") == full_output
+    assert list(tmp_path.glob(".*.partial-*")) == []
 
     await manager.close()
 

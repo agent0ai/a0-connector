@@ -36,6 +36,7 @@ _DEBUG_LOG_ENV = "A0_COMPUTER_USE_DEBUG_LOG"
 _DEFAULT_CONTAINER_ARTIFACT_ROOT = "/a0/tmp/_a0_connector/computer_use"
 _HELPER_PROTOCOL_NOISE_MAX_LINES = 8
 _HELPER_STDIO_LIMIT = 32 * 1024 * 1024
+_CAPTURE_ARTIFACT_MAX_BYTES = 25 * 1024 * 1024
 _HELPER_DEFAULT_RESPONSE_TIMEOUT_SECONDS = 30.0
 _HELPER_RESPONSE_GRACE_SECONDS = 8.0
 _HELPER_CLOSE_DRAIN_TIMEOUT_SECONDS = 1.0
@@ -169,9 +170,22 @@ def _capture_artifact_from_path(path: str) -> dict[str, str] | None:
     if not capture_path.is_file():
         return None
     try:
+        source_size = capture_path.stat().st_size
+        if source_size > _CAPTURE_ARTIFACT_MAX_BYTES:
+            raise ValueError(
+                "Computer Use capture is too large to return inline "
+                f"({source_size} bytes, limit {_CAPTURE_ARTIFACT_MAX_BYTES} bytes). "
+                "Use the saved host file through the HTTP bulk-transfer path."
+            )
         payload = capture_path.read_bytes()
     except OSError:
         return None
+    if len(payload) > _CAPTURE_ARTIFACT_MAX_BYTES:
+        raise ValueError(
+            "Computer Use capture grew beyond the inline limit while being read "
+            f"({len(payload)} bytes, limit {_CAPTURE_ARTIFACT_MAX_BYTES} bytes). "
+            "Use the saved host file through the HTTP bulk-transfer path."
+        )
     return {
         "filename": capture_path.name,
         "mime": "image/png",
@@ -1059,6 +1073,8 @@ class ComputerUseManager:
             request = self._normalize_action_payload(action, payload, context_id=context_id)
             return await self._dispatch_session_action(op_id, session, request)
         except ValueError as exc:
+            if action == "capture":
+                self._prune_capture_artifacts()
             self._set_status("error", error=str(exc))
             return self._error(op_id, "BAD_REQUEST", message=str(exc))
 

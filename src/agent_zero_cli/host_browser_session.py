@@ -31,6 +31,9 @@ from agent_zero_cli.host_browser_common import (
     screenshot_output_path,
 )
 
+_SCREENSHOT_ARTIFACT_MAX_BYTES = 25 * 1024 * 1024
+
+
 @dataclass
 class HostBrowserPage:
     id: int
@@ -969,7 +972,20 @@ class HostBrowserSession:
             kwargs["quality"] = max(20, min(95, int(quality)))
         image = await page.screenshot(**kwargs)
         if not image and raw_path:
+            source_size = output_path.stat().st_size
+            if source_size > _SCREENSHOT_ARTIFACT_MAX_BYTES:
+                raise ValueError(
+                    "Host-browser screenshot is too large to return inline "
+                    f"({source_size} bytes, limit {_SCREENSHOT_ARTIFACT_MAX_BYTES} bytes). "
+                    "Use the saved host file through the HTTP bulk-transfer path."
+                )
             image = output_path.read_bytes()
+        if len(image) > _SCREENSHOT_ARTIFACT_MAX_BYTES:
+            raise ValueError(
+                "Host-browser screenshot is too large to return inline "
+                f"({len(image)} bytes, limit {_SCREENSHOT_ARTIFACT_MAX_BYTES} bytes). "
+                "Use the saved host file through the HTTP bulk-transfer path."
+            )
         result = {
             "browser_id": resolved_id,
             "mime": mime,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from fnmatch import fnmatch
@@ -18,6 +19,45 @@ _DEFAULT_IGNORE_PATTERNS = (
     ".venv/",
     "venv/",
 )
+
+REMOTE_FILE_TEXT_MAX_BYTES = 256 * 1024
+REMOTE_FILE_READ_MAX_LINES = 2000
+_BINARY_SNIFF_BYTES = 8192
+_FILE_READ_BLOCK_BYTES = 64 * 1024
+_MAX_DECODE_ERROR_RATIO = 0.01
+
+
+def _atomic_write_text(path: str, content: str) -> None:
+    directory = os.path.dirname(path) or "."
+    fd, temp_path = tempfile.mkstemp(prefix=".partial-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        try:
+            directory_fd = os.open(directory, os.O_RDONLY)
+        except OSError:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+
+
+def _bounded_utf8(value: str, available_bytes: int) -> tuple[str, int, bool]:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= available_bytes:
+        return value, len(encoded), False
+    clipped = encoded[:available_bytes].decode("utf-8", errors="ignore")
+    return clipped, len(clipped.encode("utf-8")), True
 
 
 @dataclass(frozen=True)
@@ -154,42 +194,139 @@ class RemoteFileUtility:
         }
 
     def _file_op_read(self, op_id: str, path: str, data: dict[str, Any]) -> dict[str, Any]:
-        line_from = data.get("line_from")
-        line_to = data.get("line_to")
         target_path = self._expand_file_path(path)
 
         if not os.path.isfile(target_path):
             return {"op_id": op_id, "ok": False, "error": f"File not found: {path}"}
 
-        with open(target_path, "r", encoding="utf-8", errors="replace") as handle:
-            lines = handle.readlines()
+        total_newlines = 0
+        total_bytes = 0
+        last_byte = b""
+        with open(target_path, "rb") as handle:
+            chunk = handle.read(_FILE_READ_BLOCK_BYTES)
+            sample = chunk[:_BINARY_SNIFF_BYTES]
+            decoded_sample = sample.decode("utf-8", errors="replace")
+            decode_error_ratio = decoded_sample.count("\ufffd") / max(len(sample), 1)
+            if b"\x00" in sample or decode_error_ratio > _MAX_DECODE_ERROR_RATIO:
+                return {
+                    "op_id": op_id,
+                    "ok": False,
+                    "code": "BINARY_FILE",
+                    "error": (
+                        "Remote text read rejected a binary-looking file. "
+                        "Use the authenticated HTTP bulk transfer path instead."
+                    ),
+                    "details": {
+                        "type": "binary_file",
+                        "alternative": "http_bulk_transfer",
+                        "sample_bytes": len(sample),
+                        "decode_error_ratio": decode_error_ratio,
+                    },
+                }
+            while chunk:
+                total_newlines += chunk.count(b"\n")
+                total_bytes += len(chunk)
+                last_byte = chunk[-1:]
+                chunk = handle.read(_FILE_READ_BLOCK_BYTES)
 
-        total = len(lines)
-        start = (line_from - 1) if line_from and line_from > 0 else 0
-        end = line_to if line_to and line_to <= total else total
-        selected = lines[start:end]
+        total = total_newlines + (1 if total_bytes and last_byte != b"\n" else 0)
+        line_from = int(data.get("line_from") or 1)
+        line_to_value = data.get("line_to")
+        line_to = int(line_to_value) if line_to_value else total
+        if line_from < 1:
+            raise ValueError("line_from must be >= 1")
+        if line_to < line_from and total:
+            raise ValueError("line_to must be >= line_from")
+        end = min(line_to, total)
 
-        content = "".join(f"{index:>4} | {line}" for index, line in enumerate(selected, start=start + 1))
+        content_parts: list[str] = []
+        content_bytes = 0
+        current_line = 1
+        selected_lines = 0
+        last_selected_line = 0
+        line_started = True
+        truncation_reason = ""
+        next_line: int | None = None
+
+        with open(
+            target_path,
+            "r",
+            encoding="utf-8",
+            errors="replace",
+            newline="",
+        ) as handle:
+            while current_line <= end:
+                piece = handle.readline(_FILE_READ_BLOCK_BYTES)
+                if not piece:
+                    break
+                line_ended = piece.endswith("\n")
+
+                if current_line >= line_from:
+                    prefix = ""
+                    if line_started:
+                        if selected_lines >= REMOTE_FILE_READ_MAX_LINES:
+                            truncation_reason = "max_lines"
+                            next_line = current_line
+                            break
+                        prefix = f"{current_line:>4} | "
+                        selected_lines += 1
+                        last_selected_line = current_line
+                        line_started = False
+
+                    bounded, used, clipped = _bounded_utf8(
+                        prefix + piece,
+                        REMOTE_FILE_TEXT_MAX_BYTES - content_bytes,
+                    )
+                    content_parts.append(bounded)
+                    content_bytes += used
+                    if clipped:
+                        truncation_reason = "max_bytes"
+                        next_line = current_line + 1
+                        break
+
+                if line_ended:
+                    current_line += 1
+                    line_started = True
+
+                if content_bytes >= REMOTE_FILE_TEXT_MAX_BYTES:
+                    if not line_ended or current_line <= end:
+                        truncation_reason = "max_bytes"
+                        next_line = current_line + (0 if line_ended else 1)
+                    break
+
         file_meta = self._file_metadata(target_path, total_lines=total)
-
-        return {
+        result: dict[str, Any] = {
             "op_id": op_id,
             "ok": True,
             "result": {
-                "content": content,
+                "content": "".join(content_parts),
                 "total_lines": total,
-                "line_from": start + 1,
-                "line_to": end,
+                "line_from": line_from,
+                "line_to": last_selected_line or end,
+                "truncated": bool(truncation_reason),
+                "limits": {
+                    "max_lines": REMOTE_FILE_READ_MAX_LINES,
+                    "max_bytes": REMOTE_FILE_TEXT_MAX_BYTES,
+                },
                 "file": file_meta,
             },
         }
+        if truncation_reason:
+            result["result"]["truncation"] = {
+                "reason": truncation_reason,
+                "next_line": next_line,
+                "alternative": "http_bulk_transfer",
+            }
+        return result
 
     def _file_op_write(self, op_id: str, path: str, data: dict[str, Any]) -> dict[str, Any]:
         content = str(data.get("content", ""))
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > REMOTE_FILE_TEXT_MAX_BYTES:
+            return self._file_op_too_large(op_id, content_bytes)
         target_path = self._expand_file_path(path)
         os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
-        with open(target_path, "w", encoding="utf-8") as handle:
-            handle.write(content)
+        _atomic_write_text(target_path, content)
         file_meta = self._file_metadata(
             target_path,
             total_lines=self._count_content_lines(content),
@@ -205,6 +342,9 @@ class RemoteFileUtility:
         }
 
     def _file_op_patch(self, op_id: str, path: str, data: dict[str, Any]) -> dict[str, Any]:
+        patch_bytes = self._patch_payload_bytes(data)
+        if patch_bytes > REMOTE_FILE_TEXT_MAX_BYTES:
+            return self._file_op_too_large(op_id, patch_bytes)
         if data.get("patch_text") is not None:
             return self._file_op_context_patch(op_id, path, data)
 
@@ -250,6 +390,35 @@ class RemoteFileUtility:
                 "path": path,
                 "message": f"{path} patched successfully",
                 "file": file_meta,
+            },
+        }
+
+    def _patch_payload_bytes(self, data: dict[str, Any]) -> int:
+        if data.get("patch_text") is not None:
+            return len(str(data["patch_text"]).encode("utf-8"))
+        edits = data.get("edits")
+        if not isinstance(edits, list):
+            return 0
+        return sum(
+            len(str(edit.get("content")).encode("utf-8"))
+            for edit in edits
+            if isinstance(edit, dict) and edit.get("content") is not None
+        )
+
+    def _file_op_too_large(self, op_id: str, actual_bytes: int) -> dict[str, Any]:
+        return {
+            "op_id": op_id,
+            "ok": False,
+            "code": "PAYLOAD_TOO_LARGE",
+            "error": (
+                f"Remote text writes are limited to {REMOTE_FILE_TEXT_MAX_BYTES} bytes; "
+                f"received {actual_bytes}. Use the authenticated HTTP bulk transfer path."
+            ),
+            "details": {
+                "type": "payload_too_large",
+                "actual_bytes": actual_bytes,
+                "limit_bytes": REMOTE_FILE_TEXT_MAX_BYTES,
+                "alternative": "http_bulk_transfer",
             },
         }
 
