@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import importlib
 import json
 import os
@@ -98,6 +99,7 @@ def _install_fake_helpers(
     state_monitor_mod = types.ModuleType("helpers.state_monitor_integration")
     tool_mod = types.ModuleType("helpers.tool")
     ws_mod = types.ModuleType("helpers.ws")
+    ws_limits_mod = types.ModuleType("helpers.ws_limits")
     ws_manager_mod = types.ModuleType("helpers.ws_manager")
 
     class ApiHandler:
@@ -152,13 +154,42 @@ def _install_fake_helpers(
             self.method = method
             self.name = name or self.__class__.__name__.lower()
 
+    class HandlerWsManager:
+        def set_peer_max_payload_bytes(
+            self,
+            namespace: str,
+            sid: str,
+            max_payload_bytes: int,
+        ) -> None:
+            del namespace, sid, max_payload_bytes
+
     class WsHandler:
-        def __init__(self, app=None, thread_lock=None) -> None:
+        def __init__(
+            self,
+            app=None,
+            thread_lock=None,
+            *,
+            manager=None,
+            namespace: str = "/ws",
+        ) -> None:
             self.app = app
             self.thread_lock = thread_lock
+            self._manager = manager or HandlerWsManager()
+            self._namespace = namespace
 
-        async def emit_to(self, sid: str, event: str, payload: dict, correlation_id: str | None = None) -> None:
-            del sid, event, payload, correlation_id
+        @property
+        def manager(self):
+            return self._manager
+
+        async def emit_to(
+            self,
+            sid: str,
+            event: str,
+            payload: dict,
+            correlation_id: str | None = None,
+            max_payload_bytes: int | None = None,
+        ) -> None:
+            del sid, event, payload, correlation_id, max_payload_bytes
             return None
 
     class WsResult(dict):
@@ -184,9 +215,33 @@ def _install_fake_helpers(
     class ConnectionNotFoundError(Exception):
         pass
 
+    class WsPayloadTooLargeError(ValueError):
+        def __init__(self, event_type: str, actual_bytes: int, limit_bytes: int) -> None:
+            self.event_type = event_type
+            self.actual_bytes = actual_bytes
+            self.limit_bytes = limit_bytes
+            super().__init__("PAYLOAD_TOO_LARGE")
+
+        def details(self) -> dict[str, object]:
+            return {
+                "type": "payload_too_large",
+                "event": self.event_type,
+                "actual_bytes": self.actual_bytes,
+                "limit_bytes": self.limit_bytes,
+                "alternative": "http_bulk_transfer",
+            }
+
     class SharedWsManager:
-        async def emit_to(self, namespace: str, sid: str, event: str, payload: dict, handler_id: str | None = None) -> None:
-            del namespace, sid, event, payload, handler_id
+        async def emit_to(
+            self,
+            namespace: str,
+            sid: str,
+            event: str,
+            payload: dict,
+            handler_id: str | None = None,
+            max_payload_bytes: int | None = None,
+        ) -> None:
+            del namespace, sid, event, payload, handler_id, max_payload_bytes
             return None
 
     def raw_message(*, raw_content, preview=None):
@@ -371,7 +426,15 @@ def _install_fake_helpers(
     tool_mod.Tool = Tool
     ws_mod.NAMESPACE = "/ws"
     ws_mod.WsHandler = WsHandler
+    ws_limits_mod.A0_WS_MAX_PAYLOAD_BYTES = 50 * 1024 * 1024
+    ws_limits_mod.LEGACY_WS_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
+    ws_limits_mod.peer_ws_max_payload_bytes = lambda value: (
+        min(int(value), 50 * 1024 * 1024)
+        if isinstance(value, int) and value > 0
+        else 4 * 1024 * 1024
+    )
     ws_manager_mod.ConnectionNotFoundError = ConnectionNotFoundError
+    ws_manager_mod.WsPayloadTooLargeError = WsPayloadTooLargeError
     ws_manager_mod.WsResult = WsResult
     ws_manager_mod.get_shared_ws_manager = lambda: (
         shared_ws_manager if shared_ws_manager is not None else SharedWsManager()
@@ -390,6 +453,7 @@ def _install_fake_helpers(
     sys.modules["helpers.print_style"] = print_style_mod
     sys.modules["helpers.tool"] = tool_mod
     sys.modules["helpers.ws"] = ws_mod
+    sys.modules["helpers.ws_limits"] = ws_limits_mod
     sys.modules["helpers.ws_manager"] = ws_manager_mod
     helpers_pkg.git = git_mod
 
@@ -437,6 +501,7 @@ def _install_fake_helpers(
     helpers_pkg.print_style = print_style_mod
     helpers_pkg.tool = tool_mod
     helpers_pkg.ws = ws_mod
+    helpers_pkg.ws_limits = ws_limits_mod
     helpers_pkg.ws_manager = ws_manager_mod
 
     plugins_pkg._model_config = sys.modules["plugins._model_config"]
@@ -451,15 +516,29 @@ def _reload(module_name: str):
 
 def _reset_ws_runtime_state(ws_runtime_mod) -> None:
     with ws_runtime_mod._state_lock:
+        for transfer in ws_runtime_mod._incoming_transfers.values():
+            if transfer.timeout is not None:
+                transfer.timeout.cancel()
+            if transfer.temp_path is not None:
+                transfer.temp_path.unlink(missing_ok=True)
+        ws_runtime_mod._incoming_transfers.clear()
+        ws_runtime_mod._outgoing_transfers.clear()
         ws_runtime_mod._context_subscriptions.clear()
         ws_runtime_mod._sid_contexts.clear()
         ws_runtime_mod._pending_file_ops.clear()
         ws_runtime_mod._pending_exec_ops.clear()
         ws_runtime_mod._pending_computer_use_ops.clear()
+        ws_runtime_mod._pending_browser_ops.clear()
+        ws_runtime_mod._pending_gateway_controls.clear()
         ws_runtime_mod._remote_tree_snapshots.clear()
         ws_runtime_mod._sid_computer_use_metadata.clear()
+        ws_runtime_mod._sid_host_browser_metadata.clear()
         ws_runtime_mod._sid_remote_file_metadata.clear()
         ws_runtime_mod._sid_remote_exec_metadata.clear()
+        ws_runtime_mod._sid_launcher_gateway_metadata.clear()
+        ws_runtime_mod._sid_ws_max_payload_bytes.clear()
+        ws_runtime_mod._sid_transfer_protocol.clear()
+        ws_runtime_mod._replaced_gateway_sids.clear()
 
 
 class _FakeCliWsManager:
@@ -475,8 +554,9 @@ class _FakeCliWsManager:
         event: str,
         payload: dict,
         handler_id: str | None = None,
+        max_payload_bytes: int | None = None,
     ) -> None:
-        del namespace, event, handler_id
+        del namespace, event, handler_id, max_payload_bytes
         self.calls.append({"sid": sid, "payload": dict(payload)})
 
         result = self.file_op_handler(dict(payload))
@@ -512,8 +592,9 @@ class _FakeExecWsManager:
         event: str,
         payload: dict,
         handler_id: str | None = None,
+        max_payload_bytes: int | None = None,
     ) -> None:
-        del namespace, event, handler_id
+        del namespace, event, handler_id, max_payload_bytes
         self.calls.append({"sid": sid, "payload": dict(payload)})
 
         result = self.exec_handler(dict(payload))
@@ -541,8 +622,9 @@ class _FakeComputerUseWsManager:
         event: str,
         payload: dict,
         handler_id: str | None = None,
+        max_payload_bytes: int | None = None,
     ) -> None:
-        del namespace, event, handler_id
+        del namespace, event, handler_id, max_payload_bytes
         self.calls.append({"sid": sid, "payload": dict(payload)})
 
         result = self.computer_use_handler(dict(payload))
@@ -659,7 +741,7 @@ def _register_remote_file_cli(
     )
 
 
-def test_ws_runtime_reassembles_chunked_file_op_results() -> None:
+def test_ws_runtime_reassembles_versioned_file_result_transfer() -> None:
     _install_fake_helpers()
     ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
     _reset_ws_runtime_state(ws_runtime_mod)
@@ -667,16 +749,15 @@ def test_ws_runtime_reassembles_chunked_file_op_results() -> None:
     async def run_scenario() -> None:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, object]] = loop.create_future()
-        result = {
+        result: dict[str, object] = {
             "op_id": "op-large",
             "ok": True,
             "result": {
-                "content": "0123456789abcdef\n" * 5000,
-                "total_lines": 5000,
+                "content": "x" * (2 * 1024 * 1024),
+                "total_lines": 1,
             },
         }
         raw = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        chunks = [raw[index : index + 4096] for index in range(0, len(raw), 4096)]
         ws_runtime_mod.store_pending_file_op(
             "op-large",
             sid="sid-cli",
@@ -684,24 +765,38 @@ def test_ws_runtime_reassembles_chunked_file_op_results() -> None:
             loop=loop,
             context_id="ctx-1",
         )
-
-        for chunk_index in [1, 0, *range(2, len(chunks))]:
-            accepted = ws_runtime_mod.resolve_pending_file_op(
-                "op-large",
-                sid="sid-cli",
-                payload={
-                    "op_id": "op-large",
-                    "chunked": True,
-                    "chunk_index": chunk_index,
-                    "chunk_count": len(chunks),
-                    "encoding": "json+base64",
-                    "data": base64.b64encode(chunks[chunk_index]).decode("ascii"),
+        transfer_id = "transfer-large"
+        assert ws_runtime_mod.start_incoming_transfer(
+            "sid-cli",
+            {
+                "transfer_id": transfer_id,
+                "op_id": "op-large",
+                "kind": "connector_file_op_result",
+                "total_bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            },
+            max_bytes=50 * 1024 * 1024,
+        ) == ""
+        assert ws_runtime_mod._incoming_transfers[transfer_id].temp_path is not None
+        for index, offset in enumerate(range(0, len(raw), ws_runtime_mod.TRANSFER_CHUNK_BYTES)):
+            chunk = raw[offset : offset + ws_runtime_mod.TRANSFER_CHUNK_BYTES]
+            assert ws_runtime_mod.append_incoming_transfer(
+                "sid-cli",
+                {
+                    "transfer_id": transfer_id,
+                    "index": index,
+                    "data": base64.b64encode(chunk).decode("ascii"),
                 },
-            )
-            assert accepted is True
-            if chunk_index != len(chunks) - 1:
-                assert not future.done()
-
+            ) == ""
+        kind, assembled, error = ws_runtime_mod.finish_incoming_transfer(
+            "sid-cli",
+            {"transfer_id": transfer_id},
+        )
+        assert (kind, error) == ("connector_file_op_result", "")
+        assert assembled == result
+        assert ws_runtime_mod.resolve_pending_file_op(
+            "op-large", sid="sid-cli", payload=assembled
+        ) is True
         assert await asyncio.wait_for(future, timeout=1.0) == result
 
     asyncio.run(run_scenario())
@@ -797,6 +892,10 @@ def test_capabilities_advertise_current_ws_contract() -> None:
     assert payload["auth_required"] is False
     assert payload["websocket_namespace"] == "/ws"
     assert payload["websocket_handlers"] == ["plugins/_a0_connector/ws_connector"]
+    assert payload["capabilities"] == {
+        "ws_max_payload_bytes": 50 * 1024 * 1024,
+        "transfer_protocol": 1,
+    }
     assert {
         "pause",
         "nudge",
@@ -1443,10 +1542,20 @@ def test_ws_connector_hello_advertises_remote_exec_and_tree_features() -> None:
     )
     ws_connector_mod = _reload("plugins._a0_connector.api.ws_connector")
 
-    payload = asyncio.run(ws_connector_mod.WsConnector(None, None).process("connector_hello", {}, "sid-1"))
+    payload = asyncio.run(
+        ws_connector_mod.WsConnector(None, None).process(
+            "connector_hello",
+            {"capabilities": {"ws_max_payload_bytes": 16 * 1024 * 1024}},
+            "sid-1",
+        )
+    )
 
     assert payload["protocol"] == "a0-connector.v1"
     assert payload["agent_zero_version"] == "v1.18"
+    assert payload["capabilities"] == {
+        "ws_max_payload_bytes": 50 * 1024 * 1024,
+        "transfer_protocol": 1,
+    }
     assert "remote_file_tree" in payload["features"]
     assert "message_queue" in payload["features"]
     assert "code_execution_remote" in payload["features"]
@@ -1456,6 +1565,8 @@ def test_ws_connector_hello_advertises_remote_exec_and_tree_features() -> None:
     assert payload["exec_config"]["output_timeouts"]["max_exec_timeout"] == 120
     assert payload["exec_config"]["prompt_patterns"] == ["PS .+> ?$"]
     assert payload["exec_config"]["dialog_patterns"] == ["yes/no"]
+    ws_runtime_mod = importlib.import_module("plugins._a0_connector.helpers.ws_runtime")
+    assert ws_runtime_mod.ws_max_payload_bytes_for_sid("sid-1") == 16 * 1024 * 1024
 
 
 def test_plugin_root_resolution_prefers_a0_connector_plugin_root_env(
@@ -2231,7 +2342,7 @@ def test_select_remote_file_target_sid_requires_write_enabled_for_writes() -> No
     )
 
 
-def test_ws_connector_chunked_file_result_resolves_pending_future() -> None:
+def test_ws_connector_reassembles_32_mib_transfer_into_pending_file_future() -> None:
     _install_fake_helpers()
     ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
     _reset_ws_runtime_state(ws_runtime_mod)
@@ -2245,10 +2356,10 @@ def test_ws_connector_chunked_file_result_resolves_pending_future() -> None:
         result = {
             "op_id": "file-1",
             "ok": True,
-            "result": {"content": "large\n" * 5000, "total_lines": 5000},
+            "result": {"content": "x" * (32 * 1024 * 1024), "total_lines": 1},
         }
         raw = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        chunks = [raw[index : index + 4096] for index in range(0, len(raw), 4096)]
+        transfer_id = "file-transfer"
 
         ws_runtime_mod.register_sid(sid)
         ws_runtime_mod.store_pending_file_op(
@@ -2258,24 +2369,445 @@ def test_ws_connector_chunked_file_result_resolves_pending_future() -> None:
             loop=loop,
             context_id="ctx-1",
         )
-
-        for chunk_index, chunk in enumerate(chunks):
-            response = handler._handle_file_op_result(
+        response = await handler.process(
+            "connector_transfer_start",
+            {
+                "transfer_id": transfer_id,
+                "op_id": "file-1",
+                "kind": "connector_file_op_result",
+                "total_bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            },
+            sid,
+        )
+        assert response == {"transfer_id": transfer_id, "accepted": True}
+        for index, offset in enumerate(range(0, len(raw), ws_runtime_mod.TRANSFER_CHUNK_BYTES)):
+            chunk = raw[offset : offset + ws_runtime_mod.TRANSFER_CHUNK_BYTES]
+            response = await handler.process(
+                "connector_transfer_chunk",
                 {
-                    "op_id": "file-1",
-                    "chunked": True,
-                    "chunk_index": chunk_index,
-                    "chunk_count": len(chunks),
-                    "encoding": "json+base64",
+                    "transfer_id": transfer_id,
+                    "index": index,
                     "data": base64.b64encode(chunk).decode("ascii"),
                 },
                 sid,
             )
-            assert response == {"op_id": "file-1", "accepted": True}
-            if chunk_index != len(chunks) - 1:
-                assert not future.done()
+            assert response == {"transfer_id": transfer_id, "accepted": True}
+            assert not future.done()
+        response = await handler.process(
+            "connector_transfer_end",
+            {"transfer_id": transfer_id},
+            sid,
+        )
 
+        assert response == {
+            "transfer_id": transfer_id,
+            "accepted": True,
+            "kind": "connector_file_op_result",
+        }
         assert await asyncio.wait_for(future, timeout=0.25) == result
+
+    asyncio.run(_scenario())
+
+
+def test_core_sends_32_mib_request_as_transfer_frames() -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+
+    class RecordingManager:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        async def emit_to(
+            self,
+            namespace: str,
+            sid: str,
+            event: str,
+            payload: dict[str, object],
+            **kwargs: object,
+        ) -> None:
+            del namespace, sid, kwargs
+            self.calls.append((event, payload))
+
+    async def _scenario() -> None:
+        sid = "sid-transfer-v1"
+        manager = RecordingManager()
+        payload = {
+            "op_id": "browser-32",
+            "action": "synthetic_transfer_test",
+            "padding": "x" * (32 * 1024 * 1024),
+        }
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ws_runtime_mod.register_sid(sid)
+        ws_runtime_mod.store_sid_connector_capabilities(
+            sid,
+            {
+                "ws_max_payload_bytes": 50 * 1024 * 1024,
+                "transfer_protocol": ws_runtime_mod.TRANSFER_PROTOCOL_VERSION,
+            },
+        )
+
+        await ws_runtime_mod.emit_connector_event(
+            sid,
+            "connector_browser_op",
+            payload,
+            handler_id="plugins/_a0_connector/ws_connector",
+            manager=manager,
+        )
+
+        assert manager.calls[0][0] == "connector_transfer_start"
+        assert manager.calls[-1][0] == "connector_transfer_end"
+        start = manager.calls[0][1]
+        chunks = [frame for event, frame in manager.calls if event == "connector_transfer_chunk"]
+        assert start["kind"] == "connector_browser_op"
+        assert start["total_bytes"] == len(raw)
+        assert [chunk["index"] for chunk in chunks] == list(range(len(chunks)))
+        assembled = b"".join(
+            base64.b64decode(str(chunk["data"]).encode("ascii")) for chunk in chunks
+        )
+        assert assembled == raw
+        assert start["sha256"] == hashlib.sha256(assembled).hexdigest()
+        assert sid in ws_runtime_mod._sid_contexts
+
+    asyncio.run(_scenario())
+
+
+@pytest.mark.parametrize("fault", ["corrupt_hash", "short_chunk", "oversized"])
+def test_core_rejects_faulty_transfer_without_disconnect(fault: str) -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+    ws_connector_mod = _reload("plugins._a0_connector.api.ws_connector")
+    handler = ws_connector_mod.WsConnector(None, None)
+
+    async def _scenario() -> None:
+        sid = f"sid-{fault}"
+        op_id = f"file-{fault}"
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        payload = {"op_id": op_id, "ok": True, "result": {"content": "payload"}}
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        total_bytes = len(raw) + (1 if fault == "short_chunk" else 0)
+        if fault == "oversized":
+            total_bytes = 50 * 1024 * 1024 + 1
+        digest = "0" * 64 if fault == "corrupt_hash" else hashlib.sha256(raw).hexdigest()
+        transfer_id = f"transfer-{fault}"
+        ws_runtime_mod.register_sid(sid)
+        ws_runtime_mod.store_pending_file_op(
+            op_id,
+            sid=sid,
+            future=future,
+            loop=loop,
+            context_id="ctx-1",
+        )
+
+        response = await handler.process(
+            "connector_transfer_start",
+            {
+                "transfer_id": transfer_id,
+                "op_id": op_id,
+                "kind": "connector_file_op_result",
+                "total_bytes": total_bytes,
+                "sha256": digest,
+            },
+            sid,
+        )
+        if fault != "oversized":
+            assert response["accepted"] is True
+            response = await handler.process(
+                "connector_transfer_chunk",
+                {
+                    "transfer_id": transfer_id,
+                    "index": 0,
+                    "data": base64.b64encode(raw).decode("ascii"),
+                },
+                sid,
+            )
+            if fault == "corrupt_hash":
+                assert response["accepted"] is True
+                response = await handler.process(
+                    "connector_transfer_end",
+                    {"transfer_id": transfer_id},
+                    sid,
+                )
+
+        assert response["accepted"] is False
+        assert response["error"]
+        result = await asyncio.wait_for(future, timeout=0.25)
+        assert result["ok"] is False
+        assert result["error"]
+        assert transfer_id not in ws_runtime_mod._incoming_transfers
+        assert sid in ws_runtime_mod._sid_contexts
+
+    asyncio.run(_scenario())
+
+
+def test_core_transfer_concurrency_cap_and_idle_cleanup() -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+    sid = "sid-idle"
+    ws_runtime_mod.register_sid(sid)
+    empty_digest = hashlib.sha256(b"").hexdigest()
+    for index in range(ws_runtime_mod.MAX_INCOMING_TRANSFERS_PER_SID):
+        error = ws_runtime_mod.start_incoming_transfer(
+            sid,
+            {
+                "transfer_id": f"idle-{index}",
+                "op_id": f"file-{index}",
+                "kind": "connector_file_op_result",
+                "total_bytes": 0,
+                "sha256": empty_digest,
+            },
+            max_bytes=50 * 1024 * 1024,
+        )
+        assert error == ""
+    assert (
+        ws_runtime_mod.start_incoming_transfer(
+            sid,
+            {
+                "transfer_id": "too-many",
+                "op_id": "file-too-many",
+                "kind": "connector_file_op_result",
+                "total_bytes": 0,
+                "sha256": empty_digest,
+            },
+            max_bytes=50 * 1024 * 1024,
+        )
+        == "too many concurrent transfers"
+    )
+
+    with ws_runtime_mod._state_lock:
+        for transfer in ws_runtime_mod._incoming_transfers.values():
+            transfer.updated_at -= ws_runtime_mod.TRANSFER_IDLE_TIMEOUT_SECONDS + 1
+    for index in range(ws_runtime_mod.MAX_INCOMING_TRANSFERS_PER_SID):
+        ws_runtime_mod._expire_incoming_transfer(f"idle-{index}")
+
+    assert ws_runtime_mod._incoming_transfers == {}
+    assert sid in ws_runtime_mod._sid_contexts
+
+
+def test_core_context_cancellation_aborts_both_directions_and_frees_spool() -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+
+    class BlockingManager:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def emit_to(
+            self,
+            namespace: str,
+            sid: str,
+            event: str,
+            payload: dict[str, object],
+            **kwargs: object,
+        ) -> None:
+            del namespace, sid, kwargs
+            self.calls.append((event, payload))
+            if event == "connector_transfer_start":
+                self.started.set()
+                await self.release.wait()
+
+    async def _scenario() -> None:
+        sid = "sid-cancel"
+        context_id = "ctx-cancel"
+        loop = asyncio.get_running_loop()
+        incoming_future = loop.create_future()
+        outgoing_future = loop.create_future()
+        manager = BlockingManager()
+        ws_runtime_mod.register_sid(sid)
+        ws_runtime_mod.store_sid_connector_capabilities(
+            sid,
+            {
+                "ws_max_payload_bytes": 50 * 1024 * 1024,
+                "transfer_protocol": ws_runtime_mod.TRANSFER_PROTOCOL_VERSION,
+            },
+        )
+        ws_runtime_mod.store_pending_file_op(
+            "file-in",
+            sid=sid,
+            future=incoming_future,
+            loop=loop,
+            context_id=context_id,
+        )
+        assert ws_runtime_mod.start_incoming_transfer(
+            sid,
+            {
+                "transfer_id": "incoming-cancel",
+                "op_id": "file-in",
+                "kind": "connector_file_op_result",
+                "total_bytes": 2 * 1024 * 1024,
+                "sha256": "0" * 64,
+            },
+            max_bytes=50 * 1024 * 1024,
+        ) == ""
+        spool_path = ws_runtime_mod._incoming_transfers["incoming-cancel"].temp_path
+        assert spool_path is not None and spool_path.exists()
+
+        ws_runtime_mod.store_pending_browser_op(
+            "browser-out",
+            sid=sid,
+            future=outgoing_future,
+            loop=loop,
+            context_id=context_id,
+        )
+        send_task = asyncio.create_task(
+            ws_runtime_mod.emit_connector_event(
+                sid,
+                "connector_browser_op",
+                {
+                    "op_id": "browser-out",
+                    "context_id": context_id,
+                    "padding": "x" * (2 * 1024 * 1024),
+                },
+                handler_id="plugins/_a0_connector/api/ws_connector",
+                manager=manager,
+            )
+        )
+        await manager.started.wait()
+
+        assert await ws_runtime_mod.abort_transfers_for_context(
+            context_id,
+            reason="chat paused during transfer",
+            manager=manager,
+        ) == 2
+        assert ws_runtime_mod._incoming_transfers == {}
+        assert ws_runtime_mod._outgoing_transfers == {}
+        assert not spool_path.exists()
+        await asyncio.sleep(0)
+        assert (await incoming_future)["ok"] is False
+        assert (await outgoing_future)["ok"] is False
+        assert [event for event, _payload in manager.calls].count("connector_transfer_abort") == 2
+
+        manager.release.set()
+        await send_task
+        assert not any(
+            event in {"connector_transfer_chunk", "connector_transfer_end"}
+            for event, _payload in manager.calls
+        )
+
+    asyncio.run(_scenario())
+
+
+def test_core_disconnect_drops_all_sid_transfer_state() -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+    sid = "sid-disconnect-transfer"
+    ws_runtime_mod.register_sid(sid)
+    assert ws_runtime_mod.start_incoming_transfer(
+        sid,
+        {
+            "transfer_id": "incoming-disconnect",
+            "op_id": "file-disconnect",
+            "kind": "connector_file_op_result",
+            "total_bytes": 2 * 1024 * 1024,
+            "sha256": "0" * 64,
+        },
+        max_bytes=50 * 1024 * 1024,
+    ) == ""
+    spool_path = ws_runtime_mod._incoming_transfers["incoming-disconnect"].temp_path
+    outgoing = ws_runtime_mod.OutgoingTransfer(
+        transfer_id="outgoing-disconnect",
+        sid=sid,
+        kind="connector_browser_op",
+        op_id="browser-disconnect",
+        context_id="ctx-1",
+    )
+    with ws_runtime_mod._state_lock:
+        ws_runtime_mod._outgoing_transfers[outgoing.transfer_id] = outgoing
+
+    ws_runtime_mod.unregister_sid(sid)
+
+    assert ws_runtime_mod._incoming_transfers == {}
+    assert ws_runtime_mod._outgoing_transfers == {}
+    assert spool_path is not None and not spool_path.exists()
+    assert outgoing.cancel_reason == "connector disconnected during transfer"
+
+
+def test_new_core_rejects_large_request_for_peer_without_transfer_protocol() -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+
+    class RecordingManager:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        async def emit_to(
+            self,
+            namespace: str,
+            sid: str,
+            event: str,
+            payload: dict[str, object],
+            **kwargs: object,
+        ) -> None:
+            del namespace, sid, kwargs
+            self.calls.append((event, payload))
+
+    async def _scenario() -> None:
+        sid = "sid-legacy-cli"
+        manager = RecordingManager()
+        ws_runtime_mod.register_sid(sid)
+        ws_runtime_mod.store_sid_connector_capabilities(
+            sid,
+            {"ws_max_payload_bytes": 50 * 1024 * 1024},
+        )
+
+        with pytest.raises(ws_runtime_mod.WsPayloadTooLargeError):
+            await ws_runtime_mod.emit_connector_event(
+                sid,
+                "connector_browser_op",
+                {"op_id": "legacy-cli", "padding": "x" * (2 * 1024 * 1024)},
+                handler_id="plugins/_a0_connector/ws_connector",
+                manager=manager,
+            )
+
+        assert manager.calls == []
+        assert sid in ws_runtime_mod._sid_contexts
+
+    asyncio.run(_scenario())
+
+
+def test_new_core_rejects_legacy_chunked_file_result_as_one_error() -> None:
+    _install_fake_helpers()
+    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
+    _reset_ws_runtime_state(ws_runtime_mod)
+
+    async def _scenario() -> None:
+        sid = "sid-old-cli"
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        ws_runtime_mod.register_sid(sid)
+        ws_runtime_mod.store_pending_file_op(
+            "legacy-file",
+            sid=sid,
+            future=future,
+            loop=loop,
+            context_id="ctx-1",
+        )
+
+        assert ws_runtime_mod.resolve_pending_file_op(
+            "legacy-file",
+            sid=sid,
+            payload={
+                "op_id": "legacy-file",
+                "ok": True,
+                "chunked": True,
+                "chunk_index": 0,
+                "chunk_count": 2,
+                "content_chunk": "partial",
+            },
+        )
+        result = await asyncio.wait_for(future, timeout=0.25)
+        assert result["ok"] is False
+        assert "transfer_protocol=1" in result["error"]
+        assert sid in ws_runtime_mod._sid_contexts
 
     asyncio.run(_scenario())
 
@@ -3447,6 +3979,63 @@ def test_text_editor_remote_patch_requires_prior_read(tmp_path: Path) -> None:
     assert "fw.text_editor.patch_need_read.md" in response.message
     assert shared_ws_manager.ops == ["stat"]
     assert target.read_text(encoding="utf-8") == "line-1\nline-2\n"
+
+
+@pytest.mark.parametrize(
+    ("action", "args_key"),
+    [("write", "content"), ("patch", "patch_text")],
+)
+def test_text_editor_remote_preflights_oversized_modifications_before_ws(
+    action: str,
+    args_key: str,
+) -> None:
+    def unexpected_file_op(_payload):
+        raise AssertionError("oversized operation reached the CLI")
+
+    shared_ws_manager, ws_runtime_mod, tool_mod = _load_text_editor_remote_tool(
+        file_op_handler=unexpected_file_op
+    )
+    agent = _FakeRemoteAgent()
+    _register_remote_file_cli(ws_runtime_mod, "sid-cli", agent.context.id)
+
+    response = asyncio.run(
+        _create_text_editor_remote(
+            tool_mod,
+            agent,
+            action=action,
+            path="large.txt",
+            **{args_key: "x" * (tool_mod.REMOTE_FILE_TEXT_MAX_BYTES + 1)},
+        ).execute()
+    )
+
+    assert "limits write and patch content" in response.message
+    assert "HTTP bulk transfer" in response.message
+    assert shared_ws_manager.calls == []
+
+
+def test_text_editor_remote_exposes_bounded_read_continuation(tmp_path: Path) -> None:
+    target = tmp_path / "many-lines.txt"
+    target.write_text("line\n" * 2001, encoding="utf-8")
+    utility = RemoteFileUtility(scan_root=str(tmp_path))
+    shared_ws_manager, ws_runtime_mod, tool_mod = _load_text_editor_remote_tool(
+        file_op_handler=utility.handle_file_op
+    )
+    agent = _FakeRemoteAgent()
+    _register_remote_file_cli(ws_runtime_mod, "sid-cli", agent.context.id)
+
+    response = asyncio.run(
+        _create_text_editor_remote(
+            tool_mod,
+            agent,
+            action="read",
+            path=str(target),
+        ).execute()
+    )
+
+    assert "Remote text read truncated by max_lines" in response.message
+    assert "Continue with line_from=2001" in response.message
+    assert "HTTP bulk transfer" in response.message
+    assert shared_ws_manager.ops == ["read"]
 
 
 def test_text_editor_remote_context_patch_does_not_require_prior_read(tmp_path: Path) -> None:

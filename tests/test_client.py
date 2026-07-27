@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
+import os
 import ssl
+import subprocess
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, call
@@ -16,11 +20,15 @@ import socketio
 
 from agent_zero_cli.attachments import AttachmentUpload
 from agent_zero_cli.client import (
+    A0_WS_MAX_PAYLOAD_BYTES,
     A0Client,
     A0ConnectorPluginMissingError,
     A0ProtocolError,
     A0WebSocketConnectionError,
+    TRANSFER_PROTOCOL_VERSION,
+    _bulk_transfer_timeout,
     _ensure_aiohttp_ws_timeout_compat,
+    _socketio_event_size,
     _socketio_client_kwargs,
 )
 from agent_zero_cli.config import (
@@ -114,6 +122,22 @@ class FakeResponse:
             request = httpx.Request("POST", "http://example.test")
             response = httpx.Response(self.status_code, request=request)
             raise httpx.HTTPStatusError("error", request=request, response=response)
+
+
+class FakeStreamResponse(FakeResponse):
+    def __init__(self, *, chunks: list[bytes], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.chunks = chunks
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        del exc_type, exc, traceback
+
+    async def aiter_bytes(self, _chunk_size: int):
+        for chunk in self.chunks:
+            yield chunk
 
 
 class FakeSocketIOClient:
@@ -402,6 +426,23 @@ async def test_fetch_capabilities_raises_plugin_missing_on_404() -> None:
 
     with pytest.raises(A0ConnectorPluginMissingError):
         await client.fetch_capabilities()
+
+
+async def test_fetch_capabilities_stores_server_receive_limit() -> None:
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            json_data={
+                "protocol": "a0-connector.v1",
+                "capabilities": {"ws_max_payload_bytes": 16 * 1024 * 1024},
+            }
+        )
+    )
+
+    await client.fetch_capabilities()
+
+    assert client.peer_ws_max_payload_bytes == 16 * 1024 * 1024
 
 
 async def test_default_httpx_rejects_self_signed_https_connector_fixture() -> None:
@@ -773,12 +814,64 @@ def test_socketio_client_disables_aiohttp_websocket_tls_verification() -> None:
     kwargs = _socketio_client_kwargs()
 
     assert kwargs["ssl_verify"] is False
-    assert kwargs["websocket_extra_options"] == {"ssl": False}
+    assert kwargs["websocket_extra_options"] == {
+        "max_msg_size": A0_WS_MAX_PAYLOAD_BYTES + 1,
+        "ssl": False,
+    }
 
     client = A0Client("https://example.test")
 
     assert client.sio.eio.ssl_verify is False
-    assert client.sio.eio.websocket_extra_options == {"ssl": False}
+    assert client.sio.eio.websocket_extra_options == {
+        "max_msg_size": A0_WS_MAX_PAYLOAD_BYTES + 1,
+        "ssl": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "limit",
+    [4 * 1024 * 1024, 16 * 1024 * 1024, 50 * 1024 * 1024],
+)
+async def test_send_message_preflights_exact_serialized_payload_boundary(
+    limit: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_id = "00000000-0000-0000-0000-000000000000"
+    monkeypatch.setattr("agent_zero_cli.client.uuid.uuid4", lambda: fixed_id)
+    client = A0Client("http://127.0.0.1:50001")
+    client.sio = FakeSocketIOClient()
+    client.peer_ws_max_payload_bytes = limit
+
+    base_payload = {
+        "context_id": "ctx-1",
+        "message": "",
+        "client_message_id": fixed_id,
+    }
+    base_size = _socketio_event_size(
+        "connector_send_message",
+        base_payload,
+        acknowledged=True,
+    )
+    padding = limit - base_size
+    assert padding > 1
+
+    await client.send_message("x" * (padding - 1), "ctx-1")
+    await client.send_message("x" * padding, "ctx-1")
+    with pytest.raises(A0ProtocolError, match="PAYLOAD_TOO_LARGE"):
+        await client.send_message("x" * (padding + 1), "ctx-1")
+
+    assert len(client.sio.call_calls) == 2
+
+
+@pytest.mark.parametrize("size", [0, 1])
+async def test_zero_and_one_byte_messages_keep_socket_usable(size: int) -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.sio = FakeSocketIOClient()
+
+    await client.send_message("x" * size, "ctx-1")
+
+    assert len(client.sio.call_calls) == 1
+    assert client.sio.disconnect_calls == 0
 
 
 async def test_connect_websocket_reports_blank_namespace_rejection_after_probe() -> None:
@@ -943,15 +1036,20 @@ async def test_upload_attachments_posts_files_to_core_upload_endpoint() -> None:
             "Referer": "http://localhost:5080/",
         },
     )
-    client.http.post.assert_awaited_once_with(
-        "http://localhost:5080/api/upload",
-        files=[("file", ("local-image.png", b"png-bytes", "image/png"))],
-        headers={
-            "Origin": "http://localhost:5080",
-            "Referer": "http://localhost:5080/",
-            "X-CSRF-Token": "csrf-1",
-        },
-    )
+    client.http.post.assert_awaited_once()
+    args, kwargs = client.http.post.await_args
+    assert args == ("http://localhost:5080/api/upload",)
+    assert kwargs["files"] == [
+        ("file", ("local-image.png", b"png-bytes", "image/png"))
+    ]
+    assert kwargs["headers"] == {
+        "Origin": "http://localhost:5080",
+        "Referer": "http://localhost:5080/",
+        "X-CSRF-Token": "csrf-1",
+    }
+    assert kwargs["timeout"].connect == 10.0
+    assert kwargs["timeout"].read > 30.0
+    assert kwargs["timeout"].write > 30.0
     assert refs[0].path == "/a0/usr/uploads/stored-image.png"
     assert refs[0].name == "stored-image.png"
     assert refs[0].mime_type == "image/png"
@@ -1042,6 +1140,195 @@ async def test_upload_attachments_rejects_invalid_response() -> None:
         )
 
 
+async def test_upload_attachments_streams_disk_source_and_verifies_hash(
+    tmp_path: Path,
+) -> None:
+    payload = b"disk-backed-upload" * 100_000
+    source = tmp_path / "payload.png"
+    source.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(json_data={"ok": True, "token": "csrf-1"})
+    )
+
+    async def post_upload(_url: str, **kwargs):
+        uploaded = kwargs["files"][0][1][1]
+        assert not isinstance(uploaded, bytes)
+        assert uploaded.read() == payload
+        return FakeResponse(
+            json_data={
+                "filenames": ["payload.png"],
+                "files": [
+                    {
+                        "filename": "payload.png",
+                        "size": len(payload),
+                        "sha256": digest,
+                    }
+                ],
+            }
+        )
+
+    client.http.post = AsyncMock(side_effect=post_upload)
+
+    refs = await client.upload_attachments(
+        [AttachmentUpload("payload.png", source, "image/png")]
+    )
+
+    assert refs[0].path == "/a0/usr/uploads/payload.png"
+
+
+async def test_upload_attachments_rejects_integrity_mismatch() -> None:
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(json_data={"ok": True, "token": "csrf-1"})
+    )
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(
+            json_data={
+                "filenames": ["payload.png"],
+                "files": [
+                    {
+                        "filename": "payload.png",
+                        "size": 3,
+                        "sha256": "0" * 64,
+                    }
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(A0ProtocolError, match="SHA-256 mismatch"):
+        await client.upload_attachments(
+            [AttachmentUpload("payload.png", b"abc", "image/png")]
+        )
+
+
+def test_bulk_timeout_scales_for_64_mib_transfer() -> None:
+    timeout = _bulk_transfer_timeout(64 * 1024 * 1024)
+
+    assert timeout.connect == 10.0
+    assert timeout.pool == 10.0
+    assert timeout.read == 94.0
+    assert timeout.write == 94.0
+
+
+async def test_download_file_streams_hashes_and_atomically_replaces(
+    tmp_path: Path,
+) -> None:
+    payload = b"container-to-host" * 100_000
+    digest = hashlib.sha256(payload).hexdigest()
+    target = tmp_path / "download.bin"
+    target.write_bytes(b"old")
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(json_data={"ok": True, "token": "csrf-1"})
+    )
+    response = FakeStreamResponse(
+        chunks=[payload[:1_000_000], payload[1_000_000:]],
+        headers={
+            "X-Content-SHA256": digest,
+            "Content-Length": str(len(payload)),
+        },
+    )
+    client.http.stream = Mock(return_value=response)
+
+    result = await client.download_file("/a0/work/download.bin", target)
+
+    assert result == {
+        "path": str(target),
+        "size": len(payload),
+        "sha256": digest,
+    }
+    assert target.read_bytes() == payload
+    assert list(tmp_path.glob(".partial-*")) == []
+    args, kwargs = client.http.stream.call_args
+    assert args == ("GET", "http://localhost:5080/api/download_work_dir_file")
+    assert kwargs["params"] == {"path": "/a0/work/download.bin"}
+    assert kwargs["timeout"].read == 30.0
+
+
+async def test_download_hash_mismatch_preserves_existing_destination(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "download.bin"
+    target.write_bytes(b"old")
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(json_data={"ok": True, "token": "csrf-1"})
+    )
+    client.http.stream = Mock(
+        return_value=FakeStreamResponse(
+            chunks=[b"corrupt"],
+            headers={
+                "X-Content-SHA256": "0" * 64,
+                "Content-Length": "7",
+            },
+        )
+    )
+
+    with pytest.raises(A0ProtocolError, match="SHA-256 mismatch"):
+        await client.download_file("/a0/work/download.bin", target)
+
+    assert target.read_bytes() == b"old"
+    assert list(tmp_path.glob(".partial-*")) == []
+
+
+@pytest.mark.parametrize(
+    "size",
+    [0, 1, 1024 * 1024 - 1, 1024 * 1024, 1024 * 1024 + 1],
+)
+async def test_http_upload_download_chunk_boundary_matrix(
+    tmp_path: Path,
+    size: int,
+) -> None:
+    payload = (b"\x00\xffA5" * ((size + 3) // 4))[:size]
+    digest = hashlib.sha256(payload).hexdigest()
+    source = tmp_path / f"source-{size}.bin"
+    target = tmp_path / f"target-{size}.bin"
+    source.write_bytes(payload)
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(json_data={"ok": True, "token": "csrf-1"})
+    )
+
+    async def post_upload(_url: str, **kwargs):
+        uploaded = kwargs["files"][0][1][1]
+        assert uploaded.read() == payload
+        return FakeResponse(
+            json_data={
+                "filenames": [source.name],
+                "files": [
+                    {"filename": source.name, "size": size, "sha256": digest}
+                ],
+            }
+        )
+
+    client.http.post = AsyncMock(side_effect=post_upload)
+    refs = await client.upload_attachments(
+        [AttachmentUpload(source.name, source, "application/octet-stream")]
+    )
+    client.http.stream = Mock(
+        return_value=FakeStreamResponse(
+            chunks=[payload[: 1024 * 1024], payload[1024 * 1024 :]],
+            headers={"X-Content-SHA256": digest, "Content-Length": str(size)},
+        )
+    )
+
+    receipt = await client.download_file(f"/a0/work/{source.name}", target)
+
+    assert refs[0].path == f"/a0/usr/uploads/{source.name}"
+    assert receipt["size"] == size
+    assert receipt["sha256"] == digest
+    assert target.read_bytes() == payload
+    assert list(tmp_path.glob(".partial-*")) == []
+
+
 async def test_send_hello_returns_exec_config_payload() -> None:
     client = A0Client("http://127.0.0.1:50001")
     client.sio = FakeSocketIOClient(
@@ -1051,6 +1338,7 @@ async def test_send_hello_returns_exec_config_payload() -> None:
                     "ok": True,
                     "data": {
                         "protocol": "a0-connector.v1",
+                        "capabilities": {"ws_max_payload_bytes": 16 * 1024 * 1024},
                         "features": ["code_execution_remote"],
                         "exec_config": {
                             "version": 1,
@@ -1066,10 +1354,15 @@ async def test_send_hello_returns_exec_config_payload() -> None:
 
     assert result["protocol"] == "a0-connector.v1"
     assert result["exec_config"]["version"] == 1
+    assert client.peer_ws_max_payload_bytes == 16 * 1024 * 1024
     event, payload, namespace = client.sio.call_calls[0]
     assert event == "connector_hello"
     assert namespace == "/ws"
     assert payload["protocol"] == "a0-connector.v1"
+    assert payload["capabilities"] == {
+        "ws_max_payload_bytes": A0_WS_MAX_PAYLOAD_BYTES,
+        "transfer_protocol": TRANSFER_PROTOCOL_VERSION,
+    }
 
 
 async def test_send_hello_includes_computer_use_metadata() -> None:
@@ -1248,7 +1541,7 @@ async def test_file_op_requests_are_returned_via_result_event() -> None:
     ]
 
 
-async def test_large_file_op_results_are_returned_as_chunked_result_events() -> None:
+async def test_large_file_op_results_use_transfer_start_chunk_end() -> None:
     client = A0Client("http://127.0.0.1:50001")
     client.http = Mock()
     client.http.get = AsyncMock(
@@ -1262,12 +1555,14 @@ async def test_large_file_op_results_are_returned_as_chunked_result_events() -> 
         "op_id": "op-large",
         "ok": True,
         "result": {
-            "content": "0123456789abcdef\n" * 12000,
-            "total_lines": 12000,
+            "content": "x" * (32 * 1024 * 1024),
+            "total_lines": 1,
             "line_from": 1,
-            "line_to": 12000,
+            "line_to": 1,
         },
     }
+    client.peer_ws_max_payload_bytes = A0_WS_MAX_PAYLOAD_BYTES
+    client.peer_transfer_protocol = TRANSFER_PROTOCOL_VERSION
     client.on_file_op = AsyncMock(return_value=expected_result)
 
     await client.connect_websocket()
@@ -1275,21 +1570,534 @@ async def test_large_file_op_results_are_returned_as_chunked_result_events() -> 
     handler = client.sio.handlers[("/ws", "connector_file_op")]
     await handler({"data": {"op_id": "op-large", "op": "read", "path": "/tmp/large.txt"}})
 
-    assert len(client.sio.emit_calls) > 1
-    frames = [call[1] for call in client.sio.emit_calls]
-    assert {call[0] for call in client.sio.emit_calls} == {"connector_file_op_result"}
+    assert len(client.sio.emit_calls) > 3
+    assert client.sio.emit_calls[0][0] == "connector_transfer_start"
+    assert client.sio.emit_calls[-1][0] == "connector_transfer_end"
     assert {call[2] for call in client.sio.emit_calls} == {"/ws"}
-    assert all(frame["op_id"] == "op-large" for frame in frames)
-    assert all(frame["chunked"] is True for frame in frames)
-    assert all(frame["encoding"] == "json+base64" for frame in frames)
-    assert {frame["chunk_count"] for frame in frames} == {len(frames)}
-    assert sorted(frame["chunk_index"] for frame in frames) == list(range(len(frames)))
-
+    start = client.sio.emit_calls[0][1]
+    frames = [
+        payload
+        for event, payload, _namespace in client.sio.emit_calls
+        if event == "connector_transfer_chunk"
+    ]
+    assert start["op_id"] == "op-large"
+    assert start["kind"] == "connector_file_op_result"
+    assert [frame["index"] for frame in frames] == list(range(len(frames)))
     assembled = b"".join(
-        base64.b64decode(str(frame["data"]).encode("ascii"))
-        for frame in sorted(frames, key=lambda item: int(item["chunk_index"]))
+        base64.b64decode(str(frame["data"]).encode("ascii")) for frame in frames
     )
+    assert len(assembled) == start["total_bytes"]
+    assert hashlib.sha256(assembled).hexdigest() == start["sha256"]
     assert json.loads(assembled.decode("utf-8")) == expected_result
+
+
+async def test_core_to_cli_transfer_reassembles_32_mib_request_from_disk_spool() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    client.sio = FakeSocketIOClient()
+    client.on_browser_op = AsyncMock(
+        return_value={"op_id": "browser-32", "ok": True, "result": {"status": "received"}}
+    )
+    await client.connect_websocket()
+
+    request = {
+        "op_id": "browser-32",
+        "action": "synthetic_transfer_test",
+        "padding": "x" * (32 * 1024 * 1024),
+    }
+    raw = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    transfer_id = "core-to-cli-32"
+    start_handler = client.sio.handlers[("/ws", "connector_transfer_start")]
+    chunk_handler = client.sio.handlers[("/ws", "connector_transfer_chunk")]
+    end_handler = client.sio.handlers[("/ws", "connector_transfer_end")]
+
+    await start_handler(
+        {
+            "data": {
+                "transfer_id": transfer_id,
+                "op_id": "browser-32",
+                "kind": "connector_browser_op",
+                "total_bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            }
+        }
+    )
+    spool_path = client._incoming_transfers[transfer_id].temp_path
+    assert spool_path is not None and spool_path.exists()
+    for index, offset in enumerate(range(0, len(raw), 64 * 1024)):
+        await chunk_handler(
+            {
+                "data": {
+                    "transfer_id": transfer_id,
+                    "index": index,
+                    "data": base64.b64encode(raw[offset : offset + 64 * 1024]).decode("ascii"),
+                }
+            }
+        )
+    await end_handler({"data": {"transfer_id": transfer_id}})
+
+    client.on_browser_op.assert_awaited_once_with(request)
+    assert transfer_id not in client._incoming_transfers
+    assert not spool_path.exists()
+    assert client.sio.disconnect_calls == 0
+    assert client.sio.emit_calls[-1][0] == "connector_browser_op_result"
+    await client.disconnect(close_http=False)
+
+
+@pytest.mark.parametrize("fault", ["corrupt_hash", "short_chunk", "oversized"])
+async def test_incoming_transfer_faults_abort_without_dispatch(
+    fault: str,
+) -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.sio = FakeSocketIOClient(connected=True)
+    client.on_browser_op = AsyncMock()
+    client._register_event_handlers()
+    request = {"op_id": f"browser-{fault}", "padding": "payload"}
+    raw = json.dumps(request, separators=(",", ":")).encode("utf-8")
+    total_bytes = len(raw) + (1 if fault == "short_chunk" else 0)
+    if fault == "oversized":
+        total_bytes = A0_WS_MAX_PAYLOAD_BYTES + 1
+    digest = "0" * 64 if fault == "corrupt_hash" else hashlib.sha256(raw).hexdigest()
+    transfer_id = f"transfer-{fault}"
+    start = client.sio.handlers[("/ws", "connector_transfer_start")]
+    chunk = client.sio.handlers[("/ws", "connector_transfer_chunk")]
+    end = client.sio.handlers[("/ws", "connector_transfer_end")]
+
+    await start(
+        {
+            "data": {
+                "transfer_id": transfer_id,
+                "op_id": request["op_id"],
+                "kind": "connector_browser_op",
+                "total_bytes": total_bytes,
+                "sha256": digest,
+            }
+        }
+    )
+    if fault != "oversized":
+        await chunk(
+            {
+                "data": {
+                    "transfer_id": transfer_id,
+                    "index": 0,
+                    "data": base64.b64encode(raw).decode("ascii"),
+                }
+            }
+        )
+        if fault == "corrupt_hash":
+            await end({"data": {"transfer_id": transfer_id}})
+
+    client.on_browser_op.assert_not_awaited()
+    assert transfer_id not in client._incoming_transfers
+    aborts = [
+        payload
+        for event, payload, _namespace in client.sio.emit_calls
+        if event == "connector_transfer_abort"
+    ]
+    assert len(aborts) == 1
+    assert aborts[0]["reason"]
+    assert client.sio.disconnect_calls == 0
+
+
+async def test_incoming_transfer_concurrency_and_idle_timeout_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_zero_cli.client as client_module
+
+    monkeypatch.setattr(client_module, "_TRANSFER_IDLE_TIMEOUT_SECONDS", 0.05)
+    client = A0Client("http://127.0.0.1:50001")
+    client.sio = FakeSocketIOClient(connected=True)
+    client._register_event_handlers()
+    start = client.sio.handlers[("/ws", "connector_transfer_start")]
+    empty_digest = hashlib.sha256(b"").hexdigest()
+    for index in range(4):
+        await start(
+            {
+                "data": {
+                    "transfer_id": f"idle-{index}",
+                    "op_id": f"op-{index}",
+                    "kind": "connector_browser_op",
+                    "total_bytes": 0,
+                    "sha256": empty_digest,
+                }
+            }
+        )
+    await start(
+        {
+            "data": {
+                "transfer_id": "too-many",
+                "op_id": "op-too-many",
+                "kind": "connector_browser_op",
+                "total_bytes": 0,
+                "sha256": empty_digest,
+            }
+        }
+    )
+    assert len(client._incoming_transfers) == 4
+    await asyncio.sleep(0.12)
+    assert client._incoming_transfers == {}
+    abort_reasons = [
+        payload["reason"]
+        for event, payload, _namespace in client.sio.emit_calls
+        if event == "connector_transfer_abort"
+    ]
+    assert any("too many concurrent" in reason for reason in abort_reasons)
+    assert sum("idle timeout" in reason for reason in abort_reasons) == 4
+    result = {"op_id": "after-timeout", "ok": True, "result": {"status": "ready"}}
+    assert await client._emit_op_result("connector_browser_op_result", result) == result
+    assert client.sio.emit_calls[-1] == ("connector_browser_op_result", result, "/ws")
+    assert client.sio.disconnect_calls == 0
+
+
+async def test_pause_aborts_context_transfers_and_removes_spool_file() -> None:
+    class BlockingTransferSocket(FakeSocketIOClient):
+        def __init__(self) -> None:
+            super().__init__(connected=True)
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def emit(
+            self,
+            event: str,
+            data: dict,
+            namespace: str | None = None,
+        ) -> None:
+            await super().emit(event, data, namespace)
+            if event == "connector_transfer_start":
+                self.started.set()
+                await self.release.wait()
+
+    client = A0Client("http://127.0.0.1:50001")
+    client.http = Mock()
+    client.http.post = AsyncMock(return_value=FakeResponse(json_data={"ok": True}))
+    client.sio = BlockingTransferSocket()
+    client.peer_ws_max_payload_bytes = A0_WS_MAX_PAYLOAD_BYTES
+    client.peer_transfer_protocol = TRANSFER_PROTOCOL_VERSION
+    client._register_event_handlers()
+
+    await client.sio.handlers[("/ws", "connector_transfer_start")](
+        {
+            "data": {
+                "transfer_id": "incoming-pause",
+                "op_id": "browser-in",
+                "kind": "connector_browser_op",
+                "context_id": "ctx-1",
+                "total_bytes": 2 * 1024 * 1024,
+                "sha256": "0" * 64,
+            }
+        }
+    )
+    spool_path = client._incoming_transfers["incoming-pause"].temp_path
+    assert spool_path is not None and spool_path.exists()
+
+    send_task = asyncio.create_task(
+        client._emit_op_result(
+            "connector_browser_op_result",
+            {"op_id": "browser-out", "ok": True, "result": {"data": "x" * (2 * 1024 * 1024)}},
+            context_id="ctx-1",
+        )
+    )
+    await client.sio.started.wait()
+
+    assert (await client.pause_agent("ctx-1"))["ok"] is True
+    assert client._incoming_transfers == {}
+    assert client._outgoing_transfers == {}
+    assert not spool_path.exists()
+    aborts = [
+        payload
+        for event, payload, _namespace in client.sio.emit_calls
+        if event == "connector_transfer_abort"
+    ]
+    assert {payload["transfer_id"] for payload in aborts} == {
+        "incoming-pause",
+        next(payload["transfer_id"] for event, payload, _ in client.sio.emit_calls if event == "connector_transfer_start"),
+    }
+
+    client.sio.release.set()
+    cancelled = await send_task
+    assert cancelled["code"] == "TRANSFER_ABORTED"
+    assert not any(
+        event in {"connector_transfer_chunk", "connector_transfer_end"}
+        for event, _payload, _namespace in client.sio.emit_calls
+    )
+
+
+async def test_disconnect_emits_abort_before_closing_socket() -> None:
+    class OrderedSocket(FakeSocketIOClient):
+        def __init__(self) -> None:
+            super().__init__(connected=True)
+            self.actions: list[str] = []
+
+        async def emit(
+            self,
+            event: str,
+            data: dict,
+            namespace: str | None = None,
+        ) -> None:
+            if event == "connector_transfer_abort":
+                assert self.connected is True
+                self.actions.append("abort")
+            await super().emit(event, data, namespace)
+
+        async def disconnect(self) -> None:
+            self.actions.append("disconnect")
+            await super().disconnect()
+
+    client = A0Client("http://127.0.0.1:50001")
+    client.sio = OrderedSocket()
+    client._register_event_handlers()
+    await client.sio.handlers[("/ws", "connector_transfer_start")](
+        {
+            "data": {
+                "transfer_id": "incoming-disconnect",
+                "op_id": "browser-disconnect",
+                "kind": "connector_browser_op",
+                "context_id": "ctx-1",
+                "total_bytes": 2 * 1024 * 1024,
+                "sha256": "0" * 64,
+            }
+        }
+    )
+    spool_path = client._incoming_transfers["incoming-disconnect"].temp_path
+
+    await client.disconnect(close_http=False)
+
+    assert client.sio.actions == ["abort", "disconnect"]
+    assert client._incoming_transfers == {}
+    assert spool_path is not None and not spool_path.exists()
+
+
+async def test_dropped_socket_cleans_transfer_and_reconnects() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    client.sio = FakeSocketIOClient(connected=True)
+    client._register_event_handlers()
+    await client.sio.handlers[("/ws", "connector_transfer_start")](
+        {
+            "data": {
+                "transfer_id": "incoming-drop",
+                "op_id": "browser-drop",
+                "kind": "connector_browser_op",
+                "context_id": "ctx-1",
+                "total_bytes": 2 * 1024 * 1024,
+                "sha256": "0" * 64,
+            }
+        }
+    )
+    spool_path = client._incoming_transfers["incoming-drop"].temp_path
+
+    await client.sio.disconnect()
+    await client.connect_websocket()
+    await client.send_hello()
+
+    assert client.connected is True
+    assert client._incoming_transfers == {}
+    assert spool_path is not None and not spool_path.exists()
+    assert client.sio.call_calls[-1][0] == "connector_hello"
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/status").exists(),
+    reason="current RSS regression uses Linux /proc",
+)
+def test_cancelled_32_mib_transfer_returns_to_idle_and_releases_rss() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    script = r'''
+import asyncio
+import gc
+import json
+import time
+from agent_zero_cli.client import A0Client, A0_WS_MAX_PAYLOAD_BYTES, TRANSFER_PROTOCOL_VERSION
+
+def rss_kib():
+    with open("/proc/self/status", encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1])
+    raise RuntimeError("VmRSS unavailable")
+
+class BlockingSocket:
+    def __init__(self):
+        self.connected = True
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.events = []
+
+    async def emit(self, event, data, namespace=None):
+        self.events.append(event)
+        if event == "connector_transfer_start":
+            self.started.set()
+            await self.release.wait()
+
+async def main():
+    client = A0Client("http://127.0.0.1:1")
+    socket = BlockingSocket()
+    client.sio = socket
+    client.peer_ws_max_payload_bytes = A0_WS_MAX_PAYLOAD_BYTES
+    client.peer_transfer_protocol = TRANSFER_PROTOCOL_VERSION
+    baseline = rss_kib()
+    result = {"op_id": "rss-cancel", "ok": True, "result": {"data": "x" * (32 * 1024 * 1024)}}
+    task = asyncio.create_task(
+        client._emit_op_result(
+            "connector_browser_op_result",
+            result,
+            context_id="ctx-rss",
+        )
+    )
+    del result
+    await socket.started.wait()
+    active = rss_kib()
+    await client._abort_active_transfers(
+        context_id="ctx-rss",
+        reason="stress cancellation",
+    )
+    socket.release.set()
+    outcome = await task
+    del task, outcome
+    gc.collect()
+    cpu_start = time.process_time()
+    samples = []
+    deadline = time.monotonic() + 1.0
+    while True:
+        samples.append(rss_kib())
+        if time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(0.05)
+    cpu_after = time.process_time() - cpu_start
+    await client.http.aclose()
+    print(json.dumps({
+        "baseline_kib": baseline,
+        "active_kib": active,
+        "minimum_after_kib": min(samples),
+        "cpu_after_seconds": cpu_after,
+        "events": socket.events,
+        "incoming": len(client._incoming_transfers),
+        "outgoing": len(client._outgoing_transfers),
+    }))
+
+asyncio.run(main())
+'''
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part
+        for part in (str(project_root / "src"), env.get("PYTHONPATH", ""))
+        if part
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=project_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    measurement = json.loads(completed.stdout)
+
+    assert measurement["active_kib"] - measurement["baseline_kib"] > 48 * 1024
+    assert measurement["minimum_after_kib"] - measurement["baseline_kib"] < 8 * 1024
+    assert measurement["cpu_after_seconds"] < 0.25
+    assert measurement["events"] == [
+        "connector_transfer_start",
+        "connector_transfer_abort",
+    ]
+    assert measurement["incoming"] == 0
+    assert measurement["outgoing"] == 0
+
+
+async def test_new_cli_rejects_large_result_for_peer_without_transfer_protocol() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.sio = FakeSocketIOClient(connected=True)
+    client.peer_ws_max_payload_bytes = A0_WS_MAX_PAYLOAD_BYTES
+    client.peer_transfer_protocol = 0
+
+    emitted = await client._emit_op_result(
+        "connector_browser_op_result",
+        {"op_id": "legacy-core", "ok": True, "result": {"data": "x" * (2 * 1024 * 1024)}},
+    )
+
+    assert emitted["code"] == "PAYLOAD_TOO_LARGE"
+    assert client.sio.emit_calls == [
+        ("connector_browser_op_result", emitted, "/ws")
+    ]
+    assert client.sio.disconnect_calls == 0
+
+
+@pytest.mark.large_payload_soak
+@pytest.mark.skipif(
+    os.getenv("A0_RUN_LARGE_PAYLOAD_SOAK") != "1",
+    reason="set A0_RUN_LARGE_PAYLOAD_SOAK=1 for the 16-64 MiB soak",
+)
+@pytest.mark.parametrize("size_mib", [16, 32, 64])
+async def test_large_payload_soak_keeps_socket_usable(size_mib: int) -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.sio = FakeSocketIOClient(connected=True)
+    client.peer_ws_max_payload_bytes = A0_WS_MAX_PAYLOAD_BYTES
+    client.peer_transfer_protocol = TRANSFER_PROTOCOL_VERSION
+    result = {
+        "op_id": f"soak-{size_mib}",
+        "ok": True,
+        "result": {"data": "x" * (size_mib * 1024 * 1024)},
+    }
+
+    emitted = await client._emit_op_result("connector_browser_op_result", result)
+
+    if size_mib <= 32:
+        chunks = [
+            payload
+            for event, payload, _namespace in client.sio.emit_calls
+            if event == "connector_transfer_chunk"
+        ]
+        assembled = b"".join(base64.b64decode(chunk["data"]) for chunk in chunks)
+        assert json.loads(assembled) == result
+        assert client.sio.emit_calls[-1][0] == "connector_transfer_end"
+    else:
+        assert emitted["code"] == "PAYLOAD_TOO_LARGE"
+        assert client.sio.emit_calls == [
+            ("connector_browser_op_result", emitted, "/ws")
+        ]
+    assert client.sio.disconnect_calls == 0
+
+
+async def test_oversized_file_chunk_emits_one_structured_error() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    client.sio = FakeSocketIOClient()
+    client.peer_ws_max_payload_bytes = 2048
+    client.on_file_op = AsyncMock(
+        return_value={
+            "op_id": "op-large",
+            "ok": True,
+            "result": {"content": "x" * 200_000},
+        }
+    )
+
+    await client.connect_websocket()
+    handler = client.sio.handlers[("/ws", "connector_file_op")]
+    await handler({"data": {"op_id": "op-large", "op": "read", "path": "/tmp/large"}})
+
+    assert len(client.sio.emit_calls) == 1
+    event, payload, namespace = client.sio.emit_calls[0]
+    assert (event, namespace) == ("connector_file_op_result", "/ws")
+    assert payload["code"] == "PAYLOAD_TOO_LARGE"
+    assert payload["op_id"] == "op-large"
 
 
 async def test_settings_updated_event_unwraps_payload() -> None:
@@ -1340,6 +2148,41 @@ async def test_exec_op_requests_are_returned_via_result_event() -> None:
             "/ws",
         )
     ]
+
+
+async def test_oversized_exec_result_becomes_structured_error_without_disconnect() -> None:
+    client = A0Client("http://127.0.0.1:50001")
+    client.http = Mock()
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            status_code=200,
+            text='0{"sid":"sid-1","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":20000}',
+        )
+    )
+    client.sio = FakeSocketIOClient()
+    client.peer_ws_max_payload_bytes = 2048
+    client.on_exec_op = AsyncMock(
+        return_value={
+            "op_id": "exec-large",
+            "ok": True,
+            "result": {"output": "x" * 4096},
+        }
+    )
+
+    await client.connect_websocket()
+    handler = client.sio.handlers[("/ws", "connector_exec_op")]
+    await handler({"data": {"op_id": "exec-large", "runtime": "terminal", "code": "pwd"}})
+
+    assert client.connected is True
+    assert client.sio.connected is True
+    assert len(client.sio.emit_calls) == 1
+    event, payload, namespace = client.sio.emit_calls[0]
+    assert event == "connector_exec_op_result"
+    assert namespace == "/ws"
+    assert payload["op_id"] == "exec-large"
+    assert payload["ok"] is False
+    assert payload["code"] == "PAYLOAD_TOO_LARGE"
+    assert payload["details"]["alternative"] == "http_bulk_transfer"
 
 
 async def test_registers_computer_use_ws_handler_and_emits_result() -> None:

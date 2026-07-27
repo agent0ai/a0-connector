@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
+import hashlib
 from http.cookiejar import Cookie
 import json
+import os
+from pathlib import Path
+import tempfile
 import time
 import uuid
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 from urllib.parse import urlparse
 
 import aiohttp
@@ -50,8 +57,22 @@ _EVENT_GATEWAY_CONTROL = "connector_gateway_control"
 _EVENT_GATEWAY_CONTROL_RESULT = "connector_gateway_control_result"
 _EVENT_REMOTE_TREE_UPDATE = "connector_remote_tree_update"
 _EVENT_ERROR = "connector_error"
-_FILE_OP_RESULT_CHUNK_BYTES = 64 * 1024
-_FILE_OP_RESULT_CHUNK_ENCODING = "json+base64"
+_EVENT_TRANSFER_START = "connector_transfer_start"
+_EVENT_TRANSFER_CHUNK = "connector_transfer_chunk"
+_EVENT_TRANSFER_END = "connector_transfer_end"
+_EVENT_TRANSFER_ABORT = "connector_transfer_abort"
+DEFAULT_WS_MAX_PAYLOAD_BYTES = 50 * 1024 * 1024
+LEGACY_WS_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
+TRANSFER_PROTOCOL_VERSION = 1
+_TRANSFER_CHUNK_BYTES = 64 * 1024
+_TRANSFER_ENCODED_CHUNK_MAX = ((_TRANSFER_CHUNK_BYTES + 2) // 3) * 4
+_TRANSFER_SPOOL_THRESHOLD_BYTES = 1024 * 1024
+_TRANSFER_SINGLE_FRAME_BYTES = 1024 * 1024
+_TRANSFER_IDLE_TIMEOUT_SECONDS = 30.0
+_MAX_INCOMING_TRANSFERS = 4
+_BULK_TIMEOUT_FLOOR_SECONDS = 30.0
+_BULK_TIMEOUT_BYTES_PER_SECOND = 1024 * 1024
+_FILE_CHUNK_BYTES = 1024 * 1024
 
 _SOCKET_IO_PROBE_QUERY = {"transport": "polling", "EIO": "4"}
 _BLANK_SOCKET_IO_REJECTION = "server rejected the Socket.IO connection without an error message"
@@ -65,6 +86,92 @@ _TLS_CERTIFICATE_ERROR_MARKERS = (
     "unable to get local issuer certificate",
     "self-signed certificate",
 )
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+A0_WS_MAX_PAYLOAD_BYTES = _positive_int_env(
+    "A0_WS_MAX_PAYLOAD_BYTES",
+    DEFAULT_WS_MAX_PAYLOAD_BYTES,
+)
+
+_TRANSFER_REQUEST_EVENTS = {
+    _EVENT_FILE_OP,
+    _EVENT_EXEC_OP,
+    _EVENT_COMPUTER_USE_OP,
+    _EVENT_BROWSER_OP,
+    _EVENT_GATEWAY_CONTROL,
+}
+
+
+@dataclass
+class _IncomingTransfer:
+    transfer_id: str
+    kind: str
+    op_id: str
+    context_id: str | None
+    total_bytes: int
+    sha256: str
+    digest: Any
+    updated_at: float
+    buffer: bytearray | None = None
+    temp_path: Path | None = None
+    next_index: int = 0
+    received_bytes: int = 0
+    timeout_task: asyncio.Task[None] | None = None
+
+
+@dataclass
+class _OutgoingTransfer:
+    transfer_id: str
+    kind: str
+    op_id: str
+    context_id: str | None
+    cancel_reason: str = ""
+    abort_sent: bool = False
+
+
+def _peer_ws_max_payload_bytes(value: Any) -> int:
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        return min(LEGACY_WS_MAX_PAYLOAD_BYTES, A0_WS_MAX_PAYLOAD_BYTES)
+    if limit <= 0:
+        return min(LEGACY_WS_MAX_PAYLOAD_BYTES, A0_WS_MAX_PAYLOAD_BYTES)
+    return min(limit, A0_WS_MAX_PAYLOAD_BYTES)
+
+
+def _transfer_protocol(value: Any) -> int:
+    try:
+        version = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return TRANSFER_PROTOCOL_VERSION if version == TRANSFER_PROTOCOL_VERSION else 0
+
+
+def _socketio_event_size(
+    event: str,
+    payload: dict[str, Any],
+    *,
+    acknowledged: bool,
+) -> int:
+    encoded = socketio.packet.Packet(
+        socketio.packet.EVENT,
+        data=[event, payload],
+        namespace=WS_NAMESPACE,
+        id=(2**63 - 1) if acknowledged else None,
+    ).encode()
+    parts = encoded if isinstance(encoded, list) else [encoded]
+    return sum(
+        len(part.encode("utf-8")) if isinstance(part, str) else len(part)
+        for part in parts
+    ) + len(parts)
 
 
 class A0ProtocolError(RuntimeError):
@@ -95,12 +202,73 @@ def _socketio_client_kwargs() -> dict[str, Any]:
         "ssl_verify": _VERIFY_TLS_CERTIFICATES,
         "reconnection": False,
     }
+    websocket_options: dict[str, Any] = {
+        # aiohttp rejects projected frame sizes greater than or equal to this
+        # parser bound. Keep the negotiated application ceiling inclusive.
+        "max_msg_size": A0_WS_MAX_PAYLOAD_BYTES + 1,
+    }
     if not _VERIFY_TLS_CERTIFICATES:
         # Some python-engineio/aiohttp combinations still let the WebSocket
         # upgrade fall back to aiohttp's default SSL context. Make the intent
         # explicit for ws_connect too, not only for the Engine.IO HTTP probe.
-        kwargs["websocket_extra_options"] = {"ssl": False}
+        websocket_options["ssl"] = False
+    kwargs["websocket_extra_options"] = websocket_options
     return kwargs
+
+
+def _bulk_transfer_timeout(total_bytes: int) -> httpx.Timeout:
+    transfer_seconds = _BULK_TIMEOUT_FLOOR_SECONDS + (
+        max(0, total_bytes) / _BULK_TIMEOUT_BYTES_PER_SECOND
+    )
+    return httpx.Timeout(
+        connect=10.0,
+        read=transfer_seconds,
+        write=transfer_seconds,
+        pool=10.0,
+    )
+
+
+def _attachment_size_and_sha256(upload: AttachmentUpload) -> tuple[int, str]:
+    if isinstance(upload.content, bytes):
+        return len(upload.content), hashlib.sha256(upload.content).hexdigest()
+
+    path = Path(upload.content)
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(_FILE_CHUNK_BYTES), b""):
+            size += len(chunk)
+            digest.update(chunk)
+    return size, digest.hexdigest()
+
+
+@contextmanager
+def _multipart_files(
+    uploads: list[AttachmentUpload],
+) -> Iterator[list[tuple[str, tuple[str, Any, str]]]]:
+    with ExitStack() as stack:
+        files = []
+        for upload in uploads:
+            content = (
+                upload.content
+                if isinstance(upload.content, bytes)
+                else stack.enter_context(Path(upload.content).open("rb"))
+            )
+            files.append(
+                ("file", (upload.filename, content, upload.mime_type))
+            )
+        yield files
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        directory_fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 class A0Client:
@@ -120,6 +288,10 @@ class A0Client:
         self._last_connect_error: Any = None
         self._suppress_disconnect_callback = False
         self._op_result_notification_tasks: set[asyncio.Task[None]] = set()
+        self.peer_ws_max_payload_bytes = _peer_ws_max_payload_bytes(None)
+        self.peer_transfer_protocol = 0
+        self._incoming_transfers: dict[str, _IncomingTransfer] = {}
+        self._outgoing_transfers: dict[str, _OutgoingTransfer] = {}
 
         self.on_connect: Callable[[], None] | None = None
         self.on_disconnect: Callable[[], None] | None = None
@@ -454,12 +626,174 @@ class A0Client:
         )
 
     async def _call(self, event: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        data = payload or {}
+        self._raise_if_payload_too_large(event, data, acknowledged=True)
         response = await self.sio.call(
             event,
-            payload or {},
+            data,
             namespace=WS_NAMESPACE,
         )
         return self._raise_for_results(response, event)
+
+    def _raise_if_payload_too_large(
+        self,
+        event: str,
+        payload: dict[str, Any],
+        *,
+        acknowledged: bool,
+    ) -> None:
+        actual_bytes = _socketio_event_size(
+            event,
+            payload,
+            acknowledged=acknowledged,
+        )
+        if actual_bytes <= self.peer_ws_max_payload_bytes:
+            return
+        raise A0ProtocolError(
+            f"PAYLOAD_TOO_LARGE: {event} serializes to {actual_bytes} bytes; "
+            f"the peer limit is {self.peer_ws_max_payload_bytes} bytes. "
+            "Use the HTTP bulk-transfer path."
+        )
+
+    def _payload_too_large_result(
+        self,
+        event: str,
+        result: dict[str, Any],
+        actual_bytes: int,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "ok": False,
+            "code": "PAYLOAD_TOO_LARGE",
+            "error": (
+                f"PAYLOAD_TOO_LARGE: {event} serializes to {actual_bytes} bytes; "
+                f"the peer limit is {self.peer_ws_max_payload_bytes} bytes. "
+                "Use the HTTP bulk-transfer path."
+            ),
+            "details": {
+                "type": "payload_too_large",
+                "event": event,
+                "actual_bytes": actual_bytes,
+                "limit_bytes": self.peer_ws_max_payload_bytes,
+                "alternative": "http_bulk_transfer",
+            },
+        }
+        for key in ("op_id", "request_id"):
+            value = result.get(key)
+            if value:
+                payload[key] = value
+        return payload
+
+    async def _emit_op_result(
+        self,
+        event: str,
+        result: dict[str, Any],
+        *,
+        context_id: str | None = None,
+    ) -> dict[str, Any]:
+        actual_bytes = _socketio_event_size(event, result, acknowledged=False)
+        raw = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if (
+            len(raw) <= _TRANSFER_SINGLE_FRAME_BYTES
+            and actual_bytes <= self.peer_ws_max_payload_bytes
+        ):
+            await self.sio.emit(event, result, namespace=WS_NAMESPACE)
+            return result
+
+        if (
+            self.peer_transfer_protocol == TRANSFER_PROTOCOL_VERSION
+            and len(raw) <= self.peer_ws_max_payload_bytes
+        ):
+            cancel_reason = await self._send_transfer(
+                event,
+                result,
+                raw,
+                context_id=context_id,
+            )
+            if cancel_reason:
+                return {
+                    "op_id": result.get("op_id"),
+                    "request_id": result.get("request_id"),
+                    "ok": False,
+                    "code": "TRANSFER_ABORTED",
+                    "error": cancel_reason,
+                }
+            return result
+
+        payload = self._payload_too_large_result(event, result, actual_bytes)
+        await self.sio.emit(event, payload, namespace=WS_NAMESPACE)
+        return payload
+
+    async def _send_transfer(
+        self,
+        kind: str,
+        payload: dict[str, Any],
+        raw: bytes,
+        *,
+        context_id: str | None = None,
+    ) -> str:
+        transfer_id = uuid.uuid4().hex
+        op_id = str(payload.get("op_id") or payload.get("request_id") or "")
+        state = _OutgoingTransfer(
+            transfer_id=transfer_id,
+            kind=kind,
+            op_id=op_id,
+            context_id=context_id,
+        )
+        self._outgoing_transfers[transfer_id] = state
+        start = {
+            "transfer_id": transfer_id,
+            "op_id": op_id,
+            "kind": kind,
+            "total_bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+        if context_id:
+            start["context_id"] = context_id
+        try:
+            await self.sio.emit(_EVENT_TRANSFER_START, start, namespace=WS_NAMESPACE)
+            if state.cancel_reason:
+                return state.cancel_reason
+            for index, offset in enumerate(range(0, len(raw), _TRANSFER_CHUNK_BYTES)):
+                if state.cancel_reason:
+                    return state.cancel_reason
+                await self.sio.emit(
+                    _EVENT_TRANSFER_CHUNK,
+                    {
+                        "transfer_id": transfer_id,
+                        "index": index,
+                        "data": base64.b64encode(
+                            raw[offset : offset + _TRANSFER_CHUNK_BYTES]
+                        ).decode("ascii"),
+                    },
+                    namespace=WS_NAMESPACE,
+                )
+                if state.cancel_reason:
+                    return state.cancel_reason
+            await self.sio.emit(
+                _EVENT_TRANSFER_END,
+                {"transfer_id": transfer_id},
+                namespace=WS_NAMESPACE,
+            )
+            return ""
+        except Exception as exc:
+            if not state.abort_sent:
+                state.abort_sent = True
+                try:
+                    await self.sio.emit(
+                        _EVENT_TRANSFER_ABORT,
+                        {
+                            "transfer_id": transfer_id,
+                            "op_id": op_id,
+                            "kind": kind,
+                            "reason": str(exc)[:512],
+                        },
+                        namespace=WS_NAMESPACE,
+                    )
+                except Exception:
+                    pass
+            raise
+        finally:
+            self._outgoing_transfers.pop(transfer_id, None)
 
     def _register_event_handlers(self) -> None:
         if self._events_registered:
@@ -475,6 +809,7 @@ class A0Client:
         @self.sio.on("disconnect", namespace=WS_NAMESPACE)
         async def _on_disconnect() -> None:
             self.connected = False
+            self._clear_transfers("connector disconnected during transfer")
             if self._suppress_disconnect_callback:
                 return
             callback = self.on_disconnect
@@ -527,63 +862,114 @@ class A0Client:
 
         @self.sio.on(_EVENT_FILE_OP, namespace=WS_NAMESPACE)
         async def _on_file_op(payload: dict[str, Any]) -> None:
-            request = self._unwrap_envelope(payload)
-            result = await self._handle_file_op(request)
-            for result_payload in self._file_op_result_payloads(result):
-                await self.sio.emit(
-                    _EVENT_FILE_OP_RESULT,
-                    result_payload,
-                    namespace=WS_NAMESPACE,
-                )
+            await self._dispatch_incoming_operation(
+                _EVENT_FILE_OP,
+                self._unwrap_envelope(payload),
+            )
 
         @self.sio.on(_EVENT_EXEC_OP, namespace=WS_NAMESPACE)
         async def _on_exec_op(payload: dict[str, Any]) -> None:
-            request = self._unwrap_envelope(payload)
-            result = await self._handle_exec_op(request)
-            await self.sio.emit(
-                _EVENT_EXEC_OP_RESULT,
-                result,
-                namespace=WS_NAMESPACE,
+            await self._dispatch_incoming_operation(
+                _EVENT_EXEC_OP,
+                self._unwrap_envelope(payload),
             )
 
         @self.sio.on(_EVENT_COMPUTER_USE_OP, namespace=WS_NAMESPACE)
         async def _on_computer_use_op(payload: dict[str, Any]) -> None:
-            request = self._unwrap_envelope(payload)
-            result = await self._handle_computer_use_op(request)
-            await self.sio.emit(
+            await self._dispatch_incoming_operation(
+                _EVENT_COMPUTER_USE_OP,
+                self._unwrap_envelope(payload),
+            )
+
+        @self.sio.on(_EVENT_BROWSER_OP, namespace=WS_NAMESPACE)
+        async def _on_browser_op(payload: dict[str, Any]) -> None:
+            await self._dispatch_incoming_operation(
+                _EVENT_BROWSER_OP,
+                self._unwrap_envelope(payload),
+            )
+
+        @self.sio.on(_EVENT_GATEWAY_CONTROL, namespace=WS_NAMESPACE)
+        async def _on_gateway_control(payload: dict[str, Any]) -> None:
+            await self._dispatch_incoming_operation(
+                _EVENT_GATEWAY_CONTROL,
+                self._unwrap_envelope(payload),
+            )
+
+        @self.sio.on(_EVENT_TRANSFER_START, namespace=WS_NAMESPACE)
+        async def _on_transfer_start(payload: dict[str, Any]) -> None:
+            await self._receive_transfer_start(self._unwrap_envelope(payload))
+
+        @self.sio.on(_EVENT_TRANSFER_CHUNK, namespace=WS_NAMESPACE)
+        async def _on_transfer_chunk(payload: dict[str, Any]) -> None:
+            await self._receive_transfer_chunk(self._unwrap_envelope(payload))
+
+        @self.sio.on(_EVENT_TRANSFER_END, namespace=WS_NAMESPACE)
+        async def _on_transfer_end(payload: dict[str, Any]) -> None:
+            completed = await self._receive_transfer_end(self._unwrap_envelope(payload))
+            if completed is not None:
+                kind, request = completed
+                await self._dispatch_incoming_operation(kind, request)
+
+        @self.sio.on(_EVENT_TRANSFER_ABORT, namespace=WS_NAMESPACE)
+        async def _on_transfer_abort(payload: dict[str, Any]) -> None:
+            data = self._unwrap_envelope(payload)
+            transfer_id = str(data.get("transfer_id") or "")
+            outgoing = self._outgoing_transfers.pop(transfer_id, None)
+            if outgoing is not None:
+                outgoing.cancel_reason = str(data.get("reason") or "peer aborted transfer")[:512]
+                outgoing.abort_sent = True
+            self._drop_incoming_transfer(transfer_id)
+
+        self._events_registered = True
+
+    async def _dispatch_incoming_operation(
+        self,
+        event: str,
+        request: dict[str, Any],
+    ) -> None:
+        if event == _EVENT_FILE_OP:
+            await self._emit_op_result(
+                _EVENT_FILE_OP_RESULT,
+                await self._handle_file_op(request),
+                context_id=self._transfer_context_id(request.get("context_id")),
+            )
+            return
+        if event == _EVENT_EXEC_OP:
+            await self._emit_op_result(
+                _EVENT_EXEC_OP_RESULT,
+                await self._handle_exec_op(request),
+                context_id=self._transfer_context_id(request.get("context_id")),
+            )
+            return
+        if event == _EVENT_COMPUTER_USE_OP:
+            result = await self._emit_op_result(
                 _EVENT_COMPUTER_USE_OP_RESULT,
-                result,
-                namespace=WS_NAMESPACE,
+                await self._handle_computer_use_op(request),
+                context_id=self._transfer_context_id(request.get("context_id")),
             )
             self._notify_op_result_sent(
                 self.on_computer_use_op_result_sent,
                 request,
                 result,
             )
-
-        @self.sio.on(_EVENT_BROWSER_OP, namespace=WS_NAMESPACE)
-        async def _on_browser_op(payload: dict[str, Any]) -> None:
-            request = self._unwrap_envelope(payload)
-            result = await self._handle_browser_op(request)
-            await self.sio.emit(
+            return
+        if event == _EVENT_BROWSER_OP:
+            result = await self._emit_op_result(
                 _EVENT_BROWSER_OP_RESULT,
-                result,
-                namespace=WS_NAMESPACE,
+                await self._handle_browser_op(request),
+                context_id=self._transfer_context_id(request.get("context_id")),
             )
             self._notify_op_result_sent(
                 self.on_browser_op_result_sent,
                 request,
                 result,
             )
-
-        @self.sio.on(_EVENT_GATEWAY_CONTROL, namespace=WS_NAMESPACE)
-        async def _on_gateway_control(payload: dict[str, Any]) -> None:
-            request = self._unwrap_envelope(payload)
-            result = await self._handle_gateway_control(request)
-            await self.sio.emit(
+            return
+        if event == _EVENT_GATEWAY_CONTROL:
+            result = await self._emit_op_result(
                 _EVENT_GATEWAY_CONTROL_RESULT,
-                result,
-                namespace=WS_NAMESPACE,
+                await self._handle_gateway_control(request),
+                context_id=self._transfer_context_id(request.get("context_id")),
             )
             self._notify_op_result_sent(
                 self.on_gateway_control_result_sent,
@@ -591,30 +977,272 @@ class A0Client:
                 result,
             )
 
-        self._events_registered = True
+    async def _receive_transfer_start(self, data: dict[str, Any]) -> None:
+        transfer_id = str(data.get("transfer_id") or "")
+        kind = str(data.get("kind") or "")
+        op_id = str(data.get("op_id") or "")
+        raw_context_id = data.get("context_id")
+        context_id = self._transfer_context_id(raw_context_id)
+        try:
+            total_bytes = int(data.get("total_bytes"))
+        except (TypeError, ValueError):
+            total_bytes = -1
+        sha256 = str(data.get("sha256") or "").lower()
 
-    def _file_op_result_payloads(self, result: dict[str, Any]) -> list[dict[str, Any]]:
-        raw = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        if len(raw) <= _FILE_OP_RESULT_CHUNK_BYTES:
-            return [result]
+        error = ""
+        if not transfer_id or len(transfer_id) > 128:
+            error = "transfer_id must be a non-empty string up to 128 characters"
+        elif transfer_id in self._incoming_transfers:
+            error = "transfer_id is already active"
+        elif len(self._incoming_transfers) >= _MAX_INCOMING_TRANSFERS:
+            error = "too many concurrent transfers"
+        elif kind not in _TRANSFER_REQUEST_EVENTS:
+            error = f"unsupported transfer kind: {kind or '<missing>'}"
+        elif not op_id or len(op_id) > 256:
+            error = "op_id must be a non-empty string up to 256 characters"
+        elif raw_context_id is not None and (
+            not isinstance(raw_context_id, str)
+            or (str(raw_context_id).strip() and context_id is None)
+        ):
+            error = "context_id must be a string up to 256 characters"
+        elif total_bytes < 0:
+            error = "total_bytes must be a non-negative integer"
+        elif total_bytes > A0_WS_MAX_PAYLOAD_BYTES:
+            error = (
+                f"declared transfer size {total_bytes} exceeds the receiver limit "
+                f"{A0_WS_MAX_PAYLOAD_BYTES}"
+            )
+        elif len(sha256) != 64 or any(char not in "0123456789abcdef" for char in sha256):
+            error = "sha256 must be a 64-character hexadecimal digest"
+        if error:
+            await self._reject_transfer(data, error)
+            return
 
-        op_id = str(result.get("op_id") or "")
-        chunks = [
-            raw[index : index + _FILE_OP_RESULT_CHUNK_BYTES]
-            for index in range(0, len(raw), _FILE_OP_RESULT_CHUNK_BYTES)
+        temp_path: Path | None = None
+        buffer: bytearray | None = bytearray()
+        if total_bytes > _TRANSFER_SPOOL_THRESHOLD_BYTES:
+            fd, temp_name = tempfile.mkstemp(prefix="a0-transfer-")
+            os.close(fd)
+            temp_path = Path(temp_name)
+            buffer = None
+        state = _IncomingTransfer(
+            transfer_id=transfer_id,
+            kind=kind,
+            op_id=op_id,
+            context_id=context_id,
+            total_bytes=total_bytes,
+            sha256=sha256,
+            digest=hashlib.sha256(),
+            updated_at=time.monotonic(),
+            buffer=buffer,
+            temp_path=temp_path,
+        )
+        self._incoming_transfers[transfer_id] = state
+        state.timeout_task = asyncio.create_task(
+            self._expire_incoming_transfer(transfer_id)
+        )
+
+    async def _receive_transfer_chunk(self, data: dict[str, Any]) -> None:
+        transfer_id = str(data.get("transfer_id") or "")
+        state = self._incoming_transfers.get(transfer_id)
+        if state is None:
+            await self._reject_transfer(data, "transfer is not active")
+            return
+        try:
+            index = int(data.get("index"))
+        except (TypeError, ValueError):
+            await self._reject_transfer(data, "chunk index must be an integer")
+            return
+        encoded = data.get("data")
+        if not isinstance(encoded, str) or len(encoded) > _TRANSFER_ENCODED_CHUNK_MAX:
+            await self._reject_transfer(data, "chunk data exceeds the 64 KiB limit")
+            return
+        try:
+            chunk = base64.b64decode(encoded.encode("ascii"), validate=True)
+        except (UnicodeEncodeError, binascii.Error):
+            await self._reject_transfer(data, "chunk data is not valid base64")
+            return
+
+        expected_bytes = min(
+            _TRANSFER_CHUNK_BYTES,
+            state.total_bytes - state.received_bytes,
+        )
+        if index != state.next_index:
+            await self._reject_transfer(
+                data,
+                f"chunk index {index} arrived; expected {state.next_index}",
+            )
+            return
+        if len(chunk) != expected_bytes:
+            await self._reject_transfer(
+                data,
+                f"chunk {index} has {len(chunk)} bytes; expected {expected_bytes}",
+            )
+            return
+
+        try:
+            if state.buffer is not None:
+                state.buffer.extend(chunk)
+            elif state.temp_path is not None:
+                with state.temp_path.open("ab") as handle:
+                    handle.write(chunk)
+            state.digest.update(chunk)
+            state.received_bytes += len(chunk)
+            state.next_index += 1
+            state.updated_at = time.monotonic()
+        except OSError as exc:
+            await self._reject_transfer(data, f"could not spool transfer: {exc}")
+
+    async def _receive_transfer_end(
+        self,
+        data: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]] | None:
+        transfer_id = str(data.get("transfer_id") or "")
+        state = self._incoming_transfers.get(transfer_id)
+        if state is None:
+            await self._reject_transfer(data, "transfer is not active")
+            return None
+        if state.received_bytes != state.total_bytes:
+            await self._reject_transfer(
+                data,
+                f"transfer ended at {state.received_bytes} of {state.total_bytes} bytes",
+            )
+            return None
+        if state.digest.hexdigest() != state.sha256:
+            await self._reject_transfer(data, "transfer SHA-256 mismatch")
+            return None
+
+        try:
+            raw = (
+                bytes(state.buffer)
+                if state.buffer is not None
+                else state.temp_path.read_bytes() if state.temp_path is not None else b""
+            )
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("decoded transfer is not a JSON object")
+            payload_op_id = str(payload.get("op_id") or payload.get("request_id") or "")
+            if payload_op_id != state.op_id:
+                raise ValueError("decoded operation id does not match transfer_start")
+        except Exception as exc:
+            await self._reject_transfer(data, f"invalid transferred payload: {exc}")
+            return None
+
+        kind = state.kind
+        self._drop_incoming_transfer(transfer_id)
+        return kind, payload
+
+    async def _expire_incoming_transfer(self, transfer_id: str) -> None:
+        while True:
+            state = self._incoming_transfers.get(transfer_id)
+            if state is None:
+                return
+            remaining = _TRANSFER_IDLE_TIMEOUT_SECONDS - (
+                time.monotonic() - state.updated_at
+            )
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+                continue
+            await self._reject_transfer(
+                {
+                    "transfer_id": transfer_id,
+                    "op_id": state.op_id,
+                    "kind": state.kind,
+                },
+                f"transfer idle timeout after {_TRANSFER_IDLE_TIMEOUT_SECONDS:g} seconds",
+            )
+            return
+
+    async def _reject_transfer(self, data: dict[str, Any], reason: str) -> None:
+        transfer_id = str(data.get("transfer_id") or "")
+        state = self._incoming_transfers.get(transfer_id)
+        op_id = state.op_id if state is not None else str(data.get("op_id") or "")
+        kind = state.kind if state is not None else str(data.get("kind") or "")
+        self._drop_incoming_transfer(transfer_id)
+        try:
+            await self.sio.emit(
+                _EVENT_TRANSFER_ABORT,
+                {
+                    "transfer_id": transfer_id,
+                    "op_id": op_id,
+                    "kind": kind,
+                    "reason": reason[:512],
+                },
+                namespace=WS_NAMESPACE,
+            )
+        except Exception:
+            pass
+
+    def _drop_incoming_transfer(self, transfer_id: str) -> None:
+        state = self._incoming_transfers.pop(transfer_id, None)
+        if state is None:
+            return
+        task = state.timeout_task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        if state.temp_path is not None:
+            try:
+                state.temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _clear_incoming_transfers(self) -> None:
+        for transfer_id in list(self._incoming_transfers):
+            self._drop_incoming_transfer(transfer_id)
+
+    @staticmethod
+    def _transfer_context_id(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        context_id = value.strip()
+        return context_id if context_id and len(context_id) <= 256 else None
+
+    async def _abort_active_transfers(
+        self,
+        *,
+        reason: str,
+        context_id: str | None = None,
+    ) -> None:
+        outgoing = [
+            state
+            for state in self._outgoing_transfers.values()
+            if context_id is None or state.context_id == context_id
         ]
-        chunk_count = len(chunks)
-        return [
-            {
-                "op_id": op_id,
-                "chunked": True,
-                "chunk_index": index,
-                "chunk_count": chunk_count,
-                "encoding": _FILE_OP_RESULT_CHUNK_ENCODING,
-                "data": base64.b64encode(chunk).decode("ascii"),
-            }
-            for index, chunk in enumerate(chunks)
+        incoming = [
+            state
+            for state in self._incoming_transfers.values()
+            if context_id is None or state.context_id == context_id
         ]
+        for state in outgoing:
+            state.cancel_reason = reason[:512]
+            state.abort_sent = True
+            self._outgoing_transfers.pop(state.transfer_id, None)
+        for state in incoming:
+            self._drop_incoming_transfer(state.transfer_id)
+
+        if not self.sio.connected:
+            return
+        for state in [*outgoing, *incoming]:
+            try:
+                await self.sio.emit(
+                    _EVENT_TRANSFER_ABORT,
+                    {
+                        "transfer_id": state.transfer_id,
+                        "op_id": state.op_id,
+                        "kind": state.kind,
+                        "reason": reason[:512],
+                    },
+                    namespace=WS_NAMESPACE,
+                )
+            except Exception:
+                pass
+
+    def _clear_transfers(self, reason: str) -> None:
+        for state in self._outgoing_transfers.values():
+            state.cancel_reason = reason[:512]
+            state.abort_sent = True
+        self._outgoing_transfers.clear()
+        self._clear_incoming_transfers()
 
     def _notify_op_result_sent(
         self,
@@ -799,7 +1427,19 @@ class A0Client:
                 "On a remote host, update Agent Zero before retrying."
             )
         response.raise_for_status()
-        return self._json(response)
+        data = self._json(response)
+        capabilities = data.get("capabilities")
+        self.peer_ws_max_payload_bytes = _peer_ws_max_payload_bytes(
+            capabilities.get("ws_max_payload_bytes")
+            if isinstance(capabilities, dict)
+            else None
+        )
+        self.peer_transfer_protocol = _transfer_protocol(
+            capabilities.get("transfer_protocol")
+            if isinstance(capabilities, dict)
+            else None
+        )
+        return data
 
     async def login(self, username: str, password: str) -> bool:
         """Create a browser-style authenticated session via the core /login form."""
@@ -866,6 +1506,10 @@ class A0Client:
             "protocol": PROTOCOL_VERSION,
             "client": "a0",
             "client_version": __version__,
+            "capabilities": {
+                "ws_max_payload_bytes": A0_WS_MAX_PAYLOAD_BYTES,
+                "transfer_protocol": TRANSFER_PROTOCOL_VERSION,
+            },
         }
         if isinstance(context_id, str) and context_id.strip():
             payload["context_id"] = context_id.strip()
@@ -879,7 +1523,18 @@ class A0Client:
             payload["remote_exec"] = dict(remote_exec)
         if isinstance(gateway, dict):
             payload["gateway"] = dict(gateway)
-        return await self._call(_EVENT_HELLO, payload)
+        result = await self._call(_EVENT_HELLO, payload)
+        capabilities = result.get("capabilities")
+        if isinstance(capabilities, dict):
+            self.peer_ws_max_payload_bytes = _peer_ws_max_payload_bytes(
+                capabilities.get("ws_max_payload_bytes")
+            )
+            self.peer_transfer_protocol = _transfer_protocol(
+                capabilities.get("transfer_protocol")
+            )
+        else:
+            self.peer_transfer_protocol = 0
+        return result
 
     async def subscribe_context(
         self,
@@ -998,22 +1653,22 @@ class A0Client:
         if not uploads:
             return []
 
-        files = [
-            ("file", (upload.filename, upload.content, upload.mime_type))
-            for upload in uploads
-        ]
-        response = await self.http.post(
-            self._core_api_url("upload"),
-            files=files,
-            headers=await self._csrf_headers(),
-        )
+        expected = [_attachment_size_and_sha256(upload) for upload in uploads]
+        timeout = _bulk_transfer_timeout(sum(size for size, _digest in expected))
+
+        async def post_upload() -> httpx.Response:
+            with _multipart_files(uploads) as files:
+                return await self.http.post(
+                    self._core_api_url("upload"),
+                    files=files,
+                    headers=await self._csrf_headers(),
+                    timeout=timeout,
+                )
+
+        response = await post_upload()
         if response.status_code == 403:
             self._csrf_token = None
-            response = await self.http.post(
-                self._core_api_url("upload"),
-                files=files,
-                headers=await self._csrf_headers(),
-            )
+            response = await post_upload()
         if self._is_login_redirect(response):
             raise A0ProtocolError("Upload requires an authenticated Agent Zero session.")
         if response.status_code >= 400:
@@ -1026,6 +1681,23 @@ class A0Client:
         filenames = data.get("filenames")
         if not isinstance(filenames, list) or len(filenames) != len(uploads):
             raise A0ProtocolError("Upload returned an invalid attachment response.")
+        uploaded_files = data.get("files")
+        if uploaded_files is not None:
+            if not isinstance(uploaded_files, list) or len(uploaded_files) != len(uploads):
+                raise A0ProtocolError("Upload returned invalid integrity metadata.")
+            for metadata, (expected_size, expected_digest) in zip(uploaded_files, expected):
+                if not isinstance(metadata, dict):
+                    raise A0ProtocolError("Upload returned invalid integrity metadata.")
+                if metadata.get("size") != expected_size:
+                    raise A0ProtocolError(
+                        f"Upload size mismatch: expected {expected_size} bytes, "
+                        f"Core reported {metadata.get('size')}."
+                    )
+                if metadata.get("sha256") != expected_digest:
+                    raise A0ProtocolError(
+                        f"Upload SHA-256 mismatch: expected {expected_digest}, "
+                        f"Core reported {metadata.get('sha256')}."
+                    )
 
         refs: list[AttachmentRef] = []
         for filename, upload in zip(filenames, uploads):
@@ -1040,6 +1712,93 @@ class A0Client:
                 )
             )
         return refs
+
+    async def download_file(
+        self,
+        remote_path: str,
+        destination: str | Path,
+        *,
+        expected_size: int | None = None,
+    ) -> dict[str, Any]:
+        target = Path(destination).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(prefix=".partial-", dir=target.parent)
+        os.close(fd)
+        temp_path = Path(temp_name)
+        timeout = _bulk_transfer_timeout(expected_size or 0)
+
+        try:
+            for attempt in range(2):
+                headers = await self._csrf_headers()
+                async with self.http.stream(
+                    "GET",
+                    self._core_api_url("download_work_dir_file"),
+                    params={"path": remote_path},
+                    headers=headers,
+                    timeout=timeout,
+                ) as response:
+                    if response.status_code == 403 and attempt == 0:
+                        self._csrf_token = None
+                        continue
+                    if self._is_login_redirect(response):
+                        raise A0ProtocolError(
+                            "Download requires an authenticated Agent Zero session."
+                        )
+                    if response.status_code >= 400:
+                        raise A0ProtocolError(
+                            f"Download failed: {self._response_message(response)}"
+                        )
+
+                    expected_digest = response.headers.get("X-Content-SHA256", "").lower()
+                    if len(expected_digest) != 64:
+                        raise A0ProtocolError(
+                            "Download response did not include a valid X-Content-SHA256 header."
+                        )
+                    digest = hashlib.sha256()
+                    size = 0
+                    with temp_path.open("wb") as handle:
+                        async for chunk in response.aiter_bytes(_FILE_CHUNK_BYTES):
+                            if not chunk:
+                                continue
+                            handle.write(chunk)
+                            digest.update(chunk)
+                            size += len(chunk)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+
+                    actual_digest = digest.hexdigest()
+                    if actual_digest != expected_digest:
+                        raise A0ProtocolError(
+                            f"Download SHA-256 mismatch: expected {expected_digest}, "
+                            f"received {actual_digest}."
+                        )
+                    content_length = response.headers.get("Content-Length")
+                    if content_length:
+                        try:
+                            declared_size = int(content_length)
+                        except ValueError as exc:
+                            raise A0ProtocolError(
+                                "Download response included an invalid Content-Length header."
+                            ) from exc
+                        if declared_size != size:
+                            raise A0ProtocolError(
+                                f"Download size mismatch: expected {declared_size} bytes, "
+                                f"received {size}."
+                            )
+
+                    os.replace(temp_path, target)
+                    _fsync_directory(target.parent)
+                    return {
+                        "path": str(target),
+                        "size": size,
+                        "sha256": actual_digest,
+                    }
+            raise A0ProtocolError("Download failed after refreshing the CSRF token.")
+        finally:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
 
     async def goal_action(
         self,
@@ -1115,6 +1874,12 @@ class A0Client:
         data = self._json(response)
         if "ok" not in data:
             data["ok"] = True
+        normalized_context_id = self._transfer_context_id(context_id)
+        if normalized_context_id:
+            await self._abort_active_transfers(
+                context_id=normalized_context_id,
+                reason="chat reset during transfer",
+            )
         return data
 
     async def get_projects(self, context_id: str) -> dict[str, Any]:
@@ -1321,6 +2086,12 @@ class A0Client:
         data = self._json(response)
         if "ok" not in data:
             data["ok"] = True
+        normalized_context_id = self._transfer_context_id(context_id)
+        if paused and normalized_context_id:
+            await self._abort_active_transfers(
+                context_id=normalized_context_id,
+                reason="chat paused during transfer",
+            )
         return data
 
     async def nudge_agent(self, context_id: str | None) -> dict[str, Any]:
@@ -1509,10 +2280,14 @@ class A0Client:
             self._suppress_disconnect_callback = True
         try:
             if self.sio.connected:
+                await self._abort_active_transfers(
+                    reason="connector disconnected during transfer",
+                )
                 await self.sio.disconnect()
         finally:
             self._suppress_disconnect_callback = previous_suppression
             self.connected = False
+            self._clear_transfers("connector disconnected during transfer")
         if close_http:
             await self.http.aclose()
 
