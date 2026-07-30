@@ -163,8 +163,13 @@ class ModelSwitcherBar(Horizontal):
         try:
             self._main_model_text = "—"
             self._sync_summary_labels()
-            self._preset.set_options([(format_settings_preset_label(""), "")])
-            self._preset.value = ""
+            # prevent() stamps suppression onto the Select.Changed messages that
+            # set_options()/value= post asynchronously; the _suppress_events flag
+            # alone is not enough because those messages are delivered after
+            # this method returns.
+            with self._preset.prevent(Select.Changed):
+                self._preset.set_options([(format_settings_preset_label(""), "")])
+                self._preset.value = ""
         finally:
             self._suppress_events = False
         self._update_select_state()
@@ -203,8 +208,15 @@ class ModelSwitcherBar(Horizontal):
 
         self._suppress_events = True
         try:
-            self._preset.set_options(options)
-            self._preset.value = current_value
+            # prevent() stamps suppression onto the Select.Changed messages that
+            # set_options()/value= post asynchronously. Without it, set_options()
+            # (allow_blank=False resets value to the first option) and the value
+            # assignment emit Changed messages that arrive after _suppress_events
+            # is already False, firing PresetChanged and making the CLI switch
+            # models on its own in a feedback loop with the state-sync refresh.
+            with self._preset.prevent(Select.Changed):
+                self._preset.set_options(options)
+                self._preset.value = current_value
             self._selected_value = current_value
         finally:
             self._suppress_events = False
