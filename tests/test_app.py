@@ -4829,6 +4829,9 @@ async def test_recover_websocket_preserves_active_context(
             self.connect_calls = 0
             self.hello_calls: list[dict[str, object]] = []
             self.subscribe_calls: list[str] = []
+            # A0Client exposes base_url; the recovery loop watches it to stop
+            # when the user reconnects to a different host meanwhile.
+            self.base_url = "http://agent.test"
 
         async def connect_websocket(self) -> None:
             self.connect_calls += 1
@@ -4906,6 +4909,102 @@ async def test_recover_websocket_preserves_active_context(
     assert status.status == "connected"
     assert splash.state.stage == "ready"
     assert splash.state.message == "Reconnected."
+
+
+async def test_recover_websocket_retries_past_bounded_delays(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FlakyClient:
+        def __init__(self) -> None:
+            self.base_url = "http://agent.test"
+            self.connect_calls = 0
+
+        async def connect_websocket(self) -> None:
+            self.connect_calls += 1
+            if self.connect_calls < 4:
+                raise ConnectionError("refused")
+
+        async def send_hello(self, **payload: object) -> dict[str, object]:
+            return {"exec_config": {"version": 1}}
+
+        async def subscribe_context(self, context_id: str, **kwargs) -> dict[str, object]:
+            del kwargs
+            return {}
+
+    class FakePythonTty:
+        def set_exec_config(self, config: object) -> None:
+            del config
+
+    client = FlakyClient()
+    monkeypatch.setattr("agent_zero_cli.connection._RECOVERY_DELAYS_SECONDS", (0.0, 0.0))
+    monkeypatch.setattr("agent_zero_cli.connection._RECOVERY_STEADY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(dummy_app, "_stop_remote_tree_publisher", lambda: None)
+    monkeypatch.setattr(dummy_app, "_start_remote_tree_publisher", lambda: None)
+
+    async def fake_publish_remote_tree_snapshot(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        dummy_app, "_publish_remote_tree_snapshot", fake_publish_remote_tree_snapshot
+    )
+
+    dummy_app.config.instance_url = "http://agent.test"
+    dummy_app.client = client  # type: ignore[assignment]
+    dummy_app._python_tty = FakePythonTty()  # type: ignore[assignment]
+    dummy_app.connected = True
+    dummy_app.agent_active = True
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app._context_run_complete = False
+
+    await connection._recover_websocket(dummy_app)
+
+    # Two bounded delays are configured, but recovery must keep trying on the
+    # steady cadence instead of giving up after exhausting them.
+    assert client.connect_calls == 4
+    assert dummy_app.connected is True
+
+
+async def test_recover_websocket_stops_when_host_changes(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class HostChangingClient:
+        def __init__(self) -> None:
+            self.base_url = "http://agent.test"
+            self.connect_calls = 0
+            self.hello_calls = 0
+
+        async def connect_websocket(self) -> None:
+            self.connect_calls += 1
+            # The user connected to a different host meanwhile; that
+            # connection owns the client now.
+            self.base_url = "http://other.test"
+            raise ConnectionError("stale connection")
+
+        async def send_hello(self, **payload: object) -> dict[str, object]:
+            self.hello_calls += 1
+            return {}
+
+    client = HostChangingClient()
+    monkeypatch.setattr("agent_zero_cli.connection._RECOVERY_DELAYS_SECONDS", (0.0,))
+    monkeypatch.setattr("agent_zero_cli.connection._RECOVERY_STEADY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(dummy_app, "_stop_remote_tree_publisher", lambda: None)
+
+    dummy_app.config.instance_url = "http://agent.test"
+    dummy_app.client = client  # type: ignore[assignment]
+    dummy_app.connected = False
+    dummy_app.agent_active = False
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app._context_run_complete = False
+
+    await connection._recover_websocket(dummy_app)
+
+    assert client.connect_calls == 1
+    assert client.hello_calls == 0
+    assert dummy_app._websocket_recovery_task is None
 
 
 def test_copy_to_clipboard_mirrors_to_native_windows_clipboard(
