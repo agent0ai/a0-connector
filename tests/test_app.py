@@ -4988,7 +4988,7 @@ async def test_recover_websocket_stops_when_host_changes(
             return {}
 
     client = HostChangingClient()
-    monkeypatch.setattr("agent_zero_cli.connection._RECOVERY_DELAYS_SECONDS", (0.0,))
+    monkeypatch.setattr("agent_zero_cli.connection._RECOVERY_DELAYS_SECONDS", (0.0, 0.0))
     monkeypatch.setattr("agent_zero_cli.connection._RECOVERY_STEADY_DELAY_SECONDS", 0.0)
     monkeypatch.setattr(dummy_app, "_stop_remote_tree_publisher", lambda: None)
 
@@ -5002,6 +5002,59 @@ async def test_recover_websocket_stops_when_host_changes(
 
     await connection._recover_websocket(dummy_app)
 
+    assert client.connect_calls == 1
+    assert client.hello_calls == 0
+    assert dummy_app._websocket_recovery_task is None
+
+
+async def test_recover_websocket_rechecks_host_after_sleep(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingClient:
+        def __init__(self) -> None:
+            self.base_url = "http://agent.test"
+            self.connect_calls = 0
+            self.hello_calls = 0
+
+        async def connect_websocket(self) -> None:
+            self.connect_calls += 1
+            raise ConnectionError("refused")
+
+        async def send_hello(self, **payload: object) -> dict[str, object]:
+            self.hello_calls += 1
+            return {}
+
+    client = FailingClient()
+    monkeypatch.setattr("agent_zero_cli.connection._RECOVERY_DELAYS_SECONDS", (0.0, 0.0))
+    monkeypatch.setattr("agent_zero_cli.connection._RECOVERY_STEADY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(dummy_app, "_stop_remote_tree_publisher", lambda: None)
+
+    sleep_calls = 0
+
+    async def fake_sleep(delay: float) -> None:
+        del delay
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls == 2:
+            # The host switch lands while recovery is asleep: begin_connection
+            # updates client.base_url immediately but the context only later,
+            # so the post-sleep guard must re-check base_url, not just context.
+            client.base_url = "http://other.test"
+
+    monkeypatch.setattr("agent_zero_cli.connection.asyncio.sleep", fake_sleep)
+
+    dummy_app.config.instance_url = "http://agent.test"
+    dummy_app.client = client  # type: ignore[assignment]
+    dummy_app.connected = False
+    dummy_app.agent_active = False
+    dummy_app.current_context = "ctx-1"
+    dummy_app.current_context_has_messages = True
+    dummy_app._context_run_complete = False
+
+    await connection._recover_websocket(dummy_app)
+
+    assert sleep_calls == 2
     assert client.connect_calls == 1
     assert client.hello_calls == 0
     assert dummy_app._websocket_recovery_task is None

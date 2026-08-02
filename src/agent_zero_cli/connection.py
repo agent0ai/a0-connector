@@ -448,7 +448,12 @@ async def _recover_websocket(app: AgentZeroCLI) -> None:
                 host=app._splash_host(),
             )
             await asyncio.sleep(delay)
-            if str(app.current_context or "").strip() != context_id:
+            if str(app.current_context or "").strip() != context_id or (
+                app.client.base_url != base_url
+            ):
+                # Re-check both stop conditions after the sleep: a host switch
+                # updates client.base_url before it updates the context, so
+                # the context check alone is not enough here.
                 return
             try:
                 await app.client.connect_websocket()
@@ -489,7 +494,11 @@ async def _recover_websocket(app: AgentZeroCLI) -> None:
         # changed it owns the connection state now, so exit quietly.
         return
     finally:
-        app._websocket_recovery_task = None
+        # Only clear the registration if this task still owns it: a newer
+        # recovery task may have registered itself before our cancellation
+        # was delivered.
+        if app._websocket_recovery_task is asyncio.current_task():
+            app._websocket_recovery_task = None
 
 
 def _reset_disconnected_state(app: AgentZeroCLI) -> None:
@@ -609,6 +618,14 @@ async def disconnect_and_exit(app: AgentZeroCLI) -> None:
     app._stop_remote_tree_publisher()
     app._stop_token_refresh()
     app._stop_state_sync()
+    # Cancel any in-flight websocket recovery: with unbounded retries it can
+    # otherwise outlive the shutdown until loop teardown.
+    recovery_task = getattr(app, "_websocket_recovery_task", None)
+    app._websocket_recovery_task = None
+    if recovery_task is not None and not recovery_task.done():
+        recovery_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await recovery_task
     await app._python_tty.close()
     app._computer_use.reset_enabled_for_shutdown()
     await app._computer_use.disconnect()
