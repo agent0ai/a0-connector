@@ -123,6 +123,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default=".",
         help="Local workspace root for remote file and exec operations.",
     )
+    acp = subparsers.add_parser(
+        "acp",
+        help="Run an Agent Client Protocol stdio server through Agent Zero.",
+    )
+    acp.add_argument("--host", dest="acp_host", metavar="URL", help="Agent Zero base URL.")
+    acp.add_argument("--workspace", metavar="DIR", default=".", help="Fallback workspace when the ACP client does not provide one.")
+    acp.add_argument("--no-docker-discovery", action="store_true", help="Skip local Docker instance discovery.")
+    acp.add_argument("--check", action="store_true", help="Verify ACP support and exit.")
+    acp.add_argument("--debug", action="store_true", help="Write ACP diagnostics to stderr.")
+    acp.add_argument("--transport", choices=("connector", "container"), help=argparse.SUPPRESS)
+    acp.add_argument("--container-id", help=argparse.SUPPRESS)
     gateway = subparsers.add_parser(
         "gateway",
         help="Run a Launcher-supervised host-tools gateway over JSONL.",
@@ -260,6 +271,31 @@ def _run_gateway(
     return run_gateway(options, config)
 
 
+def _run_acp(
+    *,
+    host: str,
+    workspace: str,
+    discover_instances: bool,
+    check: bool,
+    debug: bool,
+    transport: str | None,
+    container_id: str | None,
+) -> int:
+    from agent_zero_cli.acp import AcpOptions, run_acp
+
+    return run_acp(
+        AcpOptions(
+            host=host,
+            workspace=Path(workspace),
+            discover_instances=discover_instances,
+            check=check,
+            debug=debug,
+            transport=transport or "",
+            container_id=container_id or "",
+        )
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -292,6 +328,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             master_enabled=args.gateway_master,
             scopes=args.scopes,
             browser_selection=args.browser_selection,
+        )
+
+    if args.command == "acp":
+        return _run_acp(
+            host=(args.acp_host or args.host or ""),
+            workspace=args.workspace,
+            discover_instances=not args.no_docker_discovery,
+            check=bool(args.check),
+            debug=bool(args.debug),
+            transport=args.transport,
+            container_id=args.container_id,
         )
 
     _run_app(

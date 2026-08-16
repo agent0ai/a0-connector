@@ -136,6 +136,19 @@ class FakeResponse:
             raise httpx.HTTPStatusError("error", request=request, response=response)
 
 
+async def test_acp_session_posts_to_the_bundled_plugin_endpoint() -> None:
+    client = A0Client("http://agent.test")
+    client.http = Mock()
+    client.http.post = AsyncMock(return_value=FakeResponse(json_data={"ok": True}))
+
+    assert await client.acp_session("configure", context_id="ctx-1", cwd="/workspace") == {"ok": True}
+    client.http.post.assert_awaited_once_with(
+        "http://agent.test/api/plugins/_a0_acp/session",
+        json={"action": "configure", "context_id": "ctx-1", "cwd": "/workspace"},
+        follow_redirects=False,
+    )
+
+
 async def test_fetch_image_uses_authenticated_core_endpoint() -> None:
     client = A0Client("http://agent.test")
     client.http = Mock()

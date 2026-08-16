@@ -19,6 +19,7 @@ from agent_zero_cli import __version__
 from agent_zero_cli.attachments import AttachmentRef, AttachmentUpload, remote_upload_path
 
 _PLUGIN_API = "/api/plugins/_a0_connector/v1"
+_ACP_PLUGIN_API = "/api/plugins/_a0_acp"
 # Agent Zero's installer defaults to the first free port starting at 5080.
 DEFAULT_HOST = "http://localhost:5080"
 PROTOCOL_VERSION = "a0-connector.v1"
@@ -558,6 +559,18 @@ class A0Client:
             self._api_url(endpoint),
             json=payload or {},
         )
+
+    async def acp_session(self, action: str, **payload: Any) -> dict[str, Any]:
+        response = await self.http.post(
+            f"{self.base_url}{_ACP_PLUGIN_API}/session",
+            json={"action": action, **payload},
+            follow_redirects=False,
+        )
+        if self._is_login_redirect(response):
+            raise A0ProtocolError("ACP configuration requires an authenticated Agent Zero session.")
+        if response.status_code >= 400:
+            raise A0ProtocolError(f"ACP {action} failed: {self._response_message(response)}")
+        return self._json(response)
 
     async def _call(self, event: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         response = await self.sio.call(

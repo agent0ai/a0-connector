@@ -105,6 +105,8 @@ class ConnectorSession:
         remote_files_enabled: bool = True,
         remote_exec_enabled: bool = True,
         tools_only: bool = False,
+        defer_context: bool = False,
+        remember_context: bool = True,
         gateway: dict[str, Any] | None = None,
         host_browser_manager: HostBrowserManager | None = None,
         computer_use_manager: ComputerUseManager | None = None,
@@ -120,6 +122,8 @@ class ConnectorSession:
         self.remote_files_enabled = remote_files_enabled
         self.remote_exec_enabled = remote_exec_enabled
         self.tools_only = tools_only
+        self.defer_context = defer_context
+        self.remember_context = remember_context
         self.gateway = dict(gateway or {})
         self.gateway_enabled = bool(gateway)
         self.master_enabled = bool(self.gateway.get("master_enabled", True))
@@ -239,6 +243,14 @@ class ConnectorSession:
             self._notify_gateway_state_change()
             return ""
 
+        if self.defer_context:
+            self.connected = True
+            await self.refresh_remote_tool_metadata()
+            await self.publish_remote_tree_snapshot(force=True)
+            self._start_remote_tree_publisher()
+            self._stage("ready", "Connector ready for a chat context.", normalized_host)
+            return ""
+
         self._stage("connecting", "Resolving chat context...", normalized_host)
         try:
             resolved_context_id, has_messages_hint = await self._resolve_initial_context(
@@ -265,7 +277,8 @@ class ConnectorSession:
             ) from exc
 
         self.connected = True
-        self._remember_context(resolved_context_id)
+        if self.remember_context:
+            self._remember_context(resolved_context_id)
         self._start_remote_tree_publisher()
         self._stage("ready", "Ready when you are.", normalized_host)
         if warning := connector_version_warning(capabilities):
@@ -425,7 +438,8 @@ class ConnectorSession:
         await client.subscribe_context(normalized_context_id, from_seq=0)
         await self.refresh_remote_tool_metadata()
         await self.publish_remote_tree_snapshot(force=True)
-        self._remember_context(normalized_context_id)
+        if self.remember_context:
+            self._remember_context(normalized_context_id)
         self._stage("ready", "Switched chat.", normalized_context_id)
 
     async def refresh_context_snapshot(self) -> None:
@@ -985,7 +999,9 @@ class ConnectorSession:
     async def _recover_websocket(self) -> None:
         client = self.client
         context_id = self.context_id
-        if client is None or not self.host or (not self.tools_only and not context_id):
+        if client is None or not self.host or (
+            not self.tools_only and not self.defer_context and not context_id
+        ):
             self._recovery_task = None
             self.agent_active = False
             self.observer.on_disconnect()
@@ -1001,7 +1017,7 @@ class ConnectorSession:
                 )
                 await asyncio.sleep(delay)
                 if self.client is not client or (
-                    not self.tools_only and not self.context_id
+                    not self.tools_only and not self.defer_context and not self.context_id
                 ):
                     return
                 try:
@@ -1016,7 +1032,7 @@ class ConnectorSession:
                     )
                     exec_config = hello.get("exec_config") if isinstance(hello, dict) else None
                     self.remote_exec.set_exec_config(exec_config)
-                    if not self.tools_only:
+                    if not self.tools_only and context_id:
                         await client.subscribe_context(context_id)
                     await self.publish_remote_tree_snapshot(force=True)
                 except asyncio.CancelledError:
