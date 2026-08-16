@@ -12,7 +12,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "a0"
-version = "2.9"
+version = "2.10"
 description = "Terminal chat interface for Agent Zero"
 readme = "README.md"
 license = { file = "LICENSE" }
