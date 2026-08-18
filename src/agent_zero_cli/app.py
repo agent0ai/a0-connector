@@ -61,6 +61,7 @@ from agent_zero_cli.widgets.command_palette import (
     AgentCommandPalette,
     OrderedSystemCommandsProvider,
     is_raw_skill_command,
+    reference_query_at_cursor,
 )
 from agent_zero_cli.widgets import (
     ChatInput,
@@ -273,6 +274,7 @@ class AgentZeroCLI(App):
         self._model_switcher_signature_pending_retries = 0
         self._pause_latched = False
         self._slash_palette_query: str | None = None
+        self._reference_palette_range: tuple[tuple[int, int], tuple[int, int]] | None = None
         self._skill_palette_cache: list[dict[str, Any]] = []
         self._skill_palette_cache_key: tuple[str, str] | None = None
         self._compaction_refresh_context: str | None = None
@@ -2352,6 +2354,20 @@ class AgentZeroCLI(App):
         )
 
     def on_chat_input_value_changed(self, event: ChatInput.ValueChanged) -> None:
+        selection = getattr(event.input, "selection", None)
+        document = getattr(event.input, "document", None)
+        if selection is not None and document is not None and selection.start == selection.end:
+            cursor_index = document.get_index_from_location(selection.end)
+            reference = reference_query_at_cursor(event.value, cursor_index)
+            if reference is not None:
+                query, start, end = reference
+                self._reference_palette_range = (
+                    document.get_location_from_index(start),
+                    document.get_location_from_index(end),
+                )
+                self._open_command_palette(initial_query=query)
+                return
+
         skill_query = self._skill_query(event.value)
         if skill_query is not None:
             if self._skills_available():
@@ -2369,7 +2385,18 @@ class AgentZeroCLI(App):
         self._open_command_palette(initial_query=query, from_slash=True)
 
     def on_command_palette_closed(self, event: CommandPalette.Closed) -> None:
-        del event
+        reference_range = self._reference_palette_range
+        self._reference_palette_range = None
+        if reference_range is not None:
+            if getattr(event, "option_selected", False):
+                return
+            try:
+                input_widget = self.query_one("#message-input", ChatInput)
+                input_widget.replace("", *reference_range)
+            except Exception:
+                pass
+            return
+
         query = self._slash_palette_query
         self._slash_palette_query = None
         if query is None:
@@ -2394,6 +2421,20 @@ class AgentZeroCLI(App):
             return
 
         input_widget.value = value[:token_start]
+
+    def _insert_reference(
+        self,
+        reference: str,
+        trigger_range: tuple[tuple[int, int], tuple[int, int]] | None,
+    ) -> None:
+        if not trigger_range:
+            return
+        input_widget = self.query_one("#message-input", ChatInput)
+        end_index = input_widget.document.get_index_from_location(trigger_range[1])
+        separator = "" if input_widget.value[end_index : end_index + 1].isspace() else " "
+        result = input_widget.replace(f"{reference}{separator}", *trigger_range)
+        input_widget.move_cursor(result.end_location)
+        input_widget.focus()
 
     async def on_model_switcher_bar_preset_changed(self, event: ModelSwitcherBar.PresetChanged) -> None:
         await self._set_model_preset(event.value or None, bar=event.bar)

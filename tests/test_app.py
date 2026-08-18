@@ -11,6 +11,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.css.query import NoMatches
+from textual.fuzzy import Matcher
 from textual.selection import SELECT_ALL
 
 from agent_zero_cli import (
@@ -35,7 +36,14 @@ from agent_zero_cli.remote_files import RemoteTreeSnapshot
 from agent_zero_cli.screens.installed_plugins import InstalledPluginsScreen
 from agent_zero_cli.screens.model_runtime import ModelRuntimeResult
 from agent_zero_cli.widgets import computer_use_banner as computer_use_banner_mod
-from agent_zero_cli.widgets.command_palette import is_raw_skill_command, is_raw_slash_command
+from agent_zero_cli.widgets.command_palette import (
+    _container_reference_directory,
+    _scoped_reference_catalog,
+    OrderedSystemCommandsProvider,
+    is_raw_skill_command,
+    is_raw_slash_command,
+    reference_query_at_cursor,
+)
 from agent_zero_cli.widgets.chat_log import ChatLog, SelectableStatic, TranscriptEntry
 from agent_zero_cli.widgets.image_entry import ImageEntry
 from agent_zero_cli.widgets import (
@@ -3483,6 +3491,94 @@ def test_raw_skill_command_detection() -> None:
     assert is_raw_skill_command("$") is False
     assert is_raw_skill_command("$100") is False
     assert is_raw_skill_command("please use $imagegen") is False
+
+
+def test_reference_query_detection_uses_the_composer_cursor() -> None:
+    value = "Compare @src/app with the current file"
+    cursor = len("Compare @src/app")
+
+    assert reference_query_at_cursor(value, cursor) == ("@src/app", 8, cursor)
+    assert reference_query_at_cursor("mail@example.test", len("mail@example.test")) is None
+    assert reference_query_at_cursor("Use @[./src/app.py] ", 21) is None
+
+
+def test_container_reference_directory_stays_under_the_active_workspace() -> None:
+    root = "/a0/usr/workdir/project"
+
+    assert _container_reference_directory("@/", root) == ""
+    assert _container_reference_directory("@/a0/usr/workdir/project/src/", root) == "src"
+    assert _container_reference_directory("@/a0/usr/workdir/project/../secret", root) is None
+    assert _container_reference_directory("@/a0/usr/other", root) is None
+
+
+def test_scoped_reference_catalog_excludes_disabled_profiles_hidden_skills_and_blocked_mcps() -> None:
+    catalog = _scoped_reference_catalog(
+        [
+            {"id": "researcher", "title": "Researcher", "enabled": True, "available": True},
+            {"id": "disabled", "title": "Disabled", "enabled": False, "available": True},
+            {"id": "missing", "title": "Missing", "enabled": True, "available": False},
+        ],
+        {
+            "skills": {
+                "catalog": [
+                    {"name": "visible", "description": "Visible skill", "path": "/a0/skills/visible"},
+                    {"name": "hidden", "hidden": True},
+                ]
+            },
+            "tools": {
+                "effective_policy": {
+                    "mode": "custom",
+                    "mcp_default": "block",
+                    "allowed": ["mcp:enabled:search"],
+                    "blocked": ["mcp:blocked:read"],
+                },
+                "catalog": [
+                    {"id": "mcp:enabled:search"},
+                    {"id": "mcp:blocked:read"},
+                    {"id": "mcp:unavailable:read", "available": False},
+                ],
+            },
+        },
+    )
+
+    assert [item[0] for item in catalog] == [
+        "@[agent/researcher]",
+        "@[skill/visible]",
+        "@[mcp/enabled]",
+    ]
+
+
+def test_container_reference_hit_uses_literal_bracketed_text() -> None:
+    class Client:
+        async def get_chat_files_path(self, _context_id: str) -> str:
+            return "/a0/usr/workdir"
+
+        async def list_container_reference_entries(
+            self,
+            _root: str,
+            _directory: str,
+        ) -> list[dict[str, object]]:
+            return [{"name": "demo", "path": "/a0/usr/workdir/demo", "is_dir": False}]
+
+    async def collect() -> list[object]:
+        app = SimpleNamespace(
+            client=Client(),
+            current_context="ctx-1",
+            connector_features=set(),
+            _remote_files=SimpleNamespace(list_reference_entries=lambda _directory: []),
+            _reference_palette_range=None,
+            _insert_reference=lambda *_args: None,
+        )
+        provider = SimpleNamespace(app=app, matcher=lambda query: Matcher(query))
+        return [
+            hit
+            async for hit in OrderedSystemCommandsProvider._search_reference_targets(provider, "@/")
+        ]
+
+    hits = asyncio.run(collect())
+
+    assert len(hits) == 1
+    assert hits[0].text == "@[/a0/usr/workdir/demo]"
 
 
 def test_bare_dollar_auto_opens_skill_palette(

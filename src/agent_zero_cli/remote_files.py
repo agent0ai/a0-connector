@@ -65,6 +65,27 @@ class RemoteFileUtility:
     def set_write_enabled(self, enabled: bool) -> None:
         self.allow_writes = enabled
 
+    def list_reference_entries(self, directory: str = "") -> list[dict[str, Any]]:
+        """List one workspace directory for composer reference completion."""
+        target = self._expand_file_path(directory or ".")
+        if not os.path.isdir(target):
+            return []
+
+        relative_dir = os.path.relpath(target, self.scan_root)
+        if relative_dir == ".":
+            relative_dir = ""
+        relative_dir = relative_dir.replace(os.sep, "/")
+        dirs, files = self._list_entries(target, relative_dir, self._load_ignore_patterns())
+        return [
+            {
+                "name": entry.name,
+                "path": f"{relative_dir}/{entry.name}".strip("/"),
+                "is_dir": is_dir,
+            }
+            for entries, is_dir in ((dirs, True), (files, False))
+            for entry in entries
+        ]
+
     def handle_file_op(self, data: dict[str, Any]) -> dict[str, Any]:
         op_id = data.get("op_id", "")
         op = str(data.get("op", "")).strip().lower()

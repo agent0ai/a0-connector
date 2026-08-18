@@ -817,6 +817,56 @@ async def test_list_skills_posts_context_scoped_payload() -> None:
     ]
 
 
+async def test_container_reference_entries_stay_in_the_active_chat_workspace() -> None:
+    client = A0Client("http://agent.test")
+    client._csrf_token = "csrf-test"
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(json_data={"ok": True, "path": "/a0/usr/workdir/project"})
+    )
+    client.http.get = AsyncMock(
+        return_value=FakeResponse(
+            json_data={
+                "data": {
+                    "entries": [
+                        {"name": "src", "path": "a0/usr/workdir/project/src", "is_dir": True},
+                        {"name": "escape", "path": "tmp/escape", "is_dir": False},
+                        {"name": "linked", "path": "a0/usr/workdir/project/linked", "is_symlink": True},
+                        {"name": "nested", "path": "a0/usr/workdir/project/src/nested", "is_dir": False},
+                    ]
+                }
+            }
+        )
+    )
+
+    root = await client.get_chat_files_path("ctx-1")
+    entries = await client.list_container_reference_entries(root)
+
+    assert root == "/a0/usr/workdir/project"
+    assert entries == [{"name": "src", "path": "/a0/usr/workdir/project/src", "is_dir": True}]
+    client.http.post.assert_awaited_once_with(
+        "http://agent.test/api/chat_files_path_get",
+        json={"ctxid": "ctx-1"},
+        headers={
+            "Origin": "http://agent.test",
+            "Referer": "http://agent.test/",
+            "X-CSRF-Token": "csrf-test",
+        },
+    )
+    client.http.get.assert_awaited_once_with(
+        "http://agent.test/api/get_work_dir_files",
+        params={"path": "/a0/usr/workdir/project"},
+        headers={
+            "Origin": "http://agent.test",
+            "Referer": "http://agent.test/",
+            "X-CSRF-Token": "csrf-test",
+        },
+    )
+
+    with pytest.raises(ValueError, match="outside the active workspace"):
+        await client.list_container_reference_entries(root, "../outside")
+
+
 async def test_list_commands_posts_to_commands_plugin_api_with_csrf() -> None:
     client = A0Client("http://example.test")
     client.http = Mock()

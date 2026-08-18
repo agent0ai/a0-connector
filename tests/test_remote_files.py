@@ -289,6 +289,23 @@ def test_remote_file_utility_blocks_writes_and_bounds_tree_snapshots(tmp_path: P
     assert "src/" in snapshot.tree
 
 
+def test_remote_file_utility_lists_reference_entries_inside_workspace(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    utility = RemoteFileUtility(scan_root=str(tmp_path))
+
+    assert utility.list_reference_entries() == [
+        {"name": "src", "path": "src", "is_dir": True},
+    ]
+    assert utility.list_reference_entries("src") == [
+        {"name": "main.py", "path": "src/main.py", "is_dir": False},
+    ]
+
+    with pytest.raises(PermissionError):
+        utility.list_reference_entries("../outside")
+
+
 def test_remote_tree_snapshot_skips_directories_that_cannot_be_scanned(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

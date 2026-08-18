@@ -6,6 +6,7 @@ import asyncio
 import base64
 from http.cookiejar import Cookie
 import json
+import posixpath
 import time
 import uuid
 from typing import Any, Callable, Mapping
@@ -78,6 +79,25 @@ class A0ConnectorPluginMissingError(RuntimeError):
 
 class A0WebSocketConnectionError(RuntimeError):
     """WebSocket/Socket.IO connection failed with a user-facing message."""
+
+
+def _container_reference_path(root: str, directory: str = "") -> str:
+    normalized_root = posixpath.normpath(str(root or "").replace("\\", "/"))
+    if not normalized_root.startswith("/"):
+        raise ValueError("Container workspace path must be absolute.")
+
+    normalized_directory = str(directory or "").replace("\\", "/").strip("/")
+    if ".." in normalized_directory.split("/"):
+        raise ValueError("Container reference path is outside the active workspace.")
+
+    target = posixpath.normpath(posixpath.join(normalized_root, normalized_directory))
+    try:
+        contained = posixpath.commonpath((normalized_root, target)) == normalized_root
+    except ValueError:
+        contained = False
+    if not contained:
+        raise ValueError("Container reference path is outside the active workspace.")
+    return target
 
 
 def _ensure_aiohttp_ws_timeout_compat() -> None:
@@ -1272,6 +1292,66 @@ class A0Client:
         response.raise_for_status()
         commands = self._json(response).get("commands", [])
         return commands if isinstance(commands, list) else []
+
+    async def get_chat_files_path(self, context_id: str) -> str:
+        response = await self.http.post(
+            self._core_api_url("chat_files_path_get"),
+            json={"ctxid": context_id},
+            headers=await self._csrf_headers(),
+        )
+        if response.status_code == 403:
+            self._csrf_token = None
+            response = await self.http.post(
+                self._core_api_url("chat_files_path_get"),
+                json={"ctxid": context_id},
+                headers=await self._csrf_headers(),
+            )
+        if self._is_login_redirect(response):
+            raise A0ProtocolError("Container workspace lookup requires an authenticated Agent Zero session.")
+        response.raise_for_status()
+        return str(self._json(response).get("path") or "").strip()
+
+    async def list_container_reference_entries(
+        self,
+        root: str,
+        directory: str = "",
+    ) -> list[dict[str, Any]]:
+        target = _container_reference_path(root, directory)
+        response = await self.http.get(
+            self._core_api_url("get_work_dir_files"),
+            params={"path": target},
+            headers=await self._csrf_headers(),
+        )
+        if response.status_code == 403:
+            self._csrf_token = None
+            response = await self.http.get(
+                self._core_api_url("get_work_dir_files"),
+                params={"path": target},
+                headers=await self._csrf_headers(),
+            )
+        if self._is_login_redirect(response):
+            raise A0ProtocolError("Container workspace lookup requires an authenticated Agent Zero session.")
+        response.raise_for_status()
+
+        data = self._json(response).get("data", {})
+        entries = data.get("entries", []) if isinstance(data, Mapping) else []
+        result: list[dict[str, Any]] = []
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, Mapping) or entry.get("is_symlink"):
+                continue
+            normalized_root = _container_reference_path(root)
+            path = posixpath.normpath("/" + str(entry.get("path") or "").replace("\\", "/").lstrip("/"))
+            try:
+                contained = posixpath.commonpath((normalized_root, path)) == normalized_root
+            except ValueError:
+                contained = False
+            if not contained or posixpath.dirname(path) != target:
+                continue
+            name = str(entry.get("name") or "").strip()
+            if not name or posixpath.basename(path) != name:
+                continue
+            result.append({"name": name, "path": path, "is_dir": bool(entry.get("is_dir"))})
+        return result
 
     async def list_skills(
         self,

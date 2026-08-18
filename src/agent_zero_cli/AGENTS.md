@@ -38,6 +38,7 @@
 - `/browser list`, `/browser auto`, and direct `/browser <number|id|host:port|ws://...>` own CLI-side host-browser target selection for the current Agent Zero project.
 - `/goal <objective>` creates the active chat goal through the builtin `_goal` plugin and sends the objective to the agent; `/goal update <text>` stays silent for active goals but resends an edited complete or blocked goal so work resumes; `/goal delete` only mutates goal state.
 - The connected TUI command palette must merge effective `_commands` entries for the active chat with its local command registry. Local commands win name collisions; only server-confirmed extension commands may be forwarded through the chat path for Core-side resolution.
+- Composer `@` completion reuses the Textual command palette and inserts plain references only. `@./` lists the bounded local workspace while `@/` lists only the active chat's container workspace; profile, skill, and MCP rows come from the scoped Agent Editor/tool-policy state.
 - `/profile` keeps direct profile selection, adds quoted name plus instructions
   for quick creation, and uses the connector `agent_editor` capability for its
   create/edit screen rather than writing Agent Zero profile files locally. The
