@@ -849,7 +849,7 @@ class HostBrowserManager:
             return (
                 f"Browser support is incomplete in the A0 CLI host environment ({sys.executable}). "
                 "Use the current Browser setup action, or run /browser repair in the A0 CLI. "
-                "The Playwright runtime inside the Agent Zero Docker container is used by the "
+                "The Patchright runtime inside the Agent Zero Docker container is used by the "
                 "container browser backend and cannot control host Chromium-family profiles."
             )
         return self._profile_support_reason(profile)

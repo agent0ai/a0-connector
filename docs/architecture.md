@@ -170,7 +170,7 @@ deploy that Core correction.
 
 Host browser mode keeps the public agent API as Agent Zero's existing
 `browser` tool. The Browser plugin decides whether a call uses the container
-Playwright runtime or emits `connector_browser_op` to the subscribed CLI:
+Patchright runtime or emits `connector_browser_op` to the subscribed CLI:
 
 ```json
 {
@@ -252,7 +252,7 @@ does not need direct network access to the host browser.
 
 The local-profile launch path uses the Python Playwright client installed as a
 normal A0 CLI runtime dependency. It does not install a separate Chromium
-binary. The Playwright runtime under the Agent Zero Docker container,
+binary. The Patchright runtime under the Agent Zero Docker container,
 including `/a0/tmp/playwright`, powers the container browser backend and cannot
 control a host Chromium-family profile from inside Docker. User-authorized
 remote debugging does not require the Chrome DevTools MCP package or Playwright
