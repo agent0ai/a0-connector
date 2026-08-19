@@ -5789,6 +5789,8 @@ async def test_chat_log_copyable_text_prefers_visible_children() -> None:
                 Panel(f"copyable row {sequence}", border_style="#555555", padding=(0, 1)),
             )
         await pilot.pause()
+        log.scroll_end(animate=False, immediate=True)
+        await pilot.pause()
 
         visible_text = log.copyable_text(visible_only=True)
         all_text = log.copyable_text(visible_only=False)

@@ -97,6 +97,8 @@ def _install_fake_helpers(
     persist_chat_mod = types.ModuleType("helpers.persist_chat")
     state_monitor_mod = types.ModuleType("helpers.state_monitor_integration")
     tool_mod = types.ModuleType("helpers.tool")
+    tool_policy_mod = types.ModuleType("helpers.tool_policy")
+    tool_policy_mod.resolve_tool = lambda *args, **kwargs: types.SimpleNamespace(allowed=True)
     ws_mod = types.ModuleType("helpers.ws")
     ws_manager_mod = types.ModuleType("helpers.ws_manager")
 
@@ -389,6 +391,7 @@ def _install_fake_helpers(
     sys.modules["helpers.plugins"] = plugins_mod
     sys.modules["helpers.print_style"] = print_style_mod
     sys.modules["helpers.tool"] = tool_mod
+    sys.modules["helpers.tool_policy"] = tool_policy_mod
     sys.modules["helpers.ws"] = ws_mod
     sys.modules["helpers.ws_manager"] = ws_manager_mod
     helpers_pkg.git = git_mod
@@ -436,6 +439,7 @@ def _install_fake_helpers(
     helpers_pkg.plugins = plugins_mod
     helpers_pkg.print_style = print_style_mod
     helpers_pkg.tool = tool_mod
+    helpers_pkg.tool_policy = tool_policy_mod
     helpers_pkg.ws = ws_mod
     helpers_pkg.ws_manager = ws_manager_mod
 
@@ -1018,6 +1022,10 @@ def test_browser_runtime_endpoint_updates_browser_plugin_config() -> None:
                 "host_browser_privacy_policy": "warn",
                 "host_browser_profile_mode": "existing",
                 "host_browser_selection": "",
+                "proxy_server": "",
+                "proxy_bypass": "",
+                "proxy_username": "",
+                "proxy_password": "",
                 "model_preset": "Research",
             },
         )
