@@ -427,14 +427,25 @@ async def _quick_create_profile(
         app._show_notice(str(payload.get("message") or "Failed to create profile."), error=True)
         return
     profile_id = str(payload.get("profile_id") or "").strip()
+    if not profile_id:
+        app._show_notice("Profile created, but Agent Zero did not return its ID.", error=True)
+        return
     try:
         context_id = await app.client.create_chat(
             current_context_id=app.current_context,
-            agent_profile=profile_id,
             project_name=project_name(app.current_project),
         )
     except Exception as exc:
         app._show_notice(f"Profile created, but the new chat could not be opened: {exc}", error=True)
+        return
+    try:
+        activation = await app.client.set_agent_profile(context_id, profile_id)
+    except Exception as exc:
+        app._show_notice(f"Profile created, but it could not be activated: {exc}", error=True)
+        return
+    if not activation.get("ok"):
+        message = str(activation.get("message") or "Agent Zero rejected the new profile.")
+        app._show_notice(f"Profile created, but it could not be activated: {message}", error=True)
         return
     await app._switch_context(context_id, has_messages_hint=False)
     app._show_notice(f"Created and activated {title}.")

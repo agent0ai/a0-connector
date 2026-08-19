@@ -129,7 +129,7 @@ async def test_apply_profile_selection_sets_current_context_profile(
     assert notices == [("Agent profile set to Developer.", False)]
 
 
-async def test_profile_command_quick_create_opens_a_fresh_profile_chat(
+async def test_profile_command_quick_create_activates_a_fresh_profile_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = DummyAgentZeroCLI()
@@ -139,6 +139,7 @@ async def test_profile_command_quick_create_opens_a_fresh_profile_chat(
     app.connector_features = {"settings_get", "agent_profile_set", "agent_editor", "chat_get"}
     editor_calls: list[tuple[str, dict[str, object]]] = []
     chat_calls: list[dict[str, object]] = []
+    profile_calls: list[tuple[str, str]] = []
     switched: list[tuple[str, bool]] = []
     notices: list[tuple[str, bool]] = []
 
@@ -159,6 +160,10 @@ async def test_profile_command_quick_create_opens_a_fresh_profile_chat(
         chat_calls.append(payload)
         return "ctx-2"
 
+    async def fake_set_agent_profile(context_id: str, profile_id: str) -> dict[str, object]:
+        profile_calls.append((context_id, profile_id))
+        return {"ok": True, "agent_profile": profile_id}
+
     async def fake_switch(context_id: str, *, has_messages_hint: bool) -> None:
         switched.append((context_id, has_messages_hint))
 
@@ -166,6 +171,7 @@ async def test_profile_command_quick_create_opens_a_fresh_profile_chat(
     monkeypatch.setattr(app.client, "get_chat", fake_get_chat)
     monkeypatch.setattr(app.client, "agent_editor", fake_agent_editor)
     monkeypatch.setattr(app.client, "create_chat", fake_create_chat)
+    monkeypatch.setattr(app.client, "set_agent_profile", fake_set_agent_profile)
     monkeypatch.setattr(app, "_switch_context", fake_switch)
     monkeypatch.setattr(app, "_show_notice", lambda message, *, error=False: notices.append((message, error)))
 
@@ -184,9 +190,9 @@ async def test_profile_command_quick_create_opens_a_fresh_profile_chat(
     assert chat_calls == [
         {
             "current_context_id": "ctx-1",
-            "agent_profile": "source-scout",
             "project_name": "Demo",
         }
     ]
+    assert profile_calls == [("ctx-2", "source-scout")]
     assert switched == [("ctx-2", False)]
     assert notices == [("Created and activated Source Scout.", False)]
