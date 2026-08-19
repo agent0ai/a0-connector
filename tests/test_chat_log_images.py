@@ -32,9 +32,8 @@ class FakeRenderer:
     notice = ""
     max_surface_pixels = (192, 64)
 
-    def __init__(self, *, fail_native: bool = False, fail_halfcell: bool = False) -> None:
+    def __init__(self, *, fail_native: bool = False) -> None:
         self.fail_native = fail_native
-        self.fail_halfcell = fail_halfcell
         self.created: list[tuple[str, CellBox]] = []
         self.cleaned: list[Widget] = []
         self.redrawn: list[Widget] = []
@@ -53,12 +52,6 @@ class FakeRenderer:
         if self.fail_native:
             raise RuntimeError("native rendering failed")
         self.created.append(("native", box))
-        return Static(f"surface {image.width}x{image.height} at {box.columns}x{box.rows}")
-
-    def create_halfcell_widget(self, image: PILImage.Image, box: CellBox) -> Static:
-        if self.fail_halfcell:
-            raise RuntimeError("half-cell rendering failed")
-        self.created.append(("halfcell", box))
         return Static(f"surface {image.width}x{image.height} at {box.columns}x{box.rows}")
 
     def cleanup_widget(self, widget: Widget | None) -> None:
@@ -190,6 +183,21 @@ async def test_late_image_upsert_does_not_duplicate_owner_or_image() -> None:
 
         assert len(log.query(TranscriptEntry)) == 1
         assert len(log.query(ImageEntry)) == 1
+
+
+async def test_disabled_renderer_preserves_pre_image_transcript() -> None:
+    app = TranscriptImageApp()
+    app.renderer.mode = "off"
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        log = pilot.app.query_one(ChatLog)
+        log.append_or_update(2, Text("See this"))
+        log.append_or_update_images(2, (user_ref(sequence=2),))
+        await pilot.pause()
+
+        assert len(log.query(ImageEntry)) == 0
+        assert log.copyable_text(visible_only=False).strip() == "See this"
+        assert app.load_requests == []
 
 
 async def test_primary_type_replacement_preserves_image_children() -> None:
@@ -534,7 +542,7 @@ async def test_image_entry_disabled_renderer_shows_stable_placeholder() -> None:
         assert app.load_requests == []
 
 
-async def test_image_entry_closes_stale_asset_and_falls_back_to_halfcell(
+async def test_image_entry_closes_stale_asset_and_disables_failed_surface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     renderer = FakeRenderer(fail_native=True)
@@ -551,8 +559,8 @@ async def test_image_entry_closes_stale_asset_and_falls_back_to_halfcell(
         await pilot.pause()
 
         assert stale_closes == ["closed"]
-        assert entry.state == "rendered"
-        assert renderer.created == [("halfcell", CellBox(80, 24))]
+        assert entry.state == "unavailable"
+        assert renderer.created == []
 
 
 async def test_image_entry_toggle_resize_and_click_do_not_request_again() -> None:
@@ -599,7 +607,7 @@ async def test_image_entry_toggle_resize_and_click_do_not_request_again() -> Non
 async def test_image_entry_error_release_and_unmount_clean_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    renderer = FakeRenderer(fail_native=True, fail_halfcell=True)
+    renderer = FakeRenderer(fail_native=True)
     entry = ImageEntry(browser_ref(), renderer)
     app = ImageEntryHarness(entry)
     failed = image_asset()

@@ -55,27 +55,20 @@ def select_image_mode(
         normalized = "auto"
     if normalized == "off":
         return RendererSelection("off")
-    if force_halfcell or not is_tty:
-        if invalid:
-            notice = "Invalid A0_CLI_IMAGE_MODE; using half-cell images."
-        elif normalized == "tgp":
-            notice = "TGP images are unavailable; using half-cell images."
-        elif normalized == "sixel":
-            notice = "Sixel images are unavailable; using half-cell images."
-        else:
-            notice = ""
+    if force_halfcell or normalized == "halfcell":
+        notice = "Invalid A0_CLI_IMAGE_MODE; using half-cell images." if invalid else ""
         return RendererSelection("halfcell", notice)
+    if not is_tty:
+        tgp_supported = sixel_supported = False
     if normalized == "tgp":
         return RendererSelection("tgp") if tgp_supported else RendererSelection(
-            "halfcell", "TGP images are unavailable; using half-cell images."
+            "off", "TGP images are unavailable; image rendering disabled."
         )
     if normalized == "sixel":
         return RendererSelection("sixel") if sixel_supported else RendererSelection(
-            "halfcell", "Sixel images are unavailable; using half-cell images."
+            "off", "Sixel images are unavailable; image rendering disabled."
         )
-    if normalized == "halfcell":
-        return RendererSelection("halfcell")
-    mode: ImageMode = "tgp" if tgp_supported else "sixel" if sixel_supported else "halfcell"
+    mode: ImageMode = "tgp" if tgp_supported else "sixel" if sixel_supported else "off"
     notice = "Invalid A0_CLI_IMAGE_MODE; using automatic image detection." if invalid else ""
     return RendererSelection(mode, notice)
 
@@ -92,12 +85,10 @@ class ImageRenderer:
         *,
         cell_pixels: tuple[int, int],
         widget_factory: WidgetFactory | None = None,
-        halfcell_factory: WidgetFactory | None = None,
     ) -> None:
         self.selection = selection
         self.cell_pixels = (max(1, cell_pixels[0]), max(1, cell_pixels[1]))
         self._widget_factory = widget_factory
-        self._halfcell_factory = halfcell_factory
 
     @property
     def mode(self) -> ImageMode:
@@ -161,16 +152,6 @@ class ImageRenderer:
         if self._widget_factory is None:
             raise RuntimeError("Image rendering is unavailable.")
         return self._create_sized_widget(self._widget_factory, image, box)
-
-    def create_halfcell_widget(
-        self,
-        image: "PILImage.Image",
-        box: CellBox,
-    ) -> "Widget":
-        """Create an explicit per-image half-cell fallback widget."""
-        if self._halfcell_factory is None:
-            raise RuntimeError("Half-cell image rendering is unavailable.")
-        return self._create_sized_widget(self._halfcell_factory, image, box)
 
     @staticmethod
     def _create_sized_widget(
@@ -236,7 +217,6 @@ def _create_halfcell_renderer(selection: RendererSelection) -> ImageRenderer:
         selection,
         cell_pixels=(cell_size.width, cell_size.height),
         widget_factory=HalfcellImage,
-        halfcell_factory=HalfcellImage,
     )
 
 
@@ -265,16 +245,23 @@ def initialize_image_renderer(
     stdout = sys.__stdout__
     is_tty = bool(stdout and stdout.isatty())
     term_program = str(environment.get("TERM_PROGRAM", "")).strip().casefold()
-    warp_requires_halfcell = term_program == "warpterminal"
-    if force_halfcell or normalized == "halfcell" or not is_tty or warp_requires_halfcell:
+    if force_halfcell or normalized == "halfcell":
         selection = select_image_mode(
             requested,
             is_tty=is_tty,
             tgp_supported=False,
             sixel_supported=False,
-            force_halfcell=force_halfcell or warp_requires_halfcell,
+            force_halfcell=force_halfcell,
         )
         return _create_halfcell_renderer(selection)
+    if not is_tty or term_program == "warpterminal":
+        selection = select_image_mode(
+            requested,
+            is_tty=False,
+            tgp_supported=False,
+            sixel_supported=False,
+        )
+        return ImageRenderer(selection, cell_pixels=(1, 1))
 
     try:
         from textual_image.renderable import tgp, sixel
@@ -297,10 +284,10 @@ def initialize_image_renderer(
             sixel_supported=sixel_supported,
         )
         if selection.mode == "off":
-            return ImageRenderer.disabled()
+            return ImageRenderer(selection, cell_pixels=(1, 1))
 
         from textual_image._terminal import get_cell_size
-        from textual_image.widget import HalfcellImage, SixelImage, TGPImage
+        from textual_image.widget import SixelImage, TGPImage
 
         cell_size = get_cell_size()
     except ImportError:
@@ -310,16 +297,14 @@ def initialize_image_renderer(
             tgp_supported=False,
             sixel_supported=False,
         )
-        return ImageRenderer(selection, cell_pixels=(1, 2))
+        return ImageRenderer(selection, cell_pixels=(1, 1))
 
     factories: dict[ImageMode, WidgetFactory] = {
         "tgp": TGPImage,
         "sixel": SixelImage,
-        "halfcell": HalfcellImage,
     }
     return ImageRenderer(
         selection,
         cell_pixels=(cell_size.width, cell_size.height),
         widget_factory=factories[selection.mode],
-        halfcell_factory=HalfcellImage,
     )

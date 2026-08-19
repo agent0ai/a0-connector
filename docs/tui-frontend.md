@@ -33,12 +33,14 @@ downsamples before applying orientation and color conversion. Source limits are
 25 MiB encoded data and 32 megapixels decoded.
 
 Rendering is selected with `A0_CLI_IMAGE_MODE=auto|tgp|sixel|halfcell|off`.
-Automatic selection prefers supported TGP or Sixel and otherwise uses
-half-cell; `off` retains text placeholders. The browser xterm.js preview and
-SVG snapshots force half-cell, so they are useful for deterministic layout but
-not native-protocol cleanup acceptance. Apple Terminal must not be assumed to
-support TGP or Sixel: use auto/half-cell unless a compatible terminal has been
-verified. Headless and gateway modes stay text/JSONL-only.
+Automatic selection prefers supported TGP or Sixel and otherwise omits image
+entries, preserving the pre-image transcript without fetching image bytes.
+Shell choice does not alter this: Bash, Zsh, and PowerShell depend on the native
+capability of their hosting terminal. `halfcell` is explicit only. The browser
+xterm.js preview and SVG snapshots force it for deterministic layout, not
+native-protocol cleanup acceptance. Apple Terminal and Warp stay image-free in
+automatic mode unless a complete compatible protocol path is available.
+Headless and gateway modes stay text/JSONL-only.
 
 ## Chat Tab Shortcuts
 

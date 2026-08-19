@@ -18,14 +18,14 @@ Add inline image rendering to the Textual chat transcript for:
 
 Images appear expanded near the transcript content that owns them. A browser screenshot appears inside the same browser tool entry, beneath its action metadata, matching the Agent Zero WebUI. A focused image collapses inline when clicked or when the user presses Enter or Space, and the same action expands it again.
 
-The CLI uses a terminal-native raster protocol when available, preferring the Kitty graphics protocol (TGP) and then Sixel. Every other environment uses a half-cell Unicode renderer. Image failures remain local to the image widget and never interrupt chat operation.
+The CLI uses a terminal-native raster protocol when available, preferring the Kitty graphics protocol (TGP) and then Sixel. Environments without a complete native path keep the pre-image transcript; half-cell Unicode rendering is explicit preview/debug behavior only. Image failures remain local to the image widget and never interrupt chat operation.
 
 ## Goals
 
 1. Display browser screenshots in the TUI at the point where the corresponding browser action appears.
 2. Display user and assistant images already represented in live events or replayed chat history.
 3. Preserve the existing Python 3.10+ support contract.
-4. Provide native raster output in capable terminals and a usable half-cell fallback everywhere else.
+4. Provide native raster output in capable terminals without changing ordinary transcripts elsewhere.
 5. Show a useful expanded image immediately while allowing inline collapse without a modal or external application.
 6. Load images safely through the existing authenticated Agent Zero session without widening the artifact trust model.
 7. Keep headless and gateway modes byte-for-byte free of terminal graphics protocol output.
@@ -70,7 +70,7 @@ The adapter exposes four effective modes:
 - `halfcell`
 - `off`
 
-`auto` is the default selection policy rather than an effective renderer. It chooses TGP, then Sixel, then half-cell.
+`auto` is the default selection policy rather than an effective renderer. It chooses TGP, then Sixel, then `off`.
 
 This approach preserves Python 3.10+, uses established protocol implementations, and confines upstream compatibility differences to one module. Reimplementing TGP and Sixel inside A0 or raising the project's Python minimum is outside the approved design.
 
@@ -93,7 +93,7 @@ Images preserve their complete aspect ratio and are never cropped.
 - Thumbnail maximum: 36 columns by 12 terminal rows.
 - Expanded maximum: available transcript width, capped at 96 columns by 32 rows.
 - Narrow terminals reduce those dimensions automatically.
-- All renderers target the same terminal-cell dimensions so switching between native and fallback modes does not materially change transcript layout.
+- Active renderers target the same terminal-cell dimensions so explicit mode changes do not materially change transcript layout.
 
 ## Architecture
 
@@ -151,7 +151,7 @@ Add a single A0-owned interface over `textual-image`. It is responsible for:
 
 - selecting the effective image mode;
 - insulating the rest of the application from conditional dependency versions;
-- creating native or half-cell Textual widgets/renderables;
+- creating native or explicitly requested half-cell Textual widgets/renderables;
 - resizing while preserving aspect ratio;
 - debouncing resize-driven rerenders; and
 - invoking protocol-specific cleanup when a widget is removed.
@@ -162,11 +162,11 @@ Capability probing occurs inside the TUI startup path in `__main__._run_app`, be
 
 Selection rules:
 
-1. `auto` chooses TGP, then Sixel, then half-cell.
-2. Non-TTY sessions, automated tests, and `textual-serve` force half-cell.
-3. An explicitly requested but unsupported native mode falls back to half-cell and emits one concise notice.
+1. `auto` chooses TGP, then Sixel, then `off`.
+2. Non-TTY sessions select `off`; automated tests retain a library-free renderer, while `textual-serve` explicitly forces half-cell.
+3. An explicitly requested but unsupported native mode selects `off` and emits one concise notice.
 4. An invalid value falls back safely and emits one concise notice.
-5. `off` renders a labeled text placeholder and never fetches image bytes.
+5. `off` omits image entries and never fetches image bytes, preserving the pre-image transcript.
 
 The implementation plan must begin with a compatibility proof covering Textual 8.2.8 and every supported Python dependency branch. If the Python 3.10-compatible `textual-image` line cannot operate correctly with the current Textual version, implementation pauses for a design revision. It must not silently raise the Python floor, vendor a renderer, or drop native-protocol support.
 
@@ -248,7 +248,7 @@ sequenceDiagram
     Store->>Store: Validate, decode, resize, cache
     Store-->>Log: Validated image surface
     Log->>Renderer: Render thumbnail in selected mode
-    Renderer-->>Log: TGP, Sixel, or half-cell output
+    Renderer-->>Log: TGP, Sixel, or explicit half-cell output
 ```
 
 If the image reference arrives after the text/tool event, the same flow begins at reference registration and updates the existing transcript entry.
@@ -299,7 +299,7 @@ Image-specific errors never fail a context snapshot, live event handler, chat se
 - Transient network failure: retry once, then show an unavailable placeholder.
 - Authentication failure: show an unavailable placeholder and rely on the existing connection/session flow; do not loop.
 - Unsupported or corrupt payload: show the reason in a concise placeholder.
-- Renderer failure: clean up partial native output and retry once with half-cell for that image.
+- Renderer failure: clean up partial native output and show an unavailable placeholder without a pixelated fallback.
 - Cleanup failure: suppress it after clearing the widget's bookkeeping so chat teardown can continue.
 - History reload: may attempt an unavailable image again, but no background retry loop persists.
 
@@ -364,8 +364,8 @@ Verify these paths end to end:
 3. Assistant Agent Zero-hosted image in live and replayed history.
 4. TGP-capable terminal in automatic and forced modes.
 5. Sixel-capable terminal in automatic and forced modes.
-6. Unsupported terminal half-cell fallback.
-7. `tmux`, including safe fallback when native pass-through is unavailable.
+6. Unsupported Bash, Zsh, and PowerShell terminal sessions remain image-free.
+7. `tmux`, including safe disabling when native pass-through is unavailable.
 8. `textual-serve` forced half-cell output and static snapshot capture.
 9. No visual ghosts after scrolling, expanding, collapsing, resizing, clearing, switching context, or exiting.
 10. Headless and gateway outputs unchanged.
@@ -408,7 +408,7 @@ The feature is complete when all of the following are true:
 - A browser screenshot displays beneath the metadata of its existing browser tool entry.
 - User and assistant images represented in live or replayed history display beneath their owning messages.
 - Images begin as complete, uncropped expanded views and collapse/expand inline by click, Enter, or Space.
-- TGP and Sixel render full raster images where supported; half-cell output works everywhere else.
+- TGP and Sixel render full raster images where supported; half-cell output remains explicit only.
 - An unavailable image produces a stable placeholder without interrupting chat.
 - Long history replay loads only visible or near-visible images and remains within concurrency and cache limits.
 - Transcript copying yields semantic image placeholders and no binary or secret material.

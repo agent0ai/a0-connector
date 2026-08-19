@@ -38,19 +38,24 @@ For frontend remote execution, the CLI no longer runtime-imports a local Agent Z
 
 `A0_CLI_IMAGE_MODE=auto` is the normal user path. Before the Textual app starts,
 it combines reliable terminal capability advertisements, live protocol probes,
-and compatibility guards to select TGP, Sixel, or the portable half-cell
-fallback. `tgp` and `sixel` request a native protocol but fall back to half-cell
-with one notice when the complete rendering path is unavailable. `halfcell`
-forces the portable renderer; `off` leaves semantic placeholders and makes no
-image-rendering attempt. `a0 headless` and `a0 gateway` remain text/JSONL-only
-regardless of this setting.
+and compatibility guards to select native TGP or Sixel. If neither complete
+rendering path is available, `auto` omits image entries and preserves the
+ordinary transcript. `tgp` and `sixel` also disable image rendering with one
+notice when their requested path is unavailable. `halfcell` explicitly forces
+the low-resolution renderer; `off` preserves the pre-image transcript and
+makes no image-loading attempt. `a0 headless` and `a0 gateway` remain
+text/JSONL-only regardless of this setting.
+
+Selection follows terminal capability, not the command shell. Bash, Zsh, and
+PowerShell all render images only when their hosting terminal provides the
+complete native protocol.
 
 Some terminals implement only part of a graphics protocol. Warp accepts the
 basic Kitty capability query but does not implement the Unicode virtual
-placements used by the Textual TGP widget, so the CLI deliberately uses
-half-cell there rather than printing broken placeholder glyphs. A direct iTerm
+placements used by the Textual TGP widget, so automatic image rendering stays
+off there rather than printing broken or pixelated output. A direct iTerm
 session may advertise Sixel through `TERM_FEATURES` and use native raster
-output; inside tmux, the CLI falls back to live probing because protocol
+output; inside tmux, the CLI relies on live probing because protocol
 pass-through depends on the multiplexer configuration.
 
 Transcript images open in their expanded complete-aspect view, capped at 96 by
@@ -61,20 +66,20 @@ expand it again.
 Browser preview and SVG snapshots deliberately force half-cell rendering:
 xterm.js does not validate native protocol output or cleanup. A forced TGP or
 Sixel run is evidence only in a terminal verified to support that protocol.
-In particular, use automatic detection or half-cell in Apple Terminal unless a
-capable native-protocol terminal has been verified separately.
+In particular, Apple Terminal remains image-free in automatic mode unless a
+capable native-protocol path has been verified separately.
 
 ### Image troubleshooting
 
 - Leave `A0_CLI_IMAGE_MODE` unset (or set it to `auto`) to adapt to the active
   terminal automatically.
-- Force `A0_CLI_IMAGE_MODE=halfcell` only when diagnosing the portable fallback.
-- If a forced TGP or Sixel mode reports unsupported, use `auto` or `halfcell`;
+- Force `A0_CLI_IMAGE_MODE=halfcell` only when diagnosing the low-resolution renderer.
+- If a forced TGP or Sixel mode reports unsupported, use `auto` or explicit `halfcell`;
   terminal multiplexers such as tmux may need protocol pass-through enabled.
 - An `image unavailable` placeholder means the authenticated `/api/image_get`
   request, source validation, or image limits rejected the source; it does not
   expose URLs, cookies, or cached file paths.
-- Use `A0_CLI_IMAGE_MODE=off` when an image-free transcript is required.
+- Use `A0_CLI_IMAGE_MODE=off` to require the pre-image transcript behavior.
 
 ## First-run behavior
 

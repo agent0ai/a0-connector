@@ -1747,9 +1747,6 @@ class _TestImageRenderer:
     def create_widget(self, *_args: object, **_kwargs: object) -> SelectableStatic:
         return SelectableStatic("image")
 
-    def create_halfcell_widget(self, *_args: object, **_kwargs: object) -> SelectableStatic:
-        return SelectableStatic("image")
-
     def cleanup_widget(self, widget: object | None) -> None:
         if widget is not None:
             widget.remove()  # type: ignore[union-attr]

@@ -46,13 +46,15 @@ to collapse it to a 36-by-12-cell thumbnail or expand it again.
 
 Set `A0_CLI_IMAGE_MODE` to `auto` (default), `tgp`, `sixel`, `halfcell`, or
 `off`. Keep `auto` for normal use: it combines terminal capability reporting,
-live protocol probes, and compatibility guards to choose TGP, Sixel, or the
-universal half-cell renderer. `off` keeps semantic text placeholders only.
-Apple Terminal falls back to half-cell. Warp also uses half-cell because its
-current Kitty support does not implement the Unicode virtual placements used by
-the Textual renderer. A direct iTerm session can advertise Sixel and use the
-native raster renderer automatically. Verify a capable terminal separately
-before treating forced TGP or Sixel as accepted.
+live protocol probes, and compatibility guards to choose native TGP or Sixel.
+Without a complete native protocol, it keeps the ordinary text transcript and
+does not add or fetch images. This is based on terminal capability, so Bash,
+Zsh, and PowerShell behave the same; the terminal hosting the shell decides.
+`halfcell` is an explicit low-resolution preview/debug mode, while `off` always
+keeps the pre-image transcript behavior. Apple Terminal and Warp therefore show
+no images automatically. A direct iTerm session can advertise Sixel and use the
+native raster renderer. Verify a capable terminal separately before treating
+forced TGP or Sixel as accepted.
 
 Computer-use backends are embedded in the `a0` wheel, so the CLI and local computer-use support install and update together. Linux host computer use uses the Wayland portal backend; X11/Xpra control belongs to Agent Zero's internal Docker Desktop tooling rather than the remote host connector.
 

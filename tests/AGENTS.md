@@ -28,7 +28,7 @@
 ## Work Guidance
 
 - Add focused regression tests near the behavior changed.
-- Preview tests must assert forced half-cell mode and usable fallback widget
+- Preview tests must assert forced half-cell mode and usable explicit widget
   construction, while native TGP/Sixel visual acceptance remains a separately
   recorded capable-terminal check.
 - Keep test names behavior-oriented.

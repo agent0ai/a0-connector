@@ -1127,6 +1127,8 @@ class ChatLog(VerticalScroll):
         prepend: bool = False,
     ) -> None:
         """Add image references to their owning transcript sequence."""
+        if self.image_renderer.mode == "off":
+            return
         entry = self._entry(sequence, prepend=prepend)
         entry.upsert_images(references, self.image_renderer)
         self._schedule_nearby_images()

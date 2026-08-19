@@ -220,11 +220,8 @@ class ImageEntry(Vertical):
             self._cleanup_surface()
             surface = self._renderer.create_widget(asset.image, box)
         except Exception:
-            try:
-                surface = self._renderer.create_halfcell_widget(asset.image, box)
-            except Exception:
-                self.set_unavailable(self._generation, "renderer failed")
-                return
+            self.set_unavailable(self._generation, "renderer failed")
+            return
 
         self._surface = surface
         self._surface_box = box

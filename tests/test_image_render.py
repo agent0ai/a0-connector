@@ -28,24 +28,24 @@ def test_auto_prefers_tgp_before_sixel() -> None:
     assert selected.notice == ""
 
 
-def test_explicit_unsupported_native_mode_falls_back_once() -> None:
+def test_explicit_unsupported_native_mode_disables_images() -> None:
     selected = select_image_mode(
         "sixel",
         is_tty=True,
         tgp_supported=True,
         sixel_supported=False,
     )
-    assert selected.mode == "halfcell"
-    assert selected.notice == "Sixel images are unavailable; using half-cell images."
+    assert selected.mode == "off"
+    assert selected.notice == "Sixel images are unavailable; image rendering disabled."
 
 
-def test_non_tty_forces_halfcell() -> None:
+def test_non_tty_disables_images() -> None:
     assert select_image_mode(
         "auto",
         is_tty=False,
         tgp_supported=True,
         sixel_supported=True,
-    ).mode == "halfcell"
+    ).mode == "off"
 
 
 def test_pytest_context_forces_library_free_halfcell_before_native_probes(
@@ -77,7 +77,7 @@ def test_pytest_context_forces_library_free_halfcell_before_native_probes(
     assert probes == []
 
 
-def test_explicit_halfcell_skips_native_probes_and_constructs_fallback(
+def test_explicit_halfcell_skips_native_probes_and_constructs_renderer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from textual_image._terminal import CellSize, get_cell_size
@@ -117,23 +117,20 @@ def test_explicit_halfcell_skips_native_probes_and_constructs_fallback(
     ("requested", "notice"),
     [
         ("auto", ""),
-        ("tgp", "TGP images are unavailable; using half-cell images."),
-        ("sixel", "Sixel images are unavailable; using half-cell images."),
+        ("tgp", "TGP images are unavailable; image rendering disabled."),
+        ("sixel", "Sixel images are unavailable; image rendering disabled."),
     ],
 )
-def test_warp_skips_native_probes_and_constructs_real_halfcell_renderer(
+def test_warp_skips_native_probes_and_disables_images(
     monkeypatch: pytest.MonkeyPatch,
     requested: str,
     notice: str,
 ) -> None:
-    from textual_image._terminal import CellSize, get_cell_size
     from textual_image.renderable import sixel, tgp
-    from textual_image.widget import HalfcellImage
 
     probes: list[str] = []
     monkeypatch.setattr(tgp, "query_terminal_support", lambda: probes.append("tgp") or True)
     monkeypatch.setattr(sixel, "query_terminal_support", lambda: probes.append("sixel") or True)
-    monkeypatch.setattr(get_cell_size, "_result", CellSize(10, 20), raising=False)
     monkeypatch.setattr(sys, "__stdout__", SimpleNamespace(isatty=lambda: True))
 
     renderer = initialize_image_renderer(
@@ -142,14 +139,8 @@ def test_warp_skips_native_probes_and_constructs_real_halfcell_renderer(
             "TERM_PROGRAM": "wArPtErMiNaL",
         },
     )
-    widget = renderer.create_widget(
-        PILImage.new("RGB", (4, 4), "#123456"),
-        CellBox(4, 2),
-    )
-
-    assert renderer.mode == "halfcell"
+    assert renderer.mode == "off"
     assert renderer.notice == notice
-    assert isinstance(widget, HalfcellImage)
     assert probes == []
 
 
@@ -199,7 +190,7 @@ def test_iterm_sixel_capability_requires_an_exact_token(
         },
     )
 
-    assert renderer.mode == "halfcell"
+    assert renderer.mode == "off"
     assert probes == ["tgp", "sixel"]
 
 
@@ -231,7 +222,7 @@ def test_iterm_sixel_capability_only_overrides_auto_outside_tmux(
 
     renderer = initialize_image_renderer(environ=environment)
 
-    assert renderer.mode == "halfcell"
+    assert renderer.mode == "off"
     assert probes == ["tgp", "sixel"]
 
 
@@ -259,21 +250,44 @@ def test_non_iterm_terminal_still_uses_native_probes(
     assert probes == ["tgp", "sixel"]
 
 
+@pytest.mark.parametrize(
+    "shell_environment",
+    [
+        {"SHELL": "/bin/bash"},
+        {"SHELL": "/bin/zsh"},
+        {"PSModulePath": r"C:\\Program Files\\PowerShell\\Modules"},
+    ],
+    ids=("bash", "zsh", "powershell"),
+)
+def test_standard_shells_disable_images_without_native_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+    shell_environment: dict[str, str],
+) -> None:
+    from textual_image.renderable import sixel, tgp
+
+    probes: list[str] = []
+    monkeypatch.setattr(tgp, "query_terminal_support", lambda: probes.append("tgp") or False)
+    monkeypatch.setattr(sixel, "query_terminal_support", lambda: probes.append("sixel") or False)
+    monkeypatch.setattr(sys, "__stdout__", SimpleNamespace(isatty=lambda: True))
+
+    renderer = initialize_image_renderer(
+        environ={"A0_CLI_IMAGE_MODE": "auto", **shell_environment},
+    )
+
+    assert renderer.mode == "off"
+    assert probes == ["tgp", "sixel"]
+
+
 def test_renderer_fits_complete_thumbnail_and_expanded_boxes() -> None:
     renderer = ImageRenderer.for_test(mode="halfcell", cell_pixels=(1, 2))
     assert renderer.fit_box((1600, 900), available_columns=120, expanded=False) == CellBox(36, 10)
     assert renderer.fit_box((1600, 900), available_columns=80, expanded=True) == CellBox(80, 22)
 
 
-def test_renderer_exposes_box_driven_native_and_halfcell_factories() -> None:
-    from textual_image.widget import HalfcellImage, TGPImage
+def test_renderer_exposes_box_driven_widget_factory() -> None:
+    from textual_image.widget import TGPImage
 
     assert tuple(inspect.signature(ImageRenderer.create_widget).parameters) == (
-        "self",
-        "image",
-        "box",
-    )
-    assert tuple(inspect.signature(ImageRenderer.create_halfcell_widget).parameters) == (
         "self",
         "image",
         "box",
@@ -287,50 +301,15 @@ def test_renderer_exposes_box_driven_native_and_halfcell_factories() -> None:
         RendererSelection("tgp"),
         cell_pixels=(10, 20),
         widget_factory=TGPImage,
-        halfcell_factory=HalfcellImage,
     )
     image = PILImage.new("RGB", (4, 4), "#123456")
     box = CellBox(8, 3)
 
     native_widget = renderer.create_widget(image, box)
-    halfcell_widget = renderer.create_halfcell_widget(image, box)
 
     assert isinstance(native_widget, TGPImage)
     assert native_widget.styles.width.cells == box.columns
     assert native_widget.styles.height.cells == box.rows
-    assert isinstance(halfcell_widget, HalfcellImage)
-    assert halfcell_widget.styles.width.cells == box.columns
-    assert halfcell_widget.styles.height.cells == box.rows
-
-
-def test_native_widget_errors_require_explicit_halfcell_fallback() -> None:
-    attempted: list[str] = []
-
-    def fail_native(_image: PILImage.Image) -> object:
-        attempted.append("native")
-        raise ValueError("native render failed")
-
-    def create_halfcell(_image: PILImage.Image) -> object:
-        attempted.append("halfcell")
-        return SimpleNamespace(styles=SimpleNamespace(width=None, height=None))
-
-    renderer = ImageRenderer(
-        RendererSelection("tgp"),
-        cell_pixels=(10, 20),
-        widget_factory=fail_native,  # type: ignore[arg-type]
-        halfcell_factory=create_halfcell,  # type: ignore[arg-type]
-    )
-    image = PILImage.new("RGB", (4, 4), "#123456")
-    box = CellBox(4, 2)
-
-    with pytest.raises(ValueError, match="native render failed"):
-        renderer.create_widget(image, box)
-    assert attempted == ["native"]
-
-    widget = renderer.create_halfcell_widget(image, box)
-    assert attempted == ["native", "halfcell"]
-    assert widget.styles.width == box.columns
-    assert widget.styles.height == box.rows
 
 
 def test_cleanup_is_none_safe_and_releases_image_before_removal() -> None:

@@ -38,12 +38,14 @@
   select, or subscribe to a chat.
 - Interactive transcript images use `A0_CLI_IMAGE_MODE=auto|tgp|sixel|halfcell|off`.
   Automatic selection combines reliable terminal capability advertisements,
-  live protocol probes, and compatibility exclusions for terminals that report
-  only a protocol subset. A false-positive native probe must fall back cleanly
-  instead of emitting protocol placeholder glyphs.
+  live protocol probes, and compatibility exclusions to select TGP or Sixel;
+  without a complete native protocol it preserves the pre-image transcript and
+  performs no image loading. This is terminal-capability based regardless of
+  whether the shell is Bash, Zsh, or PowerShell. A false-positive native probe
+  must fail locally without falling back to pixelated half-cell output.
   Images open in their expanded complete-aspect view and may be collapsed with
   click, Enter, or Space.
-  Explicit `halfcell`, browser preview, and SVG snapshot paths use a real
+  Only explicit `halfcell`, browser preview, and SVG snapshot paths use a real
   half-cell widget without native protocol probes; pytest's ordinary TUI path
   remains library-free. Preview output is layout evidence and does not establish
   native TGP/Sixel acceptance. Keep automated CLI, Core deployment, and
