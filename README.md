@@ -77,6 +77,33 @@ set `A0_PACKAGE_SPEC` for a custom package source, also set
 Advanced one-off runs with `uvx` also work, but they are intentionally not the
 primary install path for this project.
 
+## Agent Client Protocol
+
+Run the Agent Client Protocol (ACP) stdio server with:
+
+```bash
+a0 acp
+```
+
+ACP clients that support terminal authentication receive a `Sign in to Agent
+Zero` method. They run the configured A0 command with `--login`, which signs in
+to the configured Agent Zero host and exits before the client starts its normal
+ACP session:
+
+```bash
+a0 acp --login
+```
+
+The login command accepts ephemeral `A0_USERNAME` and `A0_PASSWORD` values or
+prompts in the terminal. It never saves those credentials; after verification,
+it only reuses A0's existing protected session-cookie store for that host.
+
+Published releases can also be launched without a separate installation:
+
+```bash
+uvx a0==2.11.0 acp
+```
+
 ## Update
 
 If you installed `a0` with the standard `uv tool` flow, update it in place with:

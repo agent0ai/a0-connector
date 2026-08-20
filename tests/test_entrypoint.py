@@ -213,6 +213,31 @@ def test_main_gateway_routes_without_loading_textual(
     ]
 
 
+def test_main_acp_login_routes_without_starting_the_tui(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launched: list[dict[str, object]] = []
+    monkeypatch.setattr(__main__, "_run_acp", lambda **kwargs: launched.append(dict(kwargs)) or 0)
+
+    exit_code = __main__.main(
+        ["acp", "--host", "http://agent.test", "--workspace", "/tmp/work", "--login", "--debug"]
+    )
+
+    assert exit_code == 0
+    assert launched == [
+        {
+            "host": "http://agent.test",
+            "workspace": "/tmp/work",
+            "discover_instances": True,
+            "check": False,
+            "login": True,
+            "debug": True,
+            "transport": None,
+            "container_id": None,
+        }
+    ]
+
+
 def test_headless_and_gateway_launchers_do_not_import_terminal_image_renderer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

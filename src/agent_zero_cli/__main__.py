@@ -130,7 +130,9 @@ def _build_parser() -> argparse.ArgumentParser:
     acp.add_argument("--host", dest="acp_host", metavar="URL", help="Agent Zero base URL.")
     acp.add_argument("--workspace", metavar="DIR", default=".", help="Fallback workspace when the ACP client does not provide one.")
     acp.add_argument("--no-docker-discovery", action="store_true", help="Skip local Docker instance discovery.")
-    acp.add_argument("--check", action="store_true", help="Verify ACP support and exit.")
+    acp_action = acp.add_mutually_exclusive_group()
+    acp_action.add_argument("--check", action="store_true", help="Verify ACP support and exit.")
+    acp_action.add_argument("--login", action="store_true", help="Sign in for ACP terminal authentication and exit.")
     acp.add_argument("--debug", action="store_true", help="Write ACP diagnostics to stderr.")
     acp.add_argument("--transport", choices=("connector", "container"), help=argparse.SUPPRESS)
     acp.add_argument("--container-id", help=argparse.SUPPRESS)
@@ -277,6 +279,7 @@ def _run_acp(
     workspace: str,
     discover_instances: bool,
     check: bool,
+    login: bool,
     debug: bool,
     transport: str | None,
     container_id: str | None,
@@ -289,6 +292,7 @@ def _run_acp(
             workspace=Path(workspace),
             discover_instances=discover_instances,
             check=check,
+            login=login,
             debug=debug,
             transport=transport or "",
             container_id=container_id or "",
@@ -336,6 +340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             workspace=args.workspace,
             discover_instances=not args.no_docker_discovery,
             check=bool(args.check),
+            login=bool(args.login),
             debug=bool(args.debug),
             transport=args.transport,
             container_id=args.container_id,
