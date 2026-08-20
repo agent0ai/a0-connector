@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass, field
+import getpass
 import logging
 import os
 from pathlib import Path
@@ -38,6 +39,7 @@ from acp.schema import (
     SetSessionConfigOptionResponse,
     SetSessionModelResponse,
     SetSessionModeResponse,
+    TerminalAuthMethod,
 )
 
 from agent_zero_cli import __version__
@@ -62,6 +64,7 @@ class AcpOptions:
     workspace: Path = Path(".")
     discover_instances: bool = True
     check: bool = False
+    login: bool = False
     debug: bool = False
     transport: str = ""
     container_id: str = ""
@@ -119,7 +122,7 @@ class AgentZeroACPAgent:
     def on_connect(self, conn: acp.Client) -> None:
         self._conn = conn
 
-    async def initialize(self, **_: Any) -> InitializeResponse:
+    async def initialize(self, client_capabilities: Any = None, **_: Any) -> InitializeResponse:
         self.host = await _resolve_host(self.options, self.config)
         return InitializeResponse(
             protocol_version=acp.PROTOCOL_VERSION,
@@ -135,7 +138,7 @@ class AgentZeroACPAgent:
                     resume=SessionResumeCapabilities(),
                 ),
             ),
-            auth_methods=[],
+            auth_methods=_auth_methods(client_capabilities),
         )
 
     async def new_session(
@@ -526,6 +529,58 @@ async def _resolve_host(options: AcpOptions, config: CLIConfig) -> str:
     return DEFAULT_HOST
 
 
+def _auth_methods(client_capabilities: Any) -> list[TerminalAuthMethod]:
+    auth = getattr(client_capabilities, "auth", None)
+    if not bool(getattr(auth, "terminal", False)):
+        return []
+    return [
+        TerminalAuthMethod(
+            id="a0-web-login",
+            name="Sign in to Agent Zero",
+            description="Sign in with the configured Agent Zero web account.",
+            args=["--login"],
+            type="terminal",
+        )
+    ]
+
+
+async def _login_for_acp(options: AcpOptions, config: CLIConfig) -> int:
+    host = await _resolve_host(options, config)
+    client = A0Client(host)
+    try:
+        capabilities = await client.fetch_capabilities()
+        if not bool(capabilities.get("auth_required")):
+            print("Agent Zero does not require login.")
+            return 0
+
+        if client.restore_session(host) and await client.verify_session():
+            print("A0 ACP session is already authenticated.")
+            return 0
+        client.clear_persisted_session(host)
+
+        username = os.environ.get("A0_USERNAME", "").strip()
+        password = os.environ.get("A0_PASSWORD", "")
+        if not username:
+            username = input("Agent Zero username: ").strip()
+        if not password:
+            password = getpass.getpass("Agent Zero password: ")
+        if not username or not password:
+            print("Agent Zero username and password are required.", file=sys.stderr)
+            return 1
+        if not await client.login(username, password):
+            print("Agent Zero login failed.", file=sys.stderr)
+            return 1
+
+        client.persist_session(host)
+        print("A0 ACP login succeeded.")
+        return 0
+    except Exception as exc:
+        logger.error("A0 ACP login failed: %s", exc)
+        return 1
+    finally:
+        await client.disconnect(close_http=True, notify=False)
+
+
 async def _transport_config(options: AcpOptions, config: CLIConfig) -> tuple[str, dict[str, Any]]:
     host = await _resolve_host(options, config)
     client = A0Client(host)
@@ -576,6 +631,8 @@ def run_acp(options: AcpOptions) -> int:
         return 0
     _setup_logging(options.debug)
     config = load_config()
+    if options.login:
+        return asyncio.run(_login_for_acp(options, config))
     host, remote_config = asyncio.run(_transport_config(options, config))
     transport = options.transport or str(remote_config.get("transport") or "connector")
     if transport == "container":
