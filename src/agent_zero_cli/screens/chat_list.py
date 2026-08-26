@@ -143,11 +143,15 @@ class ChatListRow(ListItem):
         self._entry = entry
 
     def compose(self) -> ComposeResult:
+        # Server-provided chat names and message previews are literal display
+        # content; markup=False keeps path-like text such as
+        # [/a0/usr/chats/<id>/chat.json] from being parsed as Rich/Textual
+        # markup closing tags (MarkupError crash).
         with Vertical(classes="chat-list-item-body"):
-            yield Static(self._entry.title, classes="chat-list-item-title")
-            yield Static(self._entry.meta, classes="chat-list-item-meta")
+            yield Static(self._entry.title, classes="chat-list-item-title", markup=False)
+            yield Static(self._entry.meta, classes="chat-list-item-meta", markup=False)
             if self._entry.preview:
-                yield Static(self._entry.preview, classes="chat-list-item-preview")
+                yield Static(self._entry.preview, classes="chat-list-item-preview", markup=False)
 
 
 class ChatListScreen(ModalScreen[str | None]):
