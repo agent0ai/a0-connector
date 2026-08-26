@@ -18,6 +18,11 @@ if TYPE_CHECKING:
     from agent_zero_cli.app import AgentZeroCLI
 
 _RECOVERY_DELAYS_SECONDS = (1.0, 2.0, 5.0, 10.0, 20.0)
+# After the initial fast retries, keep retrying at a steady cadence forever.
+# A container restart or long server outage used to exhaust the 5 bounded
+# attempts (~38s) and leave the CLI permanently disconnected until manual
+# intervention, which also stranded remote execution server-side.
+_RECOVERY_STEADY_DELAY_SECONDS = 30.0
 
 
 def _environment_login_credentials() -> tuple[str, str]:
@@ -120,6 +125,7 @@ async def begin_connection(
     password: str = "",
     remember_host_flag: bool = False,
 ) -> None:
+    await _cancel_websocket_recovery(app)
     username, password = _connection_login_credentials(username, password)
     app._invalidate_image_loads()
     app._stop_remote_tree_publisher()
@@ -405,6 +411,16 @@ def _schedule_websocket_recovery(app: AgentZeroCLI) -> None:
     app._websocket_recovery_task = asyncio.create_task(_recover_websocket(app))
 
 
+async def _cancel_websocket_recovery(app: AgentZeroCLI) -> None:
+    task = getattr(app, "_websocket_recovery_task", None)
+    app._websocket_recovery_task = None
+    if task is None or task.done() or task is asyncio.current_task():
+        return
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
 def _mark_reconnecting(app: AgentZeroCLI) -> None:
     app.connected = False
     app._sync_connection_status("connecting", app.config.instance_url or app._splash_host())
@@ -421,16 +437,36 @@ async def _recover_websocket(app: AgentZeroCLI) -> None:
 
     try:
         _mark_reconnecting(app)
+        attempt = 0
         last_error = ""
-        for attempt, delay in enumerate(_RECOVERY_DELAYS_SECONDS, start=1):
+        base_url = app.client.base_url
+        while str(app.current_context or "").strip() == context_id:
+            if app.client.base_url != base_url:
+                # The user connected to a different host meanwhile; that
+                # connection owns the client now, so stop recovering this one.
+                return
+            attempt += 1
+            delay = (
+                _RECOVERY_DELAYS_SECONDS[attempt - 1]
+                if attempt <= len(_RECOVERY_DELAYS_SECONDS)
+                else _RECOVERY_STEADY_DELAY_SECONDS
+            )
+            detail = f"{app.config.instance_url or app._splash_host()} (attempt {attempt})"
+            if last_error:
+                detail = f"{detail} — last error: {last_error}"
             app._set_splash_stage(
-                "connecting",
+                "connecting" if attempt <= len(_RECOVERY_DELAYS_SECONDS) else "error",
                 message="Connection lost; reconnecting...",
-                detail=f"{app.config.instance_url or app._splash_host()} (attempt {attempt})",
+                detail=detail,
                 host=app._splash_host(),
             )
             await asyncio.sleep(delay)
-            if str(app.current_context or "").strip() != context_id:
+            if str(app.current_context or "").strip() != context_id or (
+                app.client.base_url != base_url
+            ):
+                # Re-check both stop conditions after the sleep: a host switch
+                # updates client.base_url before it updates the context, so
+                # the context check alone is not enough here.
                 return
             try:
                 await app.client.connect_websocket()
@@ -449,8 +485,6 @@ async def _recover_websocket(app: AgentZeroCLI) -> None:
                 raise
             except Exception as exc:
                 last_error = str(exc).strip() or exc.__class__.__name__
-                if attempt == len(_RECOVERY_DELAYS_SECONDS):
-                    break
                 continue
 
             app.connected = True
@@ -469,17 +503,15 @@ async def _recover_websocket(app: AgentZeroCLI) -> None:
             )
             return
 
-        app._websocket_recovery_task = None
-        set_connected(app, False)
-        if last_error:
-            app._set_splash_stage(
-                "error",
-                message="Connection lost",
-                detail=last_error,
-                host=app._splash_host(),
-            )
+        # The context changed (or was cleared) while reconnecting; whoever
+        # changed it owns the connection state now, so exit quietly.
+        return
     finally:
-        app._websocket_recovery_task = None
+        # Only clear the registration if this task still owns it: a newer
+        # recovery task may have registered itself before our cancellation
+        # was delivered.
+        if app._websocket_recovery_task is asyncio.current_task():
+            app._websocket_recovery_task = None
 
 
 def _reset_disconnected_state(app: AgentZeroCLI) -> None:
@@ -605,10 +637,14 @@ async def disconnect_and_exit(app: AgentZeroCLI) -> None:
     app._stop_remote_tree_publisher()
     app._stop_token_refresh()
     app._stop_state_sync()
+    await _cancel_websocket_recovery(app)
     await app._python_tty.close()
     app._computer_use.reset_enabled_for_shutdown()
     await app._computer_use.disconnect()
     await app._host_browser.disconnect()
+    # Prevent the disconnect event from scheduling websocket recovery while
+    # the app is shutting down (same guard disconnect_to_login uses).
+    app.client.on_disconnect = None
     try:
         await app.client.disconnect()
     except Exception:

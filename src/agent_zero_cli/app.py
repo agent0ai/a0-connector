@@ -2509,8 +2509,9 @@ class AgentZeroCLI(App):
             return
         self._set_splash_state(remember_host=event.remember_host)
 
-    def on_splash_view_action_requested(self, event: SplashView.ActionRequested) -> None:
+    async def on_splash_view_action_requested(self, event: SplashView.ActionRequested) -> None:
         if event.action == "back":
+            await connection._cancel_websocket_recovery(self)
             self._set_splash_stage(
                 "host",
                 message="",
