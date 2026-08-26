@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib.util
 from pathlib import Path
@@ -473,6 +474,23 @@ class HostBrowserManager:
         mode = normalize_host_browser_profile_mode(profile_mode)
         selection = normalize_host_browser_selection(browser_selection)
         profile = self._auto_start_profile(profile_mode=mode, browser_selection=selection)
+        wait_for_remote = mode == "existing" and (
+            (selection and is_remote_debugging_family(selection))
+            or (
+                not selection
+                and profile is not None
+                and bool(remote_debugging_restriction_reason(profile))
+            )
+        )
+        if wait_for_remote:
+            for delay in (0.25, 0.5, 1.0):
+                if profile is not None and profile.is_remote_debugging:
+                    break
+                await asyncio.sleep(delay)
+                profile = self._auto_start_profile(
+                    profile_mode=mode,
+                    browser_selection=selection,
+                )
         if profile is None and not self._has_playwright():
             await self.ensure_playwright_dependency()
             profile = self._auto_start_profile(profile_mode=mode, browser_selection=selection)
@@ -503,6 +521,7 @@ class HostBrowserManager:
         self.set_enabled(True)
         session = await self._session(RELAUNCH_CONTEXT_ID, profile=profile)
         await session.ensure_started()
+        profile = session.profile
         return self.status_snapshot(
             profile=profile,
             profile_mode=mode,

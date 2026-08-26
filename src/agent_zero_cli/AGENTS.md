@@ -26,7 +26,7 @@
 - Keep the Wayland helper compatibility copy behavior-aligned with the packaged `a0-computer-use-wayland` helper; package-only bootstrap imports are the intentional difference.
 - Host-browser `open` must reuse an already-open tab with the same normalized URL before creating a new tab. Keep `list` and `set_active` workflows available for title-based or URL-based selection.
 - Remote host-browser operations may report status while Host Browser is off, but `ensure` and every effectful action must fail closed. Local `/browser` commands and Launcher-authorized setup may still prepare the browser through the direct manager API.
-- Host-browser metadata must advertise stable browser choices, and incoming `browser_selection` / `host_browser_selection` values must select that browser instead of falling back to the automatic profile picker.
+- Host-browser metadata must advertise stable browser choices, including discovered CDP browser IDs that survive `DevToolsActivePort` port/GUID changes. Incoming `browser_selection` / `host_browser_selection` values must select that browser instead of falling back to the automatic profile picker. Browser preparation may briefly wait for an existing browser's active-port file, and a failed discovered-CDP attach may retry only after that file advertises a different endpoint; explicit custom endpoints remain exact. Consent failures must tell the user to choose a Chrome profile and click Allow before retrying.
 - The packaged A0 runtime includes the Python Playwright client for local-profile
   launch without bundling Chromium. Keep automatic preparation and `/browser
   repair` able to restore it in older or damaged CLI environments. Browser
