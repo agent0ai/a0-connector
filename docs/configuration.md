@@ -9,6 +9,7 @@
 | `AGENT_ZERO_DEFAULT_CONTEXT_ID` / `A0_DEFAULT_CHAT` | Chat context to open after connecting | Last remembered chat for the host, then a new chat |
 | `AGENT_ZERO_REMOTE_EXEC_ENABLED` / `A0_REMOTE_EXEC` | Start with host-side remote execution enabled | disabled |
 | `A0_CLI_IMAGE_MODE` | Interactive terminal image renderer: `auto`, `tgp`, `sixel`, `halfcell`, or `off` | `auto` |
+| `A0_TERMINAL_NOTIFY` | Terminal-native notification when an active run becomes ready for input. Set to `0`, `false`, `no`, or `off` to disable. | enabled for terminal output |
 | `A0_UPDATE_CHECK` | Startup check for a newer CLI release. Set to `0`, `false`, `no`, or `off` to disable. | enabled |
 
 ## Resolution order
@@ -33,6 +34,18 @@ For the initial chat:
 chat for the host.
 
 For frontend remote execution, the CLI no longer runtime-imports a local Agent Zero Core checkout. The backend sends execution settings in the WebSocket `connector_hello` payload, and the CLI keeps the platform-specific shell and TTY logic locally.
+
+## Terminal completion notifications
+
+The TUI and `a0 headless` notify a capable terminal once when an active run
+returns to input-ready state. Kitty uses OSC 99, iTerm2 uses OSC 9, and other
+terminals receive OSC 777. Unsupported terminals ignore the sequence.
+
+Notifications are emitted only to a terminal: the TUI uses its terminal driver,
+and headless mode uses TTY stderr after final output has settled. Pipes and JSONL
+stdout remain unchanged. Inside tmux, enable `allow-passthrough` for the wrapped
+notification sequence to reach the outer terminal. Set
+`A0_TERMINAL_NOTIFY=0` to disable notifications.
 
 ## Terminal image rendering
 

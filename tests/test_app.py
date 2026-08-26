@@ -31,7 +31,12 @@ from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.instance_discovery import DiscoveredInstance, DiscoveryResult
 from agent_zero_cli.media_refs import ImageReference
 from agent_zero_cli.image_store import ImageAsset
-from agent_zero_cli.rendering import extract_detail, format_duration, render_connector_event
+from agent_zero_cli.rendering import (
+    completion_notification_sequence,
+    extract_detail,
+    format_duration,
+    render_connector_event,
+)
 from agent_zero_cli.remote_files import RemoteTreeSnapshot
 from agent_zero_cli.screens.installed_plugins import InstalledPluginsScreen
 from agent_zero_cli.screens.model_runtime import ModelRuntimeResult
@@ -2643,6 +2648,66 @@ async def test_context_complete_inserts_muted_duration_above_final_response(
     assert isinstance(completion, Text)
     assert completion.plain == "Completed in 1h3m2s"
     assert str(completion.style) == "#7f8c98"
+
+
+async def test_context_complete_notifies_terminal_once_for_active_run(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def async_noop(*args, **kwargs) -> None:
+        del args, kwargs
+
+    writes: list[str] = []
+    dummy_app.current_context = "ctx-alpha"
+    dummy_app.agent_active = True
+    dummy_app._driver = SimpleNamespace(write=writes.append)  # type: ignore[assignment]
+    monkeypatch.setattr(event_handlers, "completion_notification_sequence", lambda **kwargs: "notify")
+    monkeypatch.setattr(dummy_app, "_refresh_token_usage", async_noop)
+    monkeypatch.setattr(dummy_app, "_refresh_goal_bar", async_noop)
+    monkeypatch.setattr(dummy_app, "_refresh_context_tab_metadata", async_noop)
+
+    event_handlers.handle_context_complete(dummy_app, {"context_id": "ctx-other"})
+    event_handlers.handle_context_complete(dummy_app, {"context_id": "ctx-alpha"})
+    event_handlers.handle_context_complete(dummy_app, {"context_id": "ctx-alpha"})
+    await asyncio.sleep(0)
+
+    assert writes == ["notify"]
+
+
+def test_completion_notification_selects_protocol_and_terminal_guards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("agent_zero_cli.rendering.os.getpid", lambda: 1234)
+
+    assert completion_notification_sequence(is_tty=False, environ={}) == ""
+    for disabled in ("0", "false", "NO", " off "):
+        assert (
+            completion_notification_sequence(
+                is_tty=True,
+                environ={"A0_TERMINAL_NOTIFY": disabled},
+            )
+            == ""
+        )
+    assert completion_notification_sequence(
+        is_tty=True,
+        environ={"KITTY_WINDOW_ID": "1"},
+    ) == (
+        "\x1b]99;i=a0-1234:d=0;Agent Zero\x1b\\"
+        "\x1b]99;i=a0-1234:d=1:p=body;Ready for input\x1b\\"
+    )
+    assert completion_notification_sequence(
+        is_tty=True,
+        environ={"TERM_PROGRAM": "iTerm.app"},
+    ) == "\x1b]9;Agent Zero: Ready for input\x1b\\"
+    assert completion_notification_sequence(is_tty=True, environ={}) == (
+        "\x1b]777;notify;Agent Zero;Ready for input\x07"
+    )
+    assert completion_notification_sequence(
+        is_tty=True,
+        environ={"TMUX": "/tmp/tmux"},
+    ) == (
+        "\x1bPtmux;\x1b\x1b]777;notify;Agent Zero;Ready for input\x07\x1b\\"
+    )
 
 
 def test_duration_format_includes_hours_minutes_and_seconds() -> None:

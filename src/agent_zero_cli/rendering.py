@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
@@ -71,6 +73,37 @@ _OSC_CWD_PREFIX_RE = re.compile(
 _PROMPT_LINE_RE = re.compile(
     r"^\s*(?:\([^)\n]+\)\s*)?(?:[\w.-]+@[\w.-]+:)?[/~.\w-]*[#$]\s*$"
 )
+_TERMINAL_NOTIFY_DISABLED = frozenset({"0", "false", "no", "off"})
+
+
+def completion_notification_sequence(
+    *,
+    is_tty: bool,
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """Build the terminal-native Agent Zero completion notification."""
+    environment = os.environ if environ is None else environ
+    notify_setting = str(environment.get("A0_TERMINAL_NOTIFY", "")).strip().casefold()
+    if not is_tty or notify_setting in _TERMINAL_NOTIFY_DISABLED:
+        return ""
+
+    if environment.get("KITTY_WINDOW_ID"):
+        notification_id = f"a0-{os.getpid()}"
+        sequences = (
+            f"\x1b]99;i={notification_id}:d=0;Agent Zero\x1b\\",
+            f"\x1b]99;i={notification_id}:d=1:p=body;Ready for input\x1b\\",
+        )
+    elif str(environment.get("TERM_PROGRAM", "")).strip().casefold() == "iterm.app":
+        sequences = ("\x1b]9;Agent Zero: Ready for input\x1b\\",)
+    else:
+        sequences = ("\x1b]777;notify;Agent Zero;Ready for input\x07",)
+
+    if environment.get("TMUX"):
+        sequences = tuple(
+            "\x1bPtmux;" + sequence.replace("\x1b", "\x1b\x1b") + "\x1b\\"
+            for sequence in sequences
+        )
+    return "".join(sequences)
 
 
 def format_duration(seconds: float | int) -> str:

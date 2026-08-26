@@ -19,6 +19,27 @@ from agent_zero_cli.session import SessionError
 pytestmark = pytest.mark.anyio
 
 
+class RecordingStream(io.StringIO):
+    def __init__(
+        self,
+        writes: list[tuple[str, str]],
+        label: str,
+        *,
+        is_tty: bool = False,
+    ) -> None:
+        super().__init__()
+        self._writes = writes
+        self._label = label
+        self._is_tty = is_tty
+
+    def write(self, value: str) -> int:
+        self._writes.append((self._label, value))
+        return super().write(value)
+
+    def isatty(self) -> bool:
+        return self._is_tty
+
+
 class FakeSession:
     instances: list["FakeSession"] = []
     connect_error: SessionError | None = None
@@ -348,6 +369,30 @@ def test_headless_queue_send_command_is_agent_starting() -> None:
     assert command_may_start_agent("/status") is False
 
 
+def test_headless_completion_notifies_once_on_tty_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in ("A0_TERMINAL_NOTIFY", "KITTY_WINDOW_ID", "TERM_PROGRAM", "TMUX"):
+        monkeypatch.delenv(key, raising=False)
+    writes: list[tuple[str, str]] = []
+    stdout = RecordingStream(writes, "stdout")
+    stderr = RecordingStream(writes, "stderr", is_tty=True)
+    runner = HeadlessRunner(
+        HeadlessOptions(
+            output="jsonl",
+            stdout=stdout,
+            stderr=stderr,
+        )
+    )
+
+    runner.on_complete("ctx-1")
+    runner.on_complete("ctx-1")
+
+    records = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert records == [{"type": "complete", "context_id": "ctx-1"}]
+    assert stderr.getvalue() == "\x1b]777;notify;Agent Zero;Ready for input\x07"
+
+
 async def test_print_mode_jsonl_stdout_is_valid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     del monkeypatch
     stdout = io.StringIO()
@@ -374,11 +419,17 @@ async def test_print_mode_jsonl_stdout_is_valid(monkeypatch: pytest.MonkeyPatch,
     assert FakeSession.instances[-1].closed is True
 
 
-async def test_print_mode_renders_final_snapshot_update_before_complete(tmp_path: Path) -> None:
+async def test_print_mode_renders_final_snapshot_before_complete_and_notification(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    for key in ("A0_TERMINAL_NOTIFY", "KITTY_WINDOW_ID", "TERM_PROGRAM", "TMUX"):
+        monkeypatch.delenv(key, raising=False)
     FakeSession.stream_text = "HEADLESS_REMOTE_EXEC_SHORT"
     FakeSession.final_snapshot_text = "HEADLESS_REMOTE_EXEC_SHORT_OK"
-    stdout = io.StringIO()
-    stderr = io.StringIO()
+    writes: list[tuple[str, str]] = []
+    stdout = RecordingStream(writes, "stdout")
+    stderr = RecordingStream(writes, "stderr", is_tty=True)
     options = HeadlessOptions(
         host="http://agent.test",
         output="jsonl",
@@ -397,6 +448,16 @@ async def test_print_mode_renders_final_snapshot_update_before_complete(tmp_path
     assert records[1]["data"]["text"] == "HEADLESS_REMOTE_EXEC_SHORT"
     assert records[2]["data"]["text"] == "HEADLESS_REMOTE_EXEC_SHORT_OK"
     assert records[2]["data"]["meta"]["finished"] is True
+    notification = "\x1b]777;notify;Agent Zero;Ready for input\x07"
+    assert stderr.getvalue() == notification
+    final_snapshot_write = next(
+        index for index, write in enumerate(writes) if "HEADLESS_REMOTE_EXEC_SHORT_OK" in write[1]
+    )
+    complete_write = next(
+        index for index, write in enumerate(writes) if '"type":"complete"' in write[1]
+    )
+    notification_write = writes.index(("stderr", notification))
+    assert final_snapshot_write < complete_write < notification_write
 
 
 async def test_print_mode_send_command_flushes_queue_and_waits(tmp_path: Path) -> None:

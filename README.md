@@ -157,6 +157,10 @@ single-instance discovery. Protected instances reuse a persisted web session,
 code `2`. Headless and `a0 gateway` remain text/JSONL-only: they neither import
 terminal-image rendering nor emit terminal image-protocol bytes. See [Headless mode](https://github.com/agent0ai/a0-connector/blob/main/docs/headless.md).
 
+Active TUI and headless terminal sessions send one ready-for-input notification
+after each completed run. Set `A0_TERMINAL_NOTIFY=0` to disable it; headless
+notification bytes use terminal stderr and never contaminate stdout.
+
 ## Usage
 
 ### Footer shortcuts

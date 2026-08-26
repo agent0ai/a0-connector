@@ -33,6 +33,9 @@
 - Launcher direct-connect path is `a0 --host <local-url> --no-docker-discovery --connect`; `--host` selects the target URL, `--no-docker-discovery` skips Docker discovery, and `--connect` connects immediately instead of opening the host picker.
 - Run the plain stdin/stdout connector with `a0 headless`; use
   `a0 headless --print` for one-shot pipe-friendly runs.
+- Active TUI and headless terminal sessions emit one ready-for-input notification
+  per completed run by default. `A0_TERMINAL_NOTIFY=0` disables it; headless
+  writes notification bytes only to terminal stderr so stdout stays pipe-safe.
 - Run the Launcher-owned tools-only connector with `a0 gateway`. It is a
   Textual-free, newline-delimited JSON stdin/stdout contract and must not create,
   select, or subscribe to a chat.

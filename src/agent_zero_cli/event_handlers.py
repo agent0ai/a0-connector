@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 
@@ -10,6 +11,7 @@ from textual.css.query import NoMatches
 from agent_zero_cli.rendering import (
     _EVENT_CATEGORY,
     _STATUS_LABEL,
+    completion_notification_sequence,
     extract_detail,
     format_duration,
     render_connector_event,
@@ -30,6 +32,22 @@ def _chat_log_or_none(app: AgentZeroCLI) -> ChatLog | None:
         return app.query_one("#chat-log", ChatLog)
     except NoMatches:
         return None
+
+
+def _notify_terminal_completion(app: AgentZeroCLI) -> None:
+    if getattr(app, "is_headless", False) or getattr(app, "is_web", False):
+        return
+    stdout = sys.__stdout__
+    sequence = completion_notification_sequence(
+        is_tty=bool(stdout and getattr(stdout, "isatty", lambda: False)())
+    )
+    driver = getattr(app, "_driver", None)
+    if not sequence or driver is None:
+        return
+    try:
+        driver.write(sequence)
+    except Exception:
+        pass
 
 
 def _remember_user_message(app: AgentZeroCLI, event: dict[str, Any]) -> None:
@@ -229,6 +247,7 @@ def handle_context_complete(app: AgentZeroCLI, data: dict[str, Any]) -> None:
     if context_id != app.current_context:
         return
 
+    was_active = app.agent_active
     started_at = app._run_started_at
     response_sequence = app._last_response_sequence
     app._run_started_at = None
@@ -262,6 +281,8 @@ def handle_context_complete(app: AgentZeroCLI, data: dict[str, Any]) -> None:
     if app._compaction_refresh_context == context_id:
         app._compaction_refresh_context = None
         asyncio.create_task(_compaction_context_reload(app, context_id))
+    if was_active:
+        _notify_terminal_completion(app)
 
 
 def handle_connector_error(app: AgentZeroCLI, data: dict[str, Any]) -> None:

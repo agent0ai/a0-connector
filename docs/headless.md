@@ -62,6 +62,10 @@ use `{"type":"event", ...}` and runner lifecycle records include `ready`,
 `complete`, `notice`, and `error`. Prompts and human diagnostics do not corrupt
 JSONL stdout.
 
+When stderr is attached to a terminal, completion emits one terminal-native
+notification after final snapshot output has settled. It never writes the
+notification to stdout, and `A0_TERMINAL_NOTIFY=0` disables it.
+
 ## Slash Commands
 
 | Command | Action |

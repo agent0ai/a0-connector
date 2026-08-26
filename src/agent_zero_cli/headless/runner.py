@@ -21,6 +21,7 @@ from agent_zero_cli.headless.commands import (
 )
 from agent_zero_cli.headless.renderer import HeadlessRenderer, make_renderer
 from agent_zero_cli.instance_discovery import discover_local_instances
+from agent_zero_cli.rendering import completion_notification_sequence
 from agent_zero_cli.session import ConnectorSession, SessionError
 
 EXIT_SUCCESS = 0
@@ -113,12 +114,15 @@ class HeadlessRunner:
 
     def on_complete(self, context_id: str) -> None:
         self._sigint_count = 0
+        if self._complete_event.is_set():
+            return
         if self._defer_complete_render:
             self._deferred_complete_context_id = context_id
             self._complete_event.set()
             return
         self._complete_event.set()
         self._write_lines(self.renderer.render_complete(context_id))
+        self._notify_terminal_completion()
         if self._stdin_isatty() and self._waiting_for_line and not self._stop_event.is_set():
             self._prompt()
 
@@ -268,8 +272,19 @@ class HeadlessRunner:
         if not context_id:
             return
         self._write_lines(self.renderer.render_complete(context_id))
+        self._notify_terminal_completion()
         if self._stdin_isatty() and self._waiting_for_line and not self._stop_event.is_set():
             self._prompt()
+
+    def _notify_terminal_completion(self) -> None:
+        sequence = completion_notification_sequence(is_tty=self._stderr_isatty())
+        if not sequence:
+            return
+        try:
+            self.options.stderr.write(sequence)
+            self.options.stderr.flush()
+        except Exception:
+            pass
 
     def _snapshot_event_changed(self, event: dict) -> bool:
         key = self._event_key(event)
@@ -448,6 +463,10 @@ class HeadlessRunner:
 
     def _stdout_isatty(self) -> bool:
         isatty = getattr(self.options.stdout, "isatty", None)
+        return bool(isatty and isatty())
+
+    def _stderr_isatty(self) -> bool:
+        isatty = getattr(self.options.stderr, "isatty", None)
         return bool(isatty and isatty())
 
 
