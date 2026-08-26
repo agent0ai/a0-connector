@@ -10,13 +10,18 @@ from rich.segment import Segment
 from rich.text import Text
 from textual import events
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.content import Content
+from textual.geometry import Region
 from textual.message import Message
 from textual.style import Style
+from textual.widget import Widget
 from textual.widgets import Static
 
+from agent_zero_cli.image_render import ImageRenderer
 from agent_zero_cli.icon_text import normalize_icon_text
+from agent_zero_cli.media_refs import ImageReference
+from agent_zero_cli.widgets.image_entry import ImageEntry
 from agent_zero_cli.widgets.shimmer import build_dim_status, build_shimmer_text
 
 
@@ -24,6 +29,8 @@ _STATUS_HISTORY_PADDING = (0, 0, 0, 2)
 _STATUS_BODY_PADDING = (1, 0, 0, 4)
 _CODE_BODY_PADDING = (0, 0, 0, 2)
 _STATUS_THOUGHT_LIMIT = 6
+_LOADING_RETAIN_VIEWPORTS = 2
+_RENDERED_RETAIN_VIEWPORTS = 8
 _REDACTED_ARG_KEYS = {
     "code",
     "content",
@@ -43,6 +50,18 @@ _SKIP_META_KEYS = {
     "tool_name",
     "reasoning",
 }
+_MEDIA_META_KEYS = frozenset(
+    {
+        "attachments",
+        "browser_snapshot",
+        "image",
+        "images",
+        "image_path",
+        "image_uri",
+        "image_url",
+        "screenshot",
+    }
+)
 
 _AGENT_ZERO_BANNER = """ █████╗   ██████╗ ███████╗███╗   ██╗████████╗   ███████╗███████╗██████╗  ██████╗
 ██╔══██╗ ██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝   ╚══███╔╝██╔════╝██╔══██╗██╔═══██╗
@@ -106,6 +125,20 @@ def _hidden_payload_summary(value: Any) -> str:
     return "hidden"
 
 
+def _is_media_meta_key(key: object) -> bool:
+    return str(key).casefold() in _MEDIA_META_KEYS
+
+
+def _is_media_reference_string(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.lstrip().casefold()
+    return any(
+        marker in normalized
+        for marker in ("img://", "data:image/", "/api/image_get?")
+    )
+
+
 def _summarize_status_value(
     key: str,
     value: Any,
@@ -122,7 +155,7 @@ def _summarize_status_value(
         normalized = _normalize_status_text(value)
         if not normalized:
             return None
-        if redact_strings:
+        if redact_strings or _is_media_reference_string(normalized):
             return _hidden_payload_summary(normalized)
         return _truncate_status_text(normalized)
     if isinstance(value, dict):
@@ -158,20 +191,28 @@ def sanitize_status_meta(
     if isinstance(tool_args, dict):
         consumed.add("tool_args")
         for arg_name, arg_value in tool_args.items():
-            if str(arg_name) in _SKIP_TOOL_ARG_KEYS:
+            if str(arg_name) in _SKIP_TOOL_ARG_KEYS or _is_media_meta_key(arg_name):
                 continue
             summary = _summarize_status_value(
                 str(arg_name),
                 arg_value,
-                redact_strings=str(arg_name) in _REDACTED_ARG_KEYS,
+                redact_strings=(
+                    str(arg_name) in _REDACTED_ARG_KEYS
+                    or _is_media_reference_string(arg_value)
+                ),
             )
             if summary:
                 rows.append((f"arg.{arg_name}", summary))
 
     for key in sorted(meta):
-        if key in consumed or key in _SKIP_META_KEYS:
+        if key in consumed or key in _SKIP_META_KEYS or _is_media_meta_key(key):
             continue
-        summary = _summarize_status_value(str(key), meta.get(key))
+        value = meta.get(key)
+        summary = _summarize_status_value(
+            str(key),
+            value,
+            redact_strings=_is_media_reference_string(value),
+        )
         if summary:
             rows.append((str(key), summary))
 
@@ -182,11 +223,11 @@ def sanitize_status_meta(
         for item in thought_items:
             if not isinstance(item, str):
                 continue
-            normalized = _normalize_status_text(item)
-            if not normalized:
+            summary = _summarize_status_value("thoughts", item)
+            if not summary:
                 continue
             if len(thoughts) < _STATUS_THOUGHT_LIMIT:
-                thoughts.append(_truncate_status_text(normalized, limit=180))
+                thoughts.append(_truncate_status_text(summary, limit=180))
             else:
                 hidden_thoughts += 1
 
@@ -578,6 +619,75 @@ class AgentZeroBanner(Static):
         self.update(_build_banner_text(selected))
 
 
+class TranscriptEntry(Vertical):
+    """Own every transcript widget belonging to one connector sequence."""
+
+    DEFAULT_CSS = """
+    TranscriptEntry {
+        height: auto;
+    }
+    """
+
+    def __init__(self, *, id: str | None = None, classes: str | None = None) -> None:
+        super().__init__(id=id, classes=classes)
+        self.primary: SelectableStatic | None = None
+
+    def set_primary(self, widget_type: type[SelectableStatic]) -> SelectableStatic:
+        """Return a primary widget of ``widget_type`` without disturbing images."""
+        primary = self.primary
+        if primary is not None and type(primary) is widget_type:
+            return primary
+
+        if primary is not None:
+            primary.remove()
+
+        primary = widget_type()
+        self.primary = primary
+        self.mount(primary, before=self.children[0] if self.children else None)
+        return primary
+
+    def upsert_images(
+        self,
+        references: tuple[ImageReference, ...],
+        renderer: ImageRenderer,
+    ) -> None:
+        """Add sequence-owned images once, preserving reference order and state."""
+        existing = {
+            image.reference.entry_key: image
+            for image in self.children
+            if isinstance(image, ImageEntry)
+        }
+        for index, reference in enumerate(references):
+            if reference.entry_key in existing:
+                continue
+            image = ImageEntry(reference, renderer)
+            before = next(
+                (
+                    existing[later.entry_key]
+                    for later in references[index + 1 :]
+                    if later.entry_key in existing
+                ),
+                None,
+            )
+            self.mount(image, before=before)
+            existing[reference.entry_key] = image
+
+    def copy_text(self) -> str:
+        """Return primary and semantic image transcript text in display order."""
+        blocks: list[str] = []
+        if self.primary is not None:
+            text = self.primary.copy_text().strip("\n")
+            if text.strip():
+                blocks.append(text)
+        blocks.extend(
+            text
+            for child in self.children
+            if isinstance(child, ImageEntry)
+            if (text := child.copy_text().strip("\n")).strip()
+        )
+        return "\n\n".join(blocks)
+
+
 class ChatLog(VerticalScroll):
     """A log widget that updates its children based on sequence tracking."""
 
@@ -588,11 +698,13 @@ class ChatLog(VerticalScroll):
             super().__init__()
             self.before = before
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, image_renderer: ImageRenderer | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._seq_to_widget: dict[int, SelectableStatic] = {}
+        self.image_renderer = image_renderer or ImageRenderer.disabled()
+        self._seq_to_widget: dict[int, TranscriptEntry] = {}
         self._sys_seq: int = -100
         self._intro_widget: Static | None = None
+        self._intro_sequence: int | None = None
         self._workspace_widget: Static | None = None
         self._local_workspace = ""
         self._remote_workspace = ""
@@ -608,6 +720,95 @@ class ChatLog(VerticalScroll):
         self._active_meta: dict[str, Any] = {}
         self._shimmer_phase: float = 0.0
         self._shimmer_frame: int = 0
+        self._nearby_image_scan_pending = False
+
+    def on_mount(self) -> None:
+        self._schedule_nearby_images()
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._schedule_nearby_images()
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        """Rescan after deferred or animated scrolling changes the viewport."""
+        super().watch_scroll_y(old_value, new_value)
+        self._schedule_nearby_images()
+
+    def _schedule_nearby_images(self) -> None:
+        if self._nearby_image_scan_pending:
+            return
+        self._nearby_image_scan_pending = True
+        self.call_after_refresh(self._run_nearby_image_scan)
+
+    def _run_nearby_image_scan(self) -> None:
+        self._nearby_image_scan_pending = False
+        self.request_nearby_images()
+
+    def on_image_entry_surface_changed(
+        self,
+        message: ImageEntry.SurfaceChanged,
+    ) -> None:
+        """Follow asynchronous image growth only while transcript follow is active."""
+        message.stop()
+        if self._auto_follow:
+            self._schedule_scroll_end()
+        self._schedule_nearby_images()
+
+    def request_nearby_images(self) -> None:
+        """Request near images and apply bounded loading/rendered retention."""
+        content_region = self.content_region
+        viewport_height = content_region.height
+        if viewport_height <= 0:
+            return
+
+        near_region = content_region.grow((viewport_height, 0, viewport_height, 0))
+        loading_retain_region = content_region.grow(
+            (
+                viewport_height * _LOADING_RETAIN_VIEWPORTS,
+                0,
+                viewport_height * _LOADING_RETAIN_VIEWPORTS,
+                0,
+            )
+        )
+        rendered_retain_region = content_region.grow(
+            (
+                viewport_height * _RENDERED_RETAIN_VIEWPORTS,
+                0,
+                viewport_height * _RENDERED_RETAIN_VIEWPORTS,
+                0,
+            )
+        )
+        for image in self.query(ImageEntry):
+            region = self._image_screen_region(image, content_region)
+            if region.width <= 0 or region.height <= 0:
+                continue
+            visible = region.intersection(content_region)
+            if visible.width > 0 and visible.height > 0:
+                image.redraw_surface()
+            if region.intersection(near_region).width > 0 and region.intersection(near_region).height > 0:
+                image.request_load()
+            elif image.state == "loading" and not region.overlaps(
+                loading_retain_region
+            ):
+                image.release_surface()
+            elif image.state == "rendered" and not region.overlaps(
+                rendered_retain_region
+            ):
+                image.release_surface()
+
+    def _image_screen_region(self, image: ImageEntry, content_region: Region) -> Region:
+        """Return a direct image child's virtual position in screen coordinates."""
+        owner = image.parent
+        if not isinstance(owner, TranscriptEntry):
+            return image.region
+        owner_region = owner.virtual_region
+        image_region = image.virtual_region
+        return Region(
+            content_region.x + owner_region.x + image_region.x - self.scroll_x,
+            content_region.y + owner_region.y + image_region.y - self.scroll_y,
+            image_region.width,
+            image_region.height,
+        )
 
     def _pause_auto_follow_if_scrolled_up(self, previous_scroll_y: float) -> None:
         if self.scroll_y < previous_scroll_y:
@@ -641,47 +842,55 @@ class ChatLog(VerticalScroll):
 
     def _scroll_end_if_auto_follow(self) -> None:
         if self._auto_follow:
-            self.scroll_end(animate=False)
+            self.scroll_end(animate=False, immediate=True)
 
     def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         previous_scroll_y = self.scroll_y
         super()._on_mouse_scroll_up(event)
         self._pause_auto_follow_if_scrolled_up(previous_scroll_y)
         self._request_older_history_if_needed()
+        self._schedule_nearby_images()
 
     def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         super()._on_mouse_scroll_down(event)
         self._resume_auto_follow_if_at_bottom()
+        self._schedule_nearby_images()
 
     def action_scroll_up(self) -> None:
         previous_scroll_y = self.scroll_y
         super().action_scroll_up()
         self._pause_auto_follow_if_scrolled_up(previous_scroll_y)
         self._request_older_history_if_needed()
+        self._schedule_nearby_images()
 
     def action_page_up(self) -> None:
         previous_scroll_y = self.scroll_y
         super().action_page_up()
         self._pause_auto_follow_if_scrolled_up(previous_scroll_y)
         self._request_older_history_if_needed()
+        self._schedule_nearby_images()
 
     def action_scroll_home(self) -> None:
         previous_scroll_y = self.scroll_y
         super().action_scroll_home()
         self._pause_auto_follow_if_scrolled_up(previous_scroll_y)
         self._request_older_history_if_needed(force=True)
+        self._schedule_nearby_images()
 
     def action_scroll_down(self) -> None:
         super().action_scroll_down()
         self._resume_auto_follow_if_at_bottom()
+        self._schedule_nearby_images()
 
     def action_page_down(self) -> None:
         super().action_page_down()
         self._resume_auto_follow_if_at_bottom()
+        self._schedule_nearby_images()
 
     def action_scroll_end(self) -> None:
         super().action_scroll_end()
         self._resume_auto_follow_if_at_bottom()
+        self._schedule_nearby_images()
 
     def ensure_intro_banner(self) -> None:
         """Mount the Agent Zero intro banner above the first rendered message."""
@@ -693,6 +902,9 @@ class ChatLog(VerticalScroll):
         before = self.children[0] if self.children else None
         self.mount(self._intro_widget, before=before)
         self._sync_workspace_widget()
+
+    def mark_intro_message(self, sequence: int) -> None:
+        self._intro_sequence = sequence
 
     def set_workspace(self, *, local_workspace: str = "", remote_workspace: str = "") -> None:
         self._local_workspace = local_workspace.strip()
@@ -734,6 +946,22 @@ class ChatLog(VerticalScroll):
         self.append_or_update(self._sys_seq, renderable, scroll=True)
         self._sys_seq -= 1
 
+    def write_before(self, sequence: int, renderable: RenderableType) -> None:
+        """Write an un-updatable message immediately before a sequence entry."""
+        target = self._seq_to_widget.get(sequence)
+        if target is None:
+            self.write(renderable)
+            return
+
+        should_scroll = self._should_auto_scroll(True)
+        entry = TranscriptEntry()
+        self._seq_to_widget[self._sys_seq] = entry
+        self._sys_seq -= 1
+        self.mount(entry, before=target)
+        entry.set_primary(SelectableStatic).update(renderable)
+        if should_scroll:
+            self._schedule_scroll_end()
+
     def set_history_page(self, *, before: int, has_more: bool) -> None:
         """Record the oldest available cursor after a paged history snapshot."""
         self._history_before = max(int(before), 0)
@@ -744,13 +972,23 @@ class ChatLog(VerticalScroll):
         if self._history_before == before:
             self._history_load_pending = False
 
-    def _first_timeline_child(self) -> SelectableStatic | None:
+    def _first_timeline_child(self) -> TranscriptEntry | None:
         return next(
-            (child for child in self.children if isinstance(child, SelectableStatic)),
+            (child for child in self.children if isinstance(child, TranscriptEntry)),
             None,
         )
 
-    def _child_plain_text(self, child: Static) -> str:
+    def _entry(self, sequence: int, *, prepend: bool) -> TranscriptEntry:
+        entry = self._seq_to_widget.get(sequence)
+        if entry is not None:
+            return entry
+        entry = TranscriptEntry()
+        self._seq_to_widget[sequence] = entry
+        self.mount(entry, before=self._first_timeline_child() if prepend else None)
+        self._schedule_nearby_images()
+        return entry
+
+    def _child_plain_text(self, child: Widget) -> str:
         copy_text = getattr(child, "copy_text", None)
         if callable(copy_text):
             try:
@@ -770,21 +1008,22 @@ class ChatLog(VerticalScroll):
             return plain if isinstance(plain, str) else str(rendered)
         return content.plain
 
-    def _copyable_children(self, *, visible_only: bool) -> list[Static]:
-        children = [child for child in self.children if isinstance(child, Static) and child.display]
+    def _copyable_children(self, *, visible_only: bool) -> list[Widget]:
+        children = [child for child in self.children if child.display]
         if not visible_only:
             return children
 
-        viewport_height = self.content_region.height or self.size.height
-        if viewport_height <= 0:
+        viewport = self.content_region
+        if viewport.height <= 0:
             return children
 
-        visible_children: list[Static] = []
+        visible_children: list[Widget] = []
         for child in children:
             region = child.region
-            if region.height <= 0:
+            if region.width <= 0 or region.height <= 0:
                 continue
-            if region.y < viewport_height and region.y + region.height > 0:
+            intersection = region.intersection(viewport)
+            if intersection.width > 0 and intersection.height > 0:
                 visible_children.append(child)
 
         return visible_children or children
@@ -822,21 +1061,11 @@ class ChatLog(VerticalScroll):
             scroll: Whether to automatically scroll to the element.
         """
         should_scroll = self._should_auto_scroll(scroll)
-        widget = self._seq_to_widget.get(sequence)
-        if widget is not None and widget.__class__ is not SelectableStatic:
-            widget.remove()
-            widget = None
-
-        if isinstance(widget, SelectableStatic) and widget.__class__ is SelectableStatic:
-            widget.update(renderable)
-            if should_scroll:
-                self._schedule_scroll_end()
-        else:
-            widget = SelectableStatic(renderable)
-            self._seq_to_widget[sequence] = widget
-            self.mount(widget, before=self._first_timeline_child() if prepend else None)
-            if should_scroll:
-                self._schedule_scroll_end()
+        entry = self._entry(sequence, prepend=prepend)
+        widget = entry.set_primary(SelectableStatic)
+        widget.update(renderable)
+        if should_scroll:
+            self._schedule_scroll_end()
 
     def append_or_update_status(
         self,
@@ -851,15 +1080,9 @@ class ChatLog(VerticalScroll):
     ) -> None:
         """Add or update a structured status widget bounded to `sequence`."""
         should_scroll = self._should_auto_scroll(scroll)
-        widget = self._seq_to_widget.get(sequence)
-        if widget is not None and not isinstance(widget, StatusEntry):
-            widget.remove()
-            widget = None
-
-        if not isinstance(widget, StatusEntry):
-            widget = StatusEntry()
-            self._seq_to_widget[sequence] = widget
-            self.mount(widget, before=self._first_timeline_child() if prepend else None)
+        entry = self._entry(sequence, prepend=prepend)
+        widget = entry.set_primary(StatusEntry)
+        assert isinstance(widget, StatusEntry)
 
         widget.set_status(
             label,
@@ -885,15 +1108,9 @@ class ChatLog(VerticalScroll):
     ) -> None:
         """Add or update an expandable code widget bounded to `sequence`."""
         should_scroll = self._should_auto_scroll(scroll)
-        widget = self._seq_to_widget.get(sequence)
-        if widget is not None and not isinstance(widget, CodeEntry):
-            widget.remove()
-            widget = None
-
-        if not isinstance(widget, CodeEntry):
-            widget = CodeEntry()
-            self._seq_to_widget[sequence] = widget
-            self.mount(widget, before=self._first_timeline_child() if prepend else None)
+        entry = self._entry(sequence, prepend=prepend)
+        widget = entry.set_primary(CodeEntry)
+        assert isinstance(widget, CodeEntry)
 
         widget.set_code(
             label,
@@ -905,6 +1122,20 @@ class ChatLog(VerticalScroll):
         )
         if should_scroll:
             self._schedule_scroll_end()
+
+    def append_or_update_images(
+        self,
+        sequence: int,
+        references: tuple[ImageReference, ...],
+        *,
+        prepend: bool = False,
+    ) -> None:
+        """Add image references to their owning transcript sequence."""
+        if self.image_renderer.mode == "off":
+            return
+        entry = self._entry(sequence, prepend=prepend)
+        entry.upsert_images(references, self.image_renderer)
+        self._schedule_nearby_images()
 
     def set_active_status(
         self,
@@ -964,19 +1195,28 @@ class ChatLog(VerticalScroll):
             scroll=False,
         )
 
-    def clear(self) -> None:
+    def clear(self, *, preserve_intro: bool = False) -> None:
         """Clear the timeline and reset the tracking map."""
-        self._seq_to_widget.clear()
-        self._intro_widget = None
-        self._workspace_widget = None
+        intro_entry = self._seq_to_widget.get(self._intro_sequence) if preserve_intro else None
+        self._seq_to_widget = (
+            {self._intro_sequence: intro_entry}
+            if self._intro_sequence is not None and intro_entry is not None
+            else {}
+        )
+        if not preserve_intro:
+            self._intro_widget = None
+            self._intro_sequence = None
+            self._workspace_widget = None
         self._active_seq = None
         self._active_meta = {}
         self._auto_follow = True
         self._history_before = 0
         self._has_more_history = False
         self._history_load_pending = False
-        for child in self.children:
-            child.remove()
+        preserved = {self._intro_widget, self._workspace_widget, intro_entry} if preserve_intro else set()
+        for child in list(self.children):
+            if child not in preserved:
+                child.remove()
 
 
 def build_agent_zero_banner_widget(*, id: str | None = None, classes: str = "agent-zero-banner") -> Static:

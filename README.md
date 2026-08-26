@@ -35,6 +35,27 @@ Clipboard image paste works natively on macOS and Windows. Linux needs one
 small system clipboard helper: install `wl-clipboard` on Wayland or `xclip` on
 X11 (for Ubuntu, `sudo apt install wl-clipboard` or `sudo apt install xclip`).
 
+### Inline terminal images
+
+The interactive TUI renders eligible browser screenshots, user attachments,
+and assistant images beneath their owning transcript entry. Browser screenshots
+stay beneath the same Browser tool metadata that produced them; they do not add
+a second transcript event. Images open in the expanded complete-aspect view,
+up to 96 by 32 terminal cells. Select an image with click, `Enter`, or `Space`
+to collapse it to a 36-by-12-cell thumbnail or expand it again.
+
+Set `A0_CLI_IMAGE_MODE` to `auto` (default), `tgp`, `sixel`, `halfcell`, or
+`off`. Keep `auto` for normal use: it combines terminal capability reporting,
+live protocol probes, and compatibility guards to choose native TGP or Sixel.
+Without a complete native protocol, it keeps the ordinary text transcript and
+does not add or fetch images. This is based on terminal capability, so Bash,
+Zsh, and PowerShell behave the same; the terminal hosting the shell decides.
+`halfcell` is an explicit low-resolution preview/debug mode, while `off` always
+keeps the pre-image transcript behavior. Apple Terminal and Warp therefore show
+no images automatically. A direct iTerm session can advertise Sixel and use the
+native raster renderer. Verify a capable terminal separately before treating
+forced TGP or Sixel as accepted.
+
 Computer-use backends are embedded in the `a0` wheel, so the CLI and local computer-use support install and update together. Linux host computer use uses the Wayland portal backend; X11/Xpra control belongs to Agent Zero's internal Docker Desktop tooling rather than the remote host connector.
 
 ## Manual install
@@ -133,7 +154,8 @@ echo "what is 2+2" | a0 headless --host http://localhost:32080 --print --output 
 Headless host resolution uses `--host`, then saved/env config, then Docker
 single-instance discovery. Protected instances reuse a persisted web session,
 `A0_USERNAME`/`A0_PASSWORD`, or TTY prompts; non-TTY auth failures exit with
-code `2`. See [Headless mode](https://github.com/agent0ai/a0-connector/blob/main/docs/headless.md).
+code `2`. Headless and `a0 gateway` remain text/JSONL-only: they neither import
+terminal-image rendering nor emit terminal image-protocol bytes. See [Headless mode](https://github.com/agent0ai/a0-connector/blob/main/docs/headless.md).
 
 ## Usage
 
@@ -160,6 +182,8 @@ code `2`. See [Headless mode](https://github.com/agent0ai/a0-connector/blob/main
 | `/pause` / `/resume` | Pause or resume the active agent run |
 | `/presets` | Pick a model preset |
 | `/models` | Override runtime models for the current chat |
+| `/profile` / `/profile <agent>` / `/profile "<name>" "<instructions>"` | Select, create, or edit the current agent profile |
+| `/permissions` | Edit Tools, MCP, and Skill permissions for the current agent |
 | `/computer-use on` / `/computer-use off` | Advertise or disable local Computer Use from this CLI; enabling arms the platform permission flow when needed |
 | `/browser status` | Show host-browser connector status |
 | `/browser host on` / `/browser host off` | Advertise or disable host-browser control from this CLI and sync Agent Zero Browser mode when supported |
@@ -172,6 +196,45 @@ code `2`. See [Headless mode](https://github.com/agent0ai/a0-connector/blob/main
 | `/disconnect` | Disconnect and return to the current host connection flow |
 | `/keys` | Toggle key help |
 | `/quit` | Exit |
+
+### Agent profiles and permissions
+
+Run `/profile` to open the profile menu. It lists profiles available from Agent
+Zero and gives you **Create profile** and **Edit current profile** actions.
+
+![A0 CLI profile menu](docs/res/usage/agent-profiles/profile-menu.png)
+
+The interactive editor asks for the profile name and instructions, then lets
+you review tool access before saving.
+
+![A0 CLI create-profile editor](docs/res/usage/agent-profiles/profile-editor.png)
+
+You can also select or create directly from the composer:
+
+```text
+/profile Developer
+/profile "Source Scout" "Verify every important claim and cite the source."
+```
+
+Use an unquoted name or profile ID when selecting an existing profile. Quick
+creation opens a fresh chat with the new profile activated.
+
+![A0 CLI quick profile creation confirmation](docs/res/usage/agent-profiles/profile-created.png)
+
+Run `/permissions` to edit Tools, MCPs, and Skills for the current profile.
+Choose a tab, change the category default if needed, and use Space or Enter on
+an item to move through **Default**, **On**, and **Off**. Press `Ctrl+S` or select
+**Save** when finished.
+
+![A0 CLI permissions editor](docs/res/usage/agent-profiles/permissions.png)
+
+Both commands use the current chat's scope: a project chat edits that project;
+a chat with no project edits Global. A0 CLI intentionally does not duplicate
+the Web UI's scope selector, availability controls, duplicate/delete actions,
+or full Advanced prompt editor. Use **Manage agents** in Agent Zero for those.
+
+The full policy and manual-file reference is in the
+[Agent Profiles guide](https://github.com/agent0ai/agent-zero/blob/main/docs/guides/agent-profiles.md).
 
 Computer Use may need platform approval before the CLI can capture or control
 the host desktop. `/computer-use on` enables the active backend; if the system
@@ -210,7 +273,7 @@ If the selected profile must be launched by A0 and is already locked by a normal
 
 Chrome 136+ blocks Playwright remote debugging against the default personal Chrome data directory. If Chrome's own Remote debugging consent path is not available, A0 exposes and auto-selects a separate local profile such as `chrome-a0 Default` under the user's data directory. Site data stays in that local browser profile, and the user may need to sign in once there. You can still select it manually with `/browser profile chrome-a0 Default`.
 
-The Playwright runtime and Chromium binary under the Agent Zero Docker container, such as `/a0/tmp/playwright`, belong to the container browser backend. They are useful when Browser settings use `container`, but they cannot control a host Chrome-family profile from inside Docker.
+The Patchright runtime and Chromium binary under the Agent Zero Docker container, such as `/a0/tmp/playwright`, belong to the container browser backend. They are useful when Browser settings use `container`, but they cannot control a host Chrome-family profile from inside Docker.
 
 The A0 CLI installation includes the Python Playwright client, but it does not download a separate Chromium binary. If an older or damaged installation is missing that client, Launcher Browser setup, automatic host-browser preparation, `/browser host on`, and `/browser relaunch` repair it automatically. You can also trigger the repair directly:
 

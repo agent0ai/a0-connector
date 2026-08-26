@@ -7,7 +7,9 @@
 | [Headless mode](headless.md) | Plain stdin/stdout connector mode, JSONL output, slash commands, exit codes |
 | [Development](development.md) | Repo layout, local setup, tests, import gotchas |
 | [TUI frontend](tui-frontend.md) | Which files define the Textual UI (widgets, styles, screens) |
-| [TUI overlay unification handoff](tui-overlay-unification-handoff.md) | Follow-up plan for making popovers, menus, modals, and palettes share one lighter visual language |
+| [Inline images and browser screenshots design](superpowers/specs/2026-08-10-inline-images-and-browser-screenshots-design.md) | Approved architecture, interaction, security, testing, and rollout decisions for inline transcript images |
+| [A0 CLI inline images implementation plan](superpowers/plans/2026-08-10-a0-cli-inline-images.md) | TDD tasks for terminal capability detection, secure loading, transcript widgets, lifecycle handling, and visual acceptance |
+| [Agent Zero attachment history metadata plan](superpowers/plans/2026-08-10-agent-zero-attachment-history-metadata.md) | Separate Core change and runtime acceptance plan for replayable user attachment filenames |
 
 ## Troubleshooting
 

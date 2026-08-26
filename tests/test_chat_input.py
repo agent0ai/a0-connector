@@ -77,6 +77,17 @@ async def test_chat_input_ctrl_a_selects_all_composer_text() -> None:
         assert input_widget.selection.end == (1, len("composer draft"))
 
 
+def test_chat_input_replaces_reference_trigger_and_keeps_following_text() -> None:
+    input_widget = ChatInput()
+    input_widget.value = "Compare @src/app with this"
+
+    result = input_widget.replace("@[./src/app.py]", (0, 8), (0, 16))
+    input_widget.move_cursor(result.end_location)
+
+    assert input_widget.value == "Compare @[./src/app.py] with this"
+    assert input_widget.selection.start == result.end_location
+
+
 async def test_chat_input_history_recalls_at_text_boundaries() -> None:
     input_widget = ChatInput()
     input_widget.set_history_context("ctx-1")

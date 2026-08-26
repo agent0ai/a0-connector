@@ -39,6 +39,12 @@ On Linux, the preview launcher now arms a parent-death signal so browser-preview
 CLI sessions shut down with the serving process instead of lingering under
 `systemd --user`.
 
+The launcher deliberately sets `A0_CLI_IMAGE_MODE=halfcell` for its child.
+xterm.js previews the portable, bounded fallback and do not exercise TGP/Sixel
+protocol bytes or native-surface cleanup. Use a separately verified capable
+terminal for native TGP/Sixel acceptance; do not assume Apple Terminal supports
+either protocol.
+
 > **Tip:** Append `?fontsize=14` to the URL to tweak the rendered font size.
 
 ## 2. SVG Snapshot (`snapshot.py`)
@@ -57,6 +63,10 @@ needed). Great for quick layout checks, CI diffing, or sharing.
 ```
 
 Output lands in `devtools/snapshots/` by default.
+
+Snapshots initialize and inject the same forced half-cell renderer, so capture
+is deterministic and library-free. SVG output is layout evidence only; it does
+not prove native terminal-protocol rendering or cleanup.
 
 ## 3. AI Agent Runbook: Send Text Through the Textual Wrapper
 

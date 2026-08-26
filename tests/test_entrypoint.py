@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from types import SimpleNamespace
-import tomllib
 
 import pytest
 
@@ -14,9 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_package_version_matches_cli_version() -> None:
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    version_line = next(line for line in pyproject.splitlines() if line.startswith("version = "))
 
-    assert pyproject["project"]["version"] == __version__
+    assert version_line.removeprefix("version = ").strip().strip('"') == __version__
 
 
 def test_main_prints_version_without_launching_app(
@@ -212,17 +213,55 @@ def test_main_gateway_routes_without_loading_textual(
     ]
 
 
+def test_headless_and_gateway_launchers_do_not_import_terminal_image_renderer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_zero_cli import config as config_mod
+    from agent_zero_cli import gateway as gateway_mod
+    from agent_zero_cli.headless import runner as headless_runner
+
+    for module_name in (
+        "textual_image",
+        "agent_zero_cli.app",
+        "agent_zero_cli.image_store",
+        "agent_zero_cli.widgets.image_entry",
+    ):
+        monkeypatch.delitem(sys.modules, module_name, raising=False)
+    monkeypatch.setattr(config_mod, "load_config", lambda: SimpleNamespace(instance_url=""))
+    monkeypatch.setattr(headless_runner, "run_headless", lambda _options: 0)
+    monkeypatch.setattr(gateway_mod, "run_gateway", lambda _options, _config: 0)
+
+    assert __main__._run_headless() == 0
+    assert __main__._run_gateway(
+        host="http://agent.test",
+        workspace=".",
+        gateway_id="test",
+        host_label="",
+        master_enabled=True,
+        scopes="file_read",
+        browser_selection="",
+    ) == 0
+    assert "textual_image" not in sys.modules
+    assert "agent_zero_cli.app" not in sys.modules
+    assert "agent_zero_cli.image_store" not in sys.modules
+    assert "agent_zero_cli.widgets.image_entry" not in sys.modules
+
+
 def test_run_app_installs_textual_input_decoder_guard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from agent_zero_cli import app as app_mod
     from agent_zero_cli import config as config_mod
+    from agent_zero_cli import image_render
     from agent_zero_cli import textual_compat
 
     calls: list[str] = []
 
     class FakeAgentZeroCLI:
-        def __init__(self, *_args: object, **_kwargs: object) -> None:
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            passed_renderer = kwargs["image_renderer"]
+            assert passed_renderer.mode == "halfcell"
+            assert passed_renderer._widget_factory is None
             calls.append("app-init")
 
         def run(self) -> None:
@@ -233,6 +272,14 @@ def test_run_app_installs_textual_input_decoder_guard(
         "install_textual_linux_input_decoder_guard",
         lambda: calls.append("guard"),
     )
+    real_initialize = image_render.initialize_image_renderer
+
+    def initialize_for_test() -> image_render.ImageRenderer:
+        calls.append("renderer-init")
+        return real_initialize()
+
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_entrypoint.py::automated")
+    monkeypatch.setattr(image_render, "initialize_image_renderer", initialize_for_test)
     monkeypatch.setattr(
         config_mod,
         "load_config",
@@ -242,4 +289,4 @@ def test_run_app_installs_textual_input_decoder_guard(
 
     __main__._run_app()
 
-    assert calls == ["guard", "app-init", "app-run"]
+    assert calls == ["guard", "renderer-init", "app-init", "app-run"]

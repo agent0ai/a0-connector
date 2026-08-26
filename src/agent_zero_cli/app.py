@@ -24,6 +24,7 @@ from agent_zero_cli import (
     connection,
     event_handlers,
     goal_commands,
+    permissions_commands,
     plugin_commands,
     profile_commands,
     project_commands,
@@ -45,6 +46,9 @@ from agent_zero_cli.host_browser import HostBrowserManager
 from agent_zero_cli.commands import CommandAvailability, CommandSpec
 from agent_zero_cli.config import CLIConfig, load_config, save_last_context
 from agent_zero_cli.instance_discovery import DiscoveryResult, discover_local_instances
+from agent_zero_cli.image_render import ImageRenderer
+from agent_zero_cli.image_store import ImageStore, ImageUnavailableError
+from agent_zero_cli.media_refs import ImageReference
 from agent_zero_cli.remote_exec import PythonTTYManager
 from agent_zero_cli.remote_files import RemoteFileUtility
 from agent_zero_cli.project_utils import (
@@ -57,6 +61,7 @@ from agent_zero_cli.widgets.command_palette import (
     AgentCommandPalette,
     OrderedSystemCommandsProvider,
     is_raw_skill_command,
+    reference_query_at_cursor,
 )
 from agent_zero_cli.widgets import (
     ChatInput,
@@ -78,6 +83,7 @@ from agent_zero_cli.widgets import (
     context_tab_from_metadata,
 )
 from agent_zero_cli.widgets.chat_log import ChatLog
+from agent_zero_cli.widgets.image_entry import ImageEntry
 from agent_zero_cli.model_commands import (
     cmd_model_presets,
     cmd_models,
@@ -183,6 +189,7 @@ class AgentZeroCLI(App):
         auto_connect_single_instance: bool = True,
         discover_instances: bool = True,
         connect_configured_host: bool = False,
+        image_renderer: ImageRenderer | None = None,
     ) -> None:
         super().__init__()
         self.register_theme(
@@ -197,8 +204,14 @@ class AgentZeroCLI(App):
         )
         self.theme = "a0-dark"
         self.config = config or load_config()
+        self.image_renderer = image_renderer or ImageRenderer.disabled()
         base_url = self.config.instance_url or DEFAULT_HOST
         self.client = A0Client(base_url)
+        self.image_store = ImageStore(
+            self.client,
+            max_surface_pixels=self.image_renderer.max_surface_pixels,
+        )
+        self._image_load_epoch = 0
         self.capabilities: dict[str, Any] = {}
         self.connector_features: set[str] = set()
         self.project_list: list[dict[str, str]] = []
@@ -211,6 +224,8 @@ class AgentZeroCLI(App):
         self.show_utility_messages = False
         self._response_delivered = False
         self._context_run_complete = False
+        self._run_started_at: float | None = None
+        self._last_response_sequence: int | None = None
         self._chat_intro_pending = True
         self._remote_file_write_enabled = True
         self._remote_exec_enabled = self.config.remote_exec_enabled
@@ -259,6 +274,7 @@ class AgentZeroCLI(App):
         self._model_switcher_signature_pending_retries = 0
         self._pause_latched = False
         self._slash_palette_query: str | None = None
+        self._reference_palette_range: tuple[tuple[int, int], tuple[int, int]] | None = None
         self._skill_palette_cache: list[dict[str, Any]] = []
         self._skill_palette_cache_key: tuple[str, str] | None = None
         self._compaction_refresh_context: str | None = None
@@ -276,7 +292,7 @@ class AgentZeroCLI(App):
         yield ContextTabs(id="context-tabs")
         with ContentSwitcher(initial="splash-view", id="body-switcher"):
             yield SplashView()
-            yield ChatLog(id="chat-log")
+            yield ChatLog(image_renderer=self.image_renderer, id="chat-log")
         yield ComputerUseBanner(id="computer-use-banner")
         yield GoalBar(id="goal-bar")
         yield ModelSwitcherBar(id="model-switcher-bar")
@@ -318,6 +334,8 @@ class AgentZeroCLI(App):
         return True
 
     async def on_mount(self) -> None:
+        if self.image_renderer.notice:
+            self._show_notice(self.image_renderer.notice)
         input_widget = self.query_one("#message-input", ChatInput)
         input_widget.disabled = True
         self.query_one("#goal-bar", GoalBar).clear()
@@ -422,9 +440,16 @@ class AgentZeroCLI(App):
             CommandSpec(
                 "/profile",
                 (),
-                "Pick or set the active Agent Zero Core profile.",
+                "Manage, select, or quickly create an Agent Zero Core profile.",
                 lambda app: availability.profile_availability(app),
                 lambda app: profile_commands.cmd_profile(app),
+            ),
+            CommandSpec(
+                "/permissions",
+                (),
+                "Edit Tools, MCP, and Skill permissions for the current agent.",
+                lambda app: availability.permissions_availability(app),
+                lambda app: permissions_commands.cmd_permissions(app),
             ),
             CommandSpec(
                 "/plugins",
@@ -769,7 +794,8 @@ class AgentZeroCLI(App):
     async def _open_profile_menu(self) -> None:
         await self._hide_project_menu()
         current_profile, options = await profile_commands.load_profile_menu_state(self, silent=False)
-        if not options:
+        if not options and "agent_editor" not in self.connector_features:
+            self._show_notice("No agent profiles are available from Agent Zero Core.", error=True)
             return
         if self._profile_menu_popover is not None:
             await self._hide_profile_menu()
@@ -777,6 +803,7 @@ class AgentZeroCLI(App):
         popover = ProfileMenuPopover(
             options,
             current_profile=current_profile,
+            can_edit="agent_editor" in self.connector_features,
             id="profile-menu-popover",
         )
         self._profile_menu_popover = popover
@@ -878,13 +905,16 @@ class AgentZeroCLI(App):
         await self._hide_profile_menu()
         self._focus_message_input()
 
-    async def _handle_profile_menu_action(self, profile_key: str) -> None:
+    async def _handle_profile_menu_action(self, action: str, profile_key: str = "") -> None:
         options = ()
         popover = self._profile_menu_popover
         if popover is not None:
             options = getattr(popover, "_profiles", ())
         await self._hide_profile_menu()
-        await profile_commands.apply_profile_selection(self, profile_key, options=options)
+        if action == "select":
+            await profile_commands.apply_profile_selection(self, profile_key, options=options)
+        else:
+            await profile_commands.handle_profile_menu_action(self, action, profile_key)
         self._focus_message_input()
 
     def on_key(self, event: events.Key) -> None:
@@ -1623,6 +1653,122 @@ class AgentZeroCLI(App):
             name="load-older-history",
         )
 
+    def on_image_entry_load_requested(self, message: ImageEntry.LoadRequested) -> None:
+        message.stop()
+        context_id = self.current_context
+        base_url = self.client.base_url
+        client = self.client
+        store = self.image_store
+        epoch = self._image_load_epoch
+        self.run_worker(
+            self._load_image_entry(
+                message.entry,
+                message.reference,
+                message.generation,
+                context_id=context_id,
+                base_url=base_url,
+                client=client,
+                store=store,
+                epoch=epoch,
+            ),
+            exclusive=False,
+            name="load-image-entry",
+        )
+
+    def _invalidate_image_loads(self) -> None:
+        """Reject queued image workers from a superseded chat or host lifecycle."""
+        self._image_load_epoch += 1
+
+    def _image_load_is_current(
+        self,
+        entry: ImageEntry,
+        reference: ImageReference,
+        generation: int,
+        *,
+        context_id: str | None,
+        base_url: str,
+        client: A0Client,
+        store: ImageStore,
+        epoch: int,
+    ) -> bool:
+        return (
+            entry.is_mounted
+            and entry.generation == generation
+            and context_id is not None
+            and reference.context_id == context_id
+            and self.current_context == context_id
+            and self.client is client
+            and self.client.base_url == base_url
+            and self.image_store is store
+            and self._image_load_epoch == epoch
+        )
+
+    async def _load_image_entry(
+        self,
+        entry: ImageEntry,
+        reference: ImageReference,
+        generation: int,
+        *,
+        context_id: str | None,
+        base_url: str,
+        client: A0Client,
+        store: ImageStore,
+        epoch: int,
+    ) -> None:
+        if not self._image_load_is_current(
+            entry,
+            reference,
+            generation,
+            context_id=context_id,
+            base_url=base_url,
+            client=client,
+            store=store,
+            epoch=epoch,
+        ):
+            return
+        try:
+            asset = await store.load(reference)
+        except ImageUnavailableError as exc:
+            if self._image_load_is_current(
+                entry,
+                reference,
+                generation,
+                context_id=context_id,
+                base_url=base_url,
+                client=client,
+                store=store,
+                epoch=epoch,
+            ):
+                entry.set_unavailable(generation, exc.reason)
+            return
+        except Exception:
+            if self._image_load_is_current(
+                entry,
+                reference,
+                generation,
+                context_id=context_id,
+                base_url=base_url,
+                client=client,
+                store=store,
+                epoch=epoch,
+            ):
+                entry.set_unavailable(generation, "load failed")
+            return
+
+        if not self._image_load_is_current(
+            entry,
+            reference,
+            generation,
+            context_id=context_id,
+            base_url=base_url,
+            client=client,
+            store=store,
+            epoch=epoch,
+        ):
+            asset.close()
+            return
+        entry.set_asset(generation, asset)
+
     async def _load_older_history(self, context_id: str, before: int) -> None:
         try:
             await self.client.subscribe_context(context_id, history_before=before)
@@ -2208,6 +2354,20 @@ class AgentZeroCLI(App):
         )
 
     def on_chat_input_value_changed(self, event: ChatInput.ValueChanged) -> None:
+        selection = getattr(event.input, "selection", None)
+        document = getattr(event.input, "document", None)
+        if selection is not None and document is not None and selection.start == selection.end:
+            cursor_index = document.get_index_from_location(selection.end)
+            reference = reference_query_at_cursor(event.value, cursor_index)
+            if reference is not None:
+                query, start, end = reference
+                self._reference_palette_range = (
+                    document.get_location_from_index(start),
+                    document.get_location_from_index(end),
+                )
+                self._open_command_palette(initial_query=query)
+                return
+
         skill_query = self._skill_query(event.value)
         if skill_query is not None:
             if self._skills_available():
@@ -2225,7 +2385,18 @@ class AgentZeroCLI(App):
         self._open_command_palette(initial_query=query, from_slash=True)
 
     def on_command_palette_closed(self, event: CommandPalette.Closed) -> None:
-        del event
+        reference_range = self._reference_palette_range
+        self._reference_palette_range = None
+        if reference_range is not None:
+            if getattr(event, "option_selected", False):
+                return
+            try:
+                input_widget = self.query_one("#message-input", ChatInput)
+                input_widget.replace("", *reference_range)
+            except Exception:
+                pass
+            return
+
         query = self._slash_palette_query
         self._slash_palette_query = None
         if query is None:
@@ -2250,6 +2421,20 @@ class AgentZeroCLI(App):
             return
 
         input_widget.value = value[:token_start]
+
+    def _insert_reference(
+        self,
+        reference: str,
+        trigger_range: tuple[tuple[int, int], tuple[int, int]] | None,
+    ) -> None:
+        if not trigger_range:
+            return
+        input_widget = self.query_one("#message-input", ChatInput)
+        end_index = input_widget.document.get_index_from_location(trigger_range[1])
+        separator = "" if input_widget.value[end_index : end_index + 1].isspace() else " "
+        result = input_widget.replace(f"{reference}{separator}", *trigger_range)
+        input_widget.move_cursor(result.end_location)
+        input_widget.focus()
 
     async def on_model_switcher_bar_preset_changed(self, event: ModelSwitcherBar.PresetChanged) -> None:
         await self._set_model_preset(event.value or None, bar=event.bar)
@@ -2418,9 +2603,9 @@ class AgentZeroCLI(App):
 
     def on_profile_menu_item_selected(self, event: ProfileMenuItem.Selected) -> None:
         self.run_worker(
-            self._handle_profile_menu_action(event.profile_key),
+            self._handle_profile_menu_action(event.action, event.profile_key),
             exclusive=True,
-            name=f"profile-menu-{event.profile_key}",
+            name=f"profile-menu-{event.action}-{event.profile_key}",
         )
 
     async def _cmd_clear(self) -> None:

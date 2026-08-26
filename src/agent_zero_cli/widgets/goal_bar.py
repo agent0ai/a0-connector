@@ -9,6 +9,8 @@ from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.widgets import Button, Static
 
+from agent_zero_cli.rendering import format_duration
+
 
 class GoalBar(Vertical):
     """Compact goal state row above the composer."""
@@ -82,7 +84,7 @@ class GoalBar(Vertical):
 
         text = Text("●", style=marker_color)
         text.append(f" {label}", style="bold #d9e2ec")
-        text.append(f" · {_format_elapsed(_elapsed_seconds(goal))}", style="#7f8c98")
+        text.append(f" · {format_duration(_elapsed_seconds(goal))}", style="#7f8c98")
         return text
 
     def _render_objective(self) -> Text:
@@ -127,13 +129,3 @@ def _seconds_since(value: str) -> int:
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
     return max(0, int((datetime.now(timezone.utc) - start.astimezone(timezone.utc)).total_seconds()))
-
-
-def _format_elapsed(seconds: int) -> str:
-    hours, remainder = divmod(max(0, int(seconds)), 3600)
-    minutes, remaining = divmod(remainder, 60)
-    if hours:
-        return f"{hours}h {minutes}m"
-    if minutes:
-        return f"{minutes}m {remaining}s"
-    return f"{remaining}s"

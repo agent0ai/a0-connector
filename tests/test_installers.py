@@ -87,7 +87,10 @@ def test_release_dependency_locks_are_checked_in() -> None:
 
     assert all("==" in requirement for requirement in pyproject["build-system"]["requires"])
     assert all("==" in requirement for requirement in pyproject["project"]["dependencies"])
-    assert not any(">=" in requirement for requirement in pyproject["project"]["dependencies"])
+    assert not any(
+        ">=" in requirement.partition(";")[0]
+        for requirement in pyproject["project"]["dependencies"]
+    )
 
 
 def test_root_package_embeds_platform_backends() -> None:
@@ -103,10 +106,10 @@ def test_root_package_embeds_platform_backends() -> None:
 
     assert "mss==10.2.0 ; sys_platform == 'linux'" not in dependencies
     assert "python-xlib==0.33 ; sys_platform == 'linux'" not in dependencies
-    assert "pyobjc-framework-applicationservices==12.2.1 ; sys_platform == 'darwin'" in dependencies
-    assert "pyobjc-framework-quartz==12.2.1 ; sys_platform == 'darwin'" in dependencies
+    assert "pyobjc-framework-applicationservices==12.2.2 ; sys_platform == 'darwin'" in dependencies
+    assert "pyobjc-framework-quartz==12.2.2 ; sys_platform == 'darwin'" in dependencies
     assert "dxcam==0.3.0 ; sys_platform == 'win32'" in dependencies
-    assert "pillow==12.3.0 ; sys_platform == 'darwin' or sys_platform == 'win32'" in dependencies
+    assert "pillow==12.3.0" in dependencies
     assert "pywinauto==0.6.9 ; sys_platform == 'win32'" in dependencies
     assert "textual-serve==1.1.3" in dependencies
     assert any(requirement.startswith("playwright==") for requirement in dependencies)

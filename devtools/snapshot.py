@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -26,10 +27,22 @@ def _snapshot_config():
     return CLIConfig(instance_url="http://127.0.0.1:19999")
 
 
+def _snapshot_renderer():
+    """Return the real half-cell renderer used by deterministic SVG captures."""
+    from agent_zero_cli.image_render import initialize_image_renderer
+
+    environment = dict(os.environ)
+    environment["A0_CLI_IMAGE_MODE"] = "halfcell"
+    return initialize_image_renderer(environ=environment, force_halfcell=True)
+
+
 async def _capture(output: Path, width: int, height: int, wait: float) -> None:
     from agent_zero_cli.app import AgentZeroCLI
 
-    app = AgentZeroCLI(config=_snapshot_config())
+    app = AgentZeroCLI(
+        config=_snapshot_config(),
+        image_renderer=_snapshot_renderer(),
+    )
 
     async with app.run_test(size=(width, height)) as pilot:
         # Give the app time to mount and render initial frame.

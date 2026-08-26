@@ -62,6 +62,8 @@ def _compile_requirements(source: Path, output: Path) -> str:
             "compile",
             str(source.relative_to(ROOT)),
             "--universal",
+            "--python-version",
+            "3.10",
             "--generate-hashes",
             "--upgrade",
             "--custom-compile-command",

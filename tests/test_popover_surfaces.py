@@ -80,3 +80,36 @@ async def test_popover_style_screens_leave_background_visible(kind: PopoverKind)
         screenshot = app.export_screenshot()
 
     assert f"background-marker-{kind}-25" in screenshot
+
+
+async def test_chat_list_renders_bracketed_path_text_without_markup_error() -> None:
+    """Server-provided chat names/previews containing [/path/like/text] must not
+    be parsed as Rich/Textual markup closing tags (MarkupError crash)."""
+    bracketed = "result: [/a0/usr/chats/Vo04TFdu/chat.json] listed"
+
+    class BracketedHarness(App[None]):
+        CSS_PATH = APP_CSS_PATH
+
+        def compose(self) -> ComposeResult:
+            yield Static("root")
+
+        async def on_mount(self) -> None:
+            self.push_screen(
+                ChatListScreen(
+                    [
+                        {
+                            "id": "ctx-bracket",
+                            "name": "Debug [/a0/usr/chats/Vo04TFdu/chat.json]",
+                            "last_message": bracketed,
+                            "created_at": "2026-07-24T10:00:00",
+                        }
+                    ]
+                )
+            )
+
+    app = BracketedHarness()
+    async with app.run_test(size=(100, 36)) as pilot:
+        await pilot.pause(0.2)
+        screenshot = app.export_screenshot()
+
+    assert "chat.json" in screenshot

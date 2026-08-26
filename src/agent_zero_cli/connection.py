@@ -126,6 +126,7 @@ async def begin_connection(
     remember_host_flag: bool = False,
 ) -> None:
     username, password = _connection_login_credentials(username, password)
+    app._invalidate_image_loads()
     app._stop_remote_tree_publisher()
     app._stop_token_refresh()
     app._stop_state_sync()
@@ -139,6 +140,7 @@ async def begin_connection(
     remembered_host_before_connect = app.config.instance_url.strip().rstrip("/")
     remember_flag_before_connect = app.config.remember_host
     app.config.instance_url = normalized_host
+    app.image_store.clear()
     app.client.base_url = normalized_host.rstrip("/")
     await _silently_disconnect_websocket(app)
     app._sync_connection_status("connecting", normalized_host)
@@ -502,6 +504,7 @@ async def _recover_websocket(app: AgentZeroCLI) -> None:
 
 
 def _reset_disconnected_state(app: AgentZeroCLI) -> None:
+    app._invalidate_image_loads()
     app.connected = False
     app.agent_active = False
     app.current_context = None
@@ -518,6 +521,7 @@ def _reset_disconnected_state(app: AgentZeroCLI) -> None:
     input_widget.set_history_context(None)
     input_widget.disabled = True
     app.query_one("#chat-log", ChatLog).clear()
+    app.image_store.clear()
     app._set_idle()
     if app.is_running:
         asyncio.create_task(app._hide_project_menu())
@@ -569,6 +573,7 @@ def set_connected(app: AgentZeroCLI, value: bool) -> None:
 
 
 async def disconnect_to_login(app: AgentZeroCLI) -> None:
+    app._invalidate_image_loads()
     current_host = app.config.instance_url or app._splash_host()
     auth_required = bool(app.capabilities.get("auth_required"))
     username = app._splash_state.username
@@ -615,6 +620,9 @@ async def disconnect_to_login(app: AgentZeroCLI) -> None:
 
 
 async def disconnect_and_exit(app: AgentZeroCLI) -> None:
+    app._invalidate_image_loads()
+    app.query_one("#chat-log", ChatLog).clear()
+    app.image_store.clear()
     app._stop_remote_tree_publisher()
     app._stop_token_refresh()
     app._stop_state_sync()

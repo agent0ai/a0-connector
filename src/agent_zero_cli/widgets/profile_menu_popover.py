@@ -30,21 +30,24 @@ class ProfileMenuItem(Static):
     disabled = reactive(False)
 
     class Selected(Message):
-        def __init__(self, profile_key: str) -> None:
+        def __init__(self, profile_key: str, *, action: str = "select") -> None:
             super().__init__()
             self.profile_key = profile_key
+            self.action = action
 
     def __init__(
         self,
         label: str | Text,
         *,
         profile_key: str,
+        action: str = "select",
         disabled: bool = False,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(label, id=id, classes=classes)
         self.profile_key = profile_key
+        self.action = action
         self.disabled = disabled
         self.can_focus = not disabled
         if disabled:
@@ -75,7 +78,7 @@ class ProfileMenuItem(Static):
     def _select(self) -> None:
         if self.disabled:
             return
-        self.post_message(self.Selected(self.profile_key))
+        self.post_message(self.Selected(self.profile_key, action=self.action))
 
 
 class ProfileMenuPopover(Vertical):
@@ -89,6 +92,7 @@ class ProfileMenuPopover(Vertical):
         profiles: Sequence[Mapping[str, object]] | None = None,
         *,
         current_profile: str = "",
+        can_edit: bool = True,
         id: str | None = None,
     ) -> None:
         super().__init__(id=id)
@@ -101,6 +105,7 @@ class ProfileMenuPopover(Vertical):
             if str(profile.get("key") or "").strip()
         ]
         self._current_profile = current_profile.strip()
+        self._can_edit = can_edit
 
     def compose(self) -> ComposeResult:
         yield Static("Agent Profile", id="profile-menu-title")
@@ -115,6 +120,20 @@ class ProfileMenuPopover(Vertical):
         if current_label:
             yield Static(f"Current: {current_label}", id="profile-menu-current")
         with VerticalScroll(id="profile-menu-items"):
+            if self._can_edit:
+                yield ProfileMenuItem(
+                    "+ Create profile",
+                    profile_key="",
+                    action="create",
+                    classes="profile-menu-item profile-menu-action",
+                )
+            if self._can_edit and self._current_profile and self._current_profile != "default":
+                yield ProfileMenuItem(
+                    "Edit current profile",
+                    profile_key=self._current_profile,
+                    action="edit",
+                    classes="profile-menu-item profile-menu-action",
+                )
             if self._profiles:
                 for profile in self._profiles:
                     key = str(profile.get("key") or "").strip()

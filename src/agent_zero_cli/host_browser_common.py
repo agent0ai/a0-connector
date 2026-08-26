@@ -259,6 +259,8 @@ class BrowserProfile:
     @property
     def browser_id(self) -> str:
         if self.cdp_endpoint:
+            if self.user_data_dir != Path():
+                return normalize_host_browser_selection(self.family)
             return normalize_host_browser_selection(self.cdp_endpoint)
         label = normalize_host_browser_selection(self.profile_label)
         family = normalize_host_browser_selection(self.family)
@@ -743,7 +745,8 @@ def remote_debugging_restriction_reason(profile: BrowserProfile) -> str:
 def remote_debugging_enable_hint() -> str:
     return (
         f"Open {REMOTE_DEBUGGING_ENABLE_URL} in the browser you want Agent Zero to use, "
-        f"enable \"{REMOTE_DEBUGGING_ENABLE_LABEL}\", then run /browser host on again."
+        f"enable \"{REMOTE_DEBUGGING_ENABLE_LABEL}\", choose a browser profile and click "
+        "Allow if Chrome asks, then retry."
     )
 
 

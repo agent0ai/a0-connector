@@ -6,10 +6,11 @@ import asyncio
 import base64
 from http.cookiejar import Cookie
 import json
+import posixpath
 import time
 import uuid
 from typing import Any, Callable, Mapping
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import aiohttp
 import httpx
@@ -19,6 +20,7 @@ from agent_zero_cli import __version__
 from agent_zero_cli.attachments import AttachmentRef, AttachmentUpload, remote_upload_path
 
 _PLUGIN_API = "/api/plugins/_a0_connector/v1"
+_ACP_PLUGIN_API = "/api/plugins/_a0_acp"
 # Agent Zero's installer defaults to the first free port starting at 5080.
 DEFAULT_HOST = "http://localhost:5080"
 PROTOCOL_VERSION = "a0-connector.v1"
@@ -77,6 +79,25 @@ class A0ConnectorPluginMissingError(RuntimeError):
 
 class A0WebSocketConnectionError(RuntimeError):
     """WebSocket/Socket.IO connection failed with a user-facing message."""
+
+
+def _container_reference_path(root: str, directory: str = "") -> str:
+    normalized_root = posixpath.normpath(str(root or "").replace("\\", "/"))
+    if not normalized_root.startswith("/"):
+        raise ValueError("Container workspace path must be absolute.")
+
+    normalized_directory = str(directory or "").replace("\\", "/").strip("/")
+    if ".." in normalized_directory.split("/"):
+        raise ValueError("Container reference path is outside the active workspace.")
+
+    target = posixpath.normpath(posixpath.join(normalized_root, normalized_directory))
+    try:
+        contained = posixpath.commonpath((normalized_root, target)) == normalized_root
+    except ValueError:
+        contained = False
+    if not contained:
+        raise ValueError("Container reference path is outside the active workspace.")
+    return target
 
 
 def _ensure_aiohttp_ws_timeout_compat() -> None:
@@ -306,6 +327,112 @@ class A0Client:
         path = urlparse(location).path or location
         return path == "/login" or path.endswith("/login")
 
+    async def fetch_image(
+        self,
+        path: str,
+        *,
+        max_bytes: int = 25 * 1024 * 1024,
+    ) -> tuple[bytes, str]:
+        """Load one same-origin image through Agent Zero's authenticated session."""
+        self._validate_image_path(path)
+
+        transient_retry_available = True
+        csrf_retry_available = True
+        while True:
+            try:
+                async with self.http.stream(
+                    "GET",
+                    self._core_api_url("image_get"),
+                    params={"path": path},
+                    headers=await self._csrf_headers(),
+                    follow_redirects=False,
+                ) as response:
+                    if response.status_code == 403 and csrf_retry_available:
+                        csrf_retry_available = False
+                        self._csrf_token = None
+                        continue
+                    if response.status_code in {502, 503, 504}:
+                        if transient_retry_available:
+                            transient_retry_available = False
+                            continue
+                        raise A0ProtocolError(
+                            f"Image request failed with HTTP {response.status_code}."
+                        )
+                    return await self._read_image_response(response, max_bytes=max_bytes)
+            except httpx.TransportError as exc:
+                if transient_retry_available:
+                    transient_retry_available = False
+                    continue
+                raise A0ProtocolError("Image request failed.") from exc
+
+    def _validate_image_path(self, path: str) -> None:
+        if (
+            not isinstance(path, str)
+            or not path.startswith("/a0/")
+            or path.startswith("//")
+            or "?" in path
+            or "#" in path
+        ):
+            raise A0ProtocolError("Image path must be a safe Agent Zero path.")
+
+        decoded = path
+        decode_pass_limit = max(1, len(path) // 2 + 1)
+        for _ in range(decode_pass_limit):
+            expanded = unquote(decoded)
+            if expanded == decoded:
+                break
+            decoded = expanded
+        else:
+            if unquote(decoded) != decoded:
+                raise A0ProtocolError("Image path must be a safe Agent Zero path.")
+        segments = decoded.split("/")
+        if (
+            not decoded.startswith("/a0/")
+            or "\\" in decoded
+            or "?" in decoded
+            or "#" in decoded
+            or any(segment in {".", ".."} for segment in segments)
+            or any(ord(character) < 32 for character in decoded)
+        ):
+            raise A0ProtocolError("Image path must be a safe Agent Zero path.")
+
+    async def _read_image_response(
+        self,
+        response: httpx.Response,
+        *,
+        max_bytes: int,
+    ) -> tuple[bytes, str]:
+        if self._is_login_redirect(response):
+            raise A0ProtocolError("Image request requires an authenticated Agent Zero session.")
+        if 300 <= response.status_code < 400:
+            raise A0ProtocolError("Image request returned an unexpected redirect.")
+        if response.status_code >= 400:
+            raise A0ProtocolError(f"Image request failed with HTTP {response.status_code}.")
+
+        content_length = response.headers.get("content-length")
+        if content_length:
+            try:
+                declared_length = int(content_length)
+            except (TypeError, ValueError):
+                raise A0ProtocolError("Image response included an invalid Content-Length.") from None
+            if declared_length < 0 or declared_length > max_bytes:
+                raise A0ProtocolError("Image response exceeds the size limit.")
+
+        mime = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if mime == "image/jpg":
+            mime = "image/jpeg"
+        if not mime.startswith("image/"):
+            raise A0ProtocolError("Image response did not include an image MIME type.")
+
+        chunks: list[bytes] = []
+        total_bytes = 0
+        async for chunk in response.aiter_bytes():
+            total_bytes += len(chunk)
+            if total_bytes > max_bytes:
+                raise A0ProtocolError("Image response exceeds the size limit.")
+            chunks.append(chunk)
+        return b"".join(chunks), mime
+
     def _raise_for_results(self, response: dict[str, Any] | None, event: str) -> dict[str, Any]:
         if not isinstance(response, dict):
             raise A0ProtocolError(f"{event} returned an invalid response")
@@ -452,6 +579,18 @@ class A0Client:
             self._api_url(endpoint),
             json=payload or {},
         )
+
+    async def acp_session(self, action: str, **payload: Any) -> dict[str, Any]:
+        response = await self.http.post(
+            f"{self.base_url}{_ACP_PLUGIN_API}/session",
+            json={"action": action, **payload},
+            follow_redirects=False,
+        )
+        if self._is_login_redirect(response):
+            raise A0ProtocolError("ACP configuration requires an authenticated Agent Zero session.")
+        if response.status_code >= 400:
+            raise A0ProtocolError(f"ACP {action} failed: {self._response_message(response)}")
+        return self._json(response)
 
     async def _call(self, event: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         response = await self.sio.call(
@@ -1082,10 +1221,20 @@ class A0Client:
             data["ok"] = True
         return data
 
-    async def create_chat(self, *, current_context_id: str | None = None) -> str:
+    async def create_chat(
+        self,
+        *,
+        current_context_id: str | None = None,
+        agent_profile: str | None = None,
+        project_name: str | None = None,
+    ) -> str:
         payload = {}
         if current_context_id:
             payload["current_context"] = current_context_id
+        if agent_profile:
+            payload["agent_profile"] = agent_profile
+        if project_name:
+            payload["project_name"] = project_name
 
         response = await self._post("chat_create", payload)
         response.raise_for_status()
@@ -1143,6 +1292,66 @@ class A0Client:
         response.raise_for_status()
         commands = self._json(response).get("commands", [])
         return commands if isinstance(commands, list) else []
+
+    async def get_chat_files_path(self, context_id: str) -> str:
+        response = await self.http.post(
+            self._core_api_url("chat_files_path_get"),
+            json={"ctxid": context_id},
+            headers=await self._csrf_headers(),
+        )
+        if response.status_code == 403:
+            self._csrf_token = None
+            response = await self.http.post(
+                self._core_api_url("chat_files_path_get"),
+                json={"ctxid": context_id},
+                headers=await self._csrf_headers(),
+            )
+        if self._is_login_redirect(response):
+            raise A0ProtocolError("Container workspace lookup requires an authenticated Agent Zero session.")
+        response.raise_for_status()
+        return str(self._json(response).get("path") or "").strip()
+
+    async def list_container_reference_entries(
+        self,
+        root: str,
+        directory: str = "",
+    ) -> list[dict[str, Any]]:
+        target = _container_reference_path(root, directory)
+        response = await self.http.get(
+            self._core_api_url("get_work_dir_files"),
+            params={"path": target},
+            headers=await self._csrf_headers(),
+        )
+        if response.status_code == 403:
+            self._csrf_token = None
+            response = await self.http.get(
+                self._core_api_url("get_work_dir_files"),
+                params={"path": target},
+                headers=await self._csrf_headers(),
+            )
+        if self._is_login_redirect(response):
+            raise A0ProtocolError("Container workspace lookup requires an authenticated Agent Zero session.")
+        response.raise_for_status()
+
+        data = self._json(response).get("data", {})
+        entries = data.get("entries", []) if isinstance(data, Mapping) else []
+        result: list[dict[str, Any]] = []
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, Mapping) or entry.get("is_symlink"):
+                continue
+            normalized_root = _container_reference_path(root)
+            path = posixpath.normpath("/" + str(entry.get("path") or "").replace("\\", "/").lstrip("/"))
+            try:
+                contained = posixpath.commonpath((normalized_root, path)) == normalized_root
+            except ValueError:
+                contained = False
+            if not contained or posixpath.dirname(path) != target:
+                continue
+            name = str(entry.get("name") or "").strip()
+            if not name or posixpath.basename(path) != name:
+                continue
+            result.append({"name": name, "path": path, "is_dir": bool(entry.get("is_dir"))})
+        return result
 
     async def list_skills(
         self,
@@ -1365,6 +1574,19 @@ class A0Client:
                 "status_code": response.status_code,
             }
 
+        data = self._json(response)
+        if "ok" not in data:
+            data["ok"] = True
+        return data
+
+    async def agent_editor(self, action: str, **payload: Any) -> dict[str, Any]:
+        response = await self._post("agent_editor", {"action": action, **payload})
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "message": self._response_message(response),
+                "status_code": response.status_code,
+            }
         data = self._json(response)
         if "ok" not in data:
             data["ok"] = True

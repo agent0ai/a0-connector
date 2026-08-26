@@ -244,6 +244,27 @@ async def test_session_connects_and_advertises_headless_metadata(tmp_path: Path)
     await session.close()
 
 
+async def test_deferred_context_keeps_host_tools_without_selecting_a_chat(tmp_path: Path) -> None:
+    session = ConnectorSession(
+        CLIConfig(),
+        Observer(),
+        workspace=tmp_path,
+        client_factory=FakeClient,
+        defer_context=True,
+        remember_context=False,
+    )
+
+    assert await session.connect("http://agent.test") == ""
+    client = FakeClient.instances[-1]
+    assert client.create_calls == 0
+    assert client.subscribe_calls == []
+    assert client.remote_tree_updates
+
+    await session.switch_context("ctx-acp")
+    assert client.subscribe_calls == [("ctx-acp", 0)]
+    await session.close()
+
+
 class GatewayFakeClient(FakeClient):
     capabilities = _capabilities(
         features=[

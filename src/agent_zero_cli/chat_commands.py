@@ -203,11 +203,16 @@ async def cmd_disconnect(app: AgentZeroCLI) -> None:
 
 
 async def cmd_clear(app: AgentZeroCLI) -> None:
-    app.query_one("#chat-log", ChatLog).clear()
+    app._invalidate_image_loads()
+    app.image_store.cancel_pending()
+    log = app.query_one("#chat-log", ChatLog)
+    log.clear(preserve_intro=True)
+    log.ensure_intro_banner()
     app._set_idle()
 
 
 async def switch_context(app: AgentZeroCLI, context_id: str, *, has_messages_hint: bool) -> None:
+    app._invalidate_image_loads()
     if app._compaction_refresh_context and app._compaction_refresh_context != context_id:
         app._cancel_compaction_refresh()
     app._stop_token_refresh()
@@ -227,6 +232,7 @@ async def switch_context(app: AgentZeroCLI, context_id: str, *, has_messages_hin
     app._response_delivered = False
     app._context_run_complete = False
     log = app.query_one("#chat-log", ChatLog)
+    app.image_store.cancel_pending()
     log.clear()
     app._set_idle()
     app._clear_project_state()

@@ -59,6 +59,7 @@ All routes: `POST /api/plugins/_a0_connector/v1/<endpoint>`
 | `settings_get` | Session | Optional runtime settings surface |
 | `settings_set` | Session | Optional runtime settings surface |
 | `agent_profile_set` | Session | Context-scoped Agent Zero Core profile switch |
+| `agent_editor` | Session | Context-scoped profile load/create/edit, sparse save, and Tool/MCP/Skill policy updates |
 | `agents_list` | Session | Optional agent-profile list |
 | `skills_list` | Session | Optional installed-skill list |
 | `skills_activate` | Session | Optional context-scoped skill activation |
@@ -135,11 +136,41 @@ Text output is append-only and pipe-safe. JSONL output emits connector events
 and synthetic lifecycle records (`ready`, `complete`, `notice`, `error`) as one
 JSON object per stdout line.
 
+## Interactive transcript images
+
+Only the interactive TUI renders images. The CLI extracts eligible references
+from Browser tool output, user attachment metadata, and assistant metadata or
+Markdown. A Browser `Screenshot: img://<path>&t=...` or `browser_snapshot`
+belongs under the existing Browser tool metadata. User attachments belong under
+the user message; assistant metadata and Markdown images belong under the
+assistant message. The extractor is pure and preserves the connector event
+schema, so a screenshot never becomes a duplicate sequence entry.
+
+For an Agent Zero path, the client uses its authenticated session to `GET`
+same-origin `/api/image_get`; arbitrary external URLs and filesystem paths are
+not accepted. Raster PNG, JPEG, GIF, WebP, and BMP are supported (GIF uses the
+first frame). SVG is represented by a stable placeholder. Sources are limited
+to 25 MiB encoded input and 32 megapixels decoded; the store runs up to four
+fetch/load tasks at once, admits only one full-resolution decoder at a time,
+and downsamples before applying orientation and color conversion. It retains a
+memory-only 64 MiB LRU of independent display surfaces. Invalid,
+unauthenticated, unavailable, oversized, or unsupported images become stable
+placeholders, and copied transcript text contains semantic image labels rather
+than bytes or cache paths.
+
+Browser screenshot materialization already exists in Agent Zero Core: browser
+history metadata carries `Screenshot: img://<path>&t=...` plus
+`browser_snapshot`. The separate Core deployment boundary is the builtin
+`_a0_connector` WebSocket user-message handler correction that records sanitized
+uploaded filenames on the user log, matching the HTTP message path so live and
+replayed user attachments retain resolvable metadata. Updating this CLI does not
+deploy that Core correction.
+
 ## Host browser operations
 
 Host browser mode keeps the public agent API as Agent Zero's existing
 `browser` tool. The Browser plugin decides whether a call uses the container
-Playwright runtime or emits `connector_browser_op` to the subscribed CLI:
+Patchright runtime or emits `connector_browser_op` to the subscribed CLI:
 
 ```json
 {
@@ -168,12 +199,11 @@ The CLI returns:
 ```
 
 Screenshots are transferred as artifact payloads rather than inline tool
-output. The CLI sends base64 bytes in `result.artifact`; when no explicit host
-path was requested it does not keep a host-side screenshot file. The Agent Zero
-Browser adapter stores the payload in a chat-context-scoped ephemeral image
-registry and returns a `vision_load` reference instead of materializing a shared
-`tmp/browser/host-screenshots` file. Explicit `path` requests remain user-owned
-host artifacts.
+output. The CLI sends base64 bytes in `result.artifact`; explicit `path`
+requests remain user-owned host artifacts. The verified Core connector runtime
+materializes the default host artifact and records browser history metadata as
+`Screenshot: img://<path>&t=...` together with `browser_snapshot`; it is not an
+ephemeral-registry-only architecture.
 
 `connector_hello.host_browser` advertises:
 - `supported`, `enabled`, and `status`
@@ -222,7 +252,7 @@ does not need direct network access to the host browser.
 
 The local-profile launch path uses the Python Playwright client installed as a
 normal A0 CLI runtime dependency. It does not install a separate Chromium
-binary. The Playwright runtime under the Agent Zero Docker container,
+binary. The Patchright runtime under the Agent Zero Docker container,
 including `/a0/tmp/playwright`, powers the container browser backend and cannot
 control a host Chromium-family profile from inside Docker. User-authorized
 remote debugging does not require the Chrome DevTools MCP package or Playwright

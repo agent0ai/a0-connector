@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import platform
 from pathlib import Path
 from typing import Any, Callable
@@ -26,6 +26,8 @@ from agent_zero_cli.host_browser_common import (
     normalize_upload_paths,
     normalize_url,
     profile_lock_state_for_profile,
+    remote_debugging_endpoint_from_user_data_dir,
+    remote_debugging_endpoint_label,
     remote_debugging_enable_hint,
     require_ref,
     screenshot_output_path,
@@ -93,17 +95,26 @@ class _CDPRuntimeAdapter(_RuntimeAdapter):
     close_pages_on_session_close = False
 
     async def start(self, session: "HostBrowserSession") -> None:
-        connection = CDPConnection(session.profile.cdp_endpoint)
-        try:
-            await connection.connect()
-        except Exception as exc:
-            with contextlib.suppress(Exception):
-                await connection.close()
-            raise RuntimeError(
-                "Cannot connect to the host browser remote-debugging endpoint "
-                f"{session.profile.cdp_endpoint}. {remote_debugging_enable_hint()} "
-                f"Original error: {exc}"
-            ) from exc
+        profile = _refreshed_remote_debugging_profile(session.profile)
+        session.profile = profile
+        for attempt in range(2):
+            connection = CDPConnection(profile.cdp_endpoint)
+            try:
+                await connection.connect()
+                break
+            except Exception as exc:
+                with contextlib.suppress(Exception):
+                    await connection.close()
+                refreshed = _refreshed_remote_debugging_profile(profile)
+                if attempt or refreshed == profile:
+                    detail = str(exc).strip() or type(exc).__name__
+                    raise RuntimeError(
+                        "Cannot connect to the host browser remote-debugging endpoint "
+                        f"{profile.cdp_endpoint}. {remote_debugging_enable_hint()} "
+                        f"Original error: {detail}"
+                    ) from exc
+                profile = refreshed
+                session.profile = profile
         session.browser = connection
         session.context = CDPContext(connection)
         await session.context.discover_pages()
@@ -137,6 +148,19 @@ class _CDPRuntimeAdapter(_RuntimeAdapter):
         session.browser = None
         session.context = None
         session.last_interacted_browser_id = None
+
+
+def _refreshed_remote_debugging_profile(profile: BrowserProfile) -> BrowserProfile:
+    if not profile.is_remote_debugging or profile.user_data_dir == Path():
+        return profile
+    endpoint = remote_debugging_endpoint_from_user_data_dir(profile.user_data_dir)
+    if not endpoint or endpoint == profile.cdp_endpoint:
+        return profile
+    return replace(
+        profile,
+        profile_directory=remote_debugging_endpoint_label(endpoint),
+        cdp_endpoint=endpoint,
+    )
 
 
 @dataclass

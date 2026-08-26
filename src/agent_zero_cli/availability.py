@@ -130,6 +130,13 @@ def profile_availability(app: AgentZeroCLI) -> CommandAvailability:
     return CommandAvailability(True)
 
 
+def permissions_availability(app: AgentZeroCLI) -> CommandAvailability:
+    base = profile_availability(app)
+    if not base.available:
+        return base
+    return app._require_features("agent_editor")
+
+
 def model_presets_availability(app: AgentZeroCLI) -> CommandAvailability:
     base = app._require_features("model_switcher", "model_presets")
     if not base.available:

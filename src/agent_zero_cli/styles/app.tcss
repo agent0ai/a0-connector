@@ -30,12 +30,15 @@ Screen {
     scrollbar-size: 1 1;
 }
 
-#chat-log > Static {
+#chat-log > TranscriptEntry {
     margin-top: 1;
+    height: auto;
 }
 
-#chat-log > StatusEntry {
-    margin-top: 1;
+TranscriptEntry > SelectableStatic,
+TranscriptEntry > StatusEntry,
+TranscriptEntry > CodeEntry {
+    height: auto;
 }
 
 .status-entry:focus {
@@ -921,6 +924,10 @@ InstalledPluginsScreen > Center {
     opacity: 1;
 }
 
+.profile-menu-action {
+    color: #80d0ff;
+}
+
 #profile-menu-items {
     height: auto;
     max-height: 9;
@@ -930,6 +937,241 @@ InstalledPluginsScreen > Center {
     color: #7f8c98;
     min-height: 3;
     content-align: center middle;
+}
+
+ProfileEditorScreen {
+    align: left top;
+    background: $background 60%;
+}
+
+PermissionsScreen {
+    align: left top;
+    background: $background 60%;
+}
+
+PermissionsScreen > Center {
+    align: left top;
+}
+
+#permissions-box {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    max-height: 23;
+    border: none;
+    background: #101820;
+    padding: 0 1;
+}
+
+#permissions-title {
+    text-style: bold;
+}
+
+#permissions-profile,
+#permissions-help {
+    color: #9aa7b4;
+}
+
+#permissions-categories,
+#permissions-actions {
+    height: auto;
+}
+
+#permissions-categories Button {
+    width: 1fr;
+    min-width: 10;
+    height: 2;
+    border: none;
+    border-bottom: solid #2a3a4a;
+    background: transparent;
+    color: #9aa7b4;
+}
+
+#permissions-categories Button:focus {
+    background: #16212c;
+    color: #d9e2ec;
+}
+
+#permissions-categories Button.is-active {
+    border-bottom: solid #00b4ff;
+    background: transparent;
+    color: #e8f1fb;
+    text-style: bold;
+}
+
+#permissions-default {
+    width: 100%;
+    height: 3;
+    margin-top: 0;
+    background: transparent;
+    border: round #2a3a4a;
+    color: #d9e2ec;
+    text-align: left;
+}
+
+#permissions-default:focus {
+    border: round #00b4ff;
+}
+
+#permissions-search {
+    height: 1;
+    min-height: 1;
+    margin-top: 0;
+    border: none;
+    background: #101820;
+    color: #d9e2ec;
+    padding: 0 1;
+}
+
+#permissions-search:focus {
+    border: none;
+    background: #101820;
+}
+
+#permissions-list {
+    height: auto;
+    max-height: 11;
+    border: none;
+    background: #101820;
+    padding: 0;
+}
+
+#permissions-list > ListItem {
+    margin: 0;
+    padding: 0;
+    border-bottom: none;
+}
+
+#permissions-list > ListItem.-highlight,
+#permissions-list > ListItem.-hovered {
+    background: #0f4d78;
+}
+
+.permission-row-line {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    background: transparent;
+}
+
+.permission-marker {
+    width: 4;
+    color: #38c5d8;
+    text-style: bold;
+}
+
+.permission-name {
+    width: 1fr;
+    color: #d9e2ec;
+    text-style: bold;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+.permission-state {
+    width: 16;
+    color: #9ecfff;
+    text-align: right;
+}
+
+.permission-state-allow {
+    color: #5ee6a8;
+}
+
+.permission-state-block {
+    color: #ff8b6b;
+}
+
+.permission-description {
+    width: 100%;
+    padding: 0 1 1 5;
+    color: #7f8c98;
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+}
+
+#permissions-empty {
+    color: #7f8c98;
+    height: 3;
+    content-align: center middle;
+}
+
+#permissions-actions {
+    align: right middle;
+}
+
+#permissions-actions Button {
+    min-width: 10;
+    margin-left: 1;
+}
+
+ProfileEditorScreen > Center {
+    align: left top;
+}
+
+#profile-editor-box {
+    width: 100%;
+    max-width: 100%;
+    height: 22;
+    max-height: 100%;
+    border: none;
+    background: #101820;
+    padding: 0 1;
+}
+
+#profile-editor-title {
+    text-style: bold;
+}
+
+#profile-editor-step,
+#profile-editor-tools-help {
+    color: #9aa7b4;
+}
+
+#profile-editor-pages {
+    height: 15;
+}
+
+.profile-editor-label {
+    margin-top: 1;
+    text-style: bold;
+}
+
+#profile-editor-name,
+#profile-editor-instructions,
+#profile-editor-tool-list {
+    width: 100%;
+    background: #17181a;
+    border: round #2a3a4a;
+}
+
+#profile-editor-name:focus,
+#profile-editor-instructions:focus,
+#profile-editor-tool-list:focus {
+    border: round #00b4ff;
+}
+
+#profile-editor-instructions {
+    height: 9;
+}
+
+#profile-editor-tool-list {
+    height: 1fr;
+    margin-top: 1;
+}
+
+#profile-editor-status {
+    min-height: 1;
+}
+
+#profile-editor-actions {
+    height: auto;
+    align: right middle;
+}
+
+#profile-editor-actions Button {
+    min-width: 10;
+    margin-left: 1;
 }
 
 ProjectInstructionsScreen {
@@ -1348,4 +1590,25 @@ SplashStatusPanel {
 
 .splash-action-card .splash-action-reason {
     color: #f0b54d;
+}
+
+ImageEntry {
+    height: auto;
+    margin-top: 1;
+    padding: 0 0 0 4;
+}
+
+ImageEntry:focus {
+    background: #1b232d;
+}
+
+.image-caption,
+.image-placeholder {
+    height: auto;
+    color: #9aa7b4;
+}
+
+.image-surface-host {
+    width: auto;
+    height: auto;
 }

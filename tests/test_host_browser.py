@@ -399,6 +399,7 @@ def test_remote_debugging_profile_is_discovered_when_chrome_allows_it(
     )
     assert len(profiles) == 1
     assert profiles[0].family == "chrome-cdp"
+    assert profiles[0].browser_id == "chrome-cdp"
     assert profiles[0].profile_label == "localhost:9222"
     assert profiles[0].cdp_endpoint == "ws://localhost:9222/devtools/browser/test"
     assert profiles[0].as_dict()["locked"] is False
@@ -626,11 +627,34 @@ def test_hello_metadata_advertises_host_browser_inventory(tmp_path: Path) -> Non
     metadata = manager.hello_metadata()
     advertised = {item["id"]: item for item in metadata["available_browsers"]}
 
-    assert metadata["browser_id"] == "ws://localhost:9222/devtools/browser/test"
+    assert metadata["browser_id"] == "chrome-cdp"
     assert metadata["browser_label"] == "Google Chrome (remote debugging) - Remote debugging allowed"
-    assert "ws://localhost:9222/devtools/browser/test" in advertised
+    assert advertised["chrome-cdp"]["cdp_endpoint"] == "ws://localhost:9222/devtools/browser/test"
     assert advertised["chrome:default"]["family"] == "chrome"
     assert advertised["chrome:profile_1"]["label"] == "Google Chrome - Profile 1"
+
+
+def test_discovered_remote_debugging_id_resolves_latest_endpoint(tmp_path: Path) -> None:
+    root = tmp_path / "google-chrome"
+    root.mkdir()
+    active_port = root / "DevToolsActivePort"
+    active_port.write_text("9222\n/devtools/browser/old\n", encoding="utf-8")
+    manager = HostBrowserManager(
+        CLIConfig(host_browser_enabled=True),
+        candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", "/bin/chrome", root)],
+        playwright_available=False,
+    )
+
+    selection = manager.hello_metadata()["browser_id"]
+    active_port.write_text("9333\n/devtools/browser/new\n", encoding="utf-8")
+    selected = manager.selected_profile(
+        profile_mode="existing",
+        browser_selection=selection,
+    )
+
+    assert selection == "chrome-cdp"
+    assert selected is not None
+    assert selected.cdp_endpoint == "ws://localhost:9333/devtools/browser/new"
 
 
 def test_browser_selection_accepts_family_id(tmp_path: Path) -> None:
@@ -691,8 +715,45 @@ def test_browser_selection_accepts_explicit_cdp_endpoint() -> None:
 
     assert selected is not None
     assert selected.family == "chrome-cdp"
+    assert selected.browser_id == "ws://127.0.0.1:9333/devtools/browser/test"
     assert selected.cdp_endpoint == "ws://127.0.0.1:9333/devtools/browser/test"
     assert manager.status_snapshot(profile=selected)["supported"] is True
+
+
+async def test_browser_prepare_waits_for_remote_debugging_startup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "google-chrome"
+    (root / "Default").mkdir(parents=True)
+    active_port = root / "DevToolsActivePort"
+    waits = []
+
+    async def fake_sleep(delay: float) -> None:
+        waits.append(delay)
+        active_port.write_text("9222\n/devtools/browser/ready\n", encoding="utf-8")
+
+    async def fake_ensure_started(session: HostBrowserSession) -> None:
+        session.context = object()
+
+    monkeypatch.setattr(host_browser_manager_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        host_browser_manager_module,
+        "remote_debugging_restriction_reason",
+        lambda profile: "waiting for remote debugging" if not profile.is_remote_debugging else "",
+    )
+    monkeypatch.setattr(HostBrowserSession, "ensure_started", fake_ensure_started)
+    manager = HostBrowserManager(
+        CLIConfig(host_browser_enabled=True),
+        candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", "/bin/chrome", root)],
+        playwright_available=False,
+    )
+
+    result = await manager.ensure_available(profile_mode="existing")
+
+    assert waits == [0.25]
+    assert result["browser_id"] == "chrome-cdp"
+    assert result["cdp_endpoint"] == "ws://localhost:9222/devtools/browser/ready"
 
 
 def test_browser_selection_accepts_cdp_discovery_address() -> None:
@@ -1182,7 +1243,7 @@ async def test_remote_debugging_connection_failure_reports_enable_hint(
             instances.append(self)
 
         async def connect(self) -> None:
-            raise OSError("connect failed")
+            raise TimeoutError
 
         async def close(self) -> None:
             self.closed = True
@@ -1205,8 +1266,70 @@ async def test_remote_debugging_connection_failure_reports_enable_hint(
     message = str(excinfo.value)
     assert "chrome://inspect/#remote-debugging" in message
     assert "Allow remote debugging for this browser instance" in message
-    assert "connect failed" in message
+    assert "TimeoutError" in message
     assert instances[0].closed is True
+
+
+async def test_remote_debugging_connection_retries_changed_active_port(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import agent_zero_cli.host_browser_session as host_browser_session_module
+
+    root = tmp_path / "google-chrome"
+    root.mkdir()
+    active_port = root / "DevToolsActivePort"
+    active_port.write_text("9222\n/devtools/browser/old\n", encoding="utf-8")
+    instances = []
+
+    class RefreshingCDPConnection:
+        def __init__(self, endpoint: str) -> None:
+            self.endpoint = endpoint
+            self.closed = False
+            instances.append(self)
+
+        async def connect(self) -> None:
+            if len(instances) == 1:
+                active_port.write_text("9333\n/devtools/browser/new\n", encoding="utf-8")
+                raise OSError("endpoint changed")
+
+        async def close(self) -> None:
+            self.closed = True
+
+        async def command(
+            self,
+            method: str,
+            params: dict[str, object] | None = None,
+            *,
+            session_id: str | None = None,
+            timeout: float = 30.0,
+        ) -> dict[str, object]:
+            del params, session_id, timeout
+            if method == "Target.getTargets":
+                return {"targetInfos": []}
+            return {}
+
+    monkeypatch.setattr(host_browser_session_module, "CDPConnection", RefreshingCDPConnection)
+    profile = BrowserProfile(
+        "chrome-cdp",
+        "Chrome (remote debugging)",
+        "",
+        root,
+        "localhost:9222",
+        "Remote debugging allowed",
+        cdp_endpoint="ws://localhost:9222/devtools/browser/old",
+    )
+    session = HostBrowserSession(context_id="ctx-cdp-refresh", profile=profile)
+
+    await session.ensure_started()
+    await session.close()
+
+    assert [instance.endpoint for instance in instances] == [
+        "ws://localhost:9222/devtools/browser/old",
+        "ws://localhost:9333/devtools/browser/new",
+    ]
+    assert instances[0].closed is True
+    assert session.profile.cdp_endpoint == "ws://localhost:9333/devtools/browser/new"
 
 
 async def test_remote_debugging_session_opens_lists_and_reads_content(

@@ -31,6 +31,9 @@ def _arm_parent_death_signal() -> None:
 
 def main() -> None:
     _arm_parent_death_signal()
+    # xterm.js does not exercise terminal image protocols. Keep the browser
+    # preview deterministic and representative of the universal fallback.
+    os.environ["A0_CLI_IMAGE_MODE"] = "halfcell"
     os.execv(sys.executable, [sys.executable, "-m", "agent_zero_cli"])
 
 
