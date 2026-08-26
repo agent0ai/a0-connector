@@ -21,6 +21,7 @@
 - `ChatInput.set_idle()` must clear activity state and restore the normal placeholder without losing attachment or queue placeholder state.
 - Do not reintroduce `ActivityBar` or `#status-bar`. Activity belongs in `#message-input`.
 - `ChatLog` status metadata must stay concise and must redact or summarize large/sensitive fields such as code, prompt text, stdout, stderr, markdown, HTML, and raw content. Media-bearing keys consumed by image extraction and direct `img://`, `data:image/`, or `/api/image_get` values must never render or enter transcript copy text.
+- A display-only clear may preserve the Agent Zero banner, workspace line, and sequence-1 assistant greeting; ordinary lifecycle clears remove every transcript and intro element.
 - Transcript renderable caches must use A0-owned attribute names and must not
   shadow Textual's internal widget render cache.
 - Footer/command palette behavior must not duplicate the command palette entry. The `ctrl+p` binding remains `show=False` in `app.py`.

@@ -19,6 +19,7 @@
 - Use the client after-result callbacks for browser and computer-use status refreshes so server-side pending operations resolve before any nested `connector_hello` round trip.
 - Refresh the active chat tab metadata after context completion so server-side automatic chat renames become visible in the TUI.
 - Completed TUI runs show a muted elapsed-time line immediately above the final response; the goal bar uses the same hour-aware duration format.
+- `/clear` and F5 clear the visible conversation without resetting the current context; keep the initial Core greeting and Agent Zero banner visible.
 - Model switcher state must use the backend's effective preset for display and identify the configured settings preset when clearing a chat override. The runtime editor updates the global `Default` preset, preserves untouched Utility and Embedding selections, and clears the active chat override after saving.
 - `/computer-use on` is a human approval command. It must force `ComputerUseManager.rearm()` immediately instead of silently validating a saved restore token first.
 - Computer Use must preserve explicit `window_id` targets through snapshot and type operations, and accept `window_id` as the top-level target for an explicit focus operation. Backends that advertise target-verified keyboard input fail closed unless the named window is active or focused.

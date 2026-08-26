@@ -205,7 +205,9 @@ async def cmd_disconnect(app: AgentZeroCLI) -> None:
 async def cmd_clear(app: AgentZeroCLI) -> None:
     app._invalidate_image_loads()
     app.image_store.cancel_pending()
-    app.query_one("#chat-log", ChatLog).clear()
+    log = app.query_one("#chat-log", ChatLog)
+    log.clear(preserve_intro=True)
+    log.ensure_intro_banner()
     app._set_idle()
 
 

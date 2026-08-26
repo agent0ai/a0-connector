@@ -704,6 +704,7 @@ class ChatLog(VerticalScroll):
         self._seq_to_widget: dict[int, TranscriptEntry] = {}
         self._sys_seq: int = -100
         self._intro_widget: Static | None = None
+        self._intro_sequence: int | None = None
         self._workspace_widget: Static | None = None
         self._local_workspace = ""
         self._remote_workspace = ""
@@ -901,6 +902,9 @@ class ChatLog(VerticalScroll):
         before = self.children[0] if self.children else None
         self.mount(self._intro_widget, before=before)
         self._sync_workspace_widget()
+
+    def mark_intro_message(self, sequence: int) -> None:
+        self._intro_sequence = sequence
 
     def set_workspace(self, *, local_workspace: str = "", remote_workspace: str = "") -> None:
         self._local_workspace = local_workspace.strip()
@@ -1191,19 +1195,28 @@ class ChatLog(VerticalScroll):
             scroll=False,
         )
 
-    def clear(self) -> None:
+    def clear(self, *, preserve_intro: bool = False) -> None:
         """Clear the timeline and reset the tracking map."""
-        self._seq_to_widget.clear()
-        self._intro_widget = None
-        self._workspace_widget = None
+        intro_entry = self._seq_to_widget.get(self._intro_sequence) if preserve_intro else None
+        self._seq_to_widget = (
+            {self._intro_sequence: intro_entry}
+            if self._intro_sequence is not None and intro_entry is not None
+            else {}
+        )
+        if not preserve_intro:
+            self._intro_widget = None
+            self._intro_sequence = None
+            self._workspace_widget = None
         self._active_seq = None
         self._active_meta = {}
         self._auto_follow = True
         self._history_before = 0
         self._has_more_history = False
         self._history_load_pending = False
-        for child in self.children:
-            child.remove()
+        preserved = {self._intro_widget, self._workspace_widget, intro_entry} if preserve_intro else set()
+        for child in list(self.children):
+            if child not in preserved:
+                child.remove()
 
 
 def build_agent_zero_banner_widget(*, id: str | None = None, classes: str = "agent-zero-banner") -> Static:

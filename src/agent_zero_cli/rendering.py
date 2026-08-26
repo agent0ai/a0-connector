@@ -270,6 +270,8 @@ def render_connector_event(
 
     if category == "response":
         if text:
+            if seq == 1:
+                log.mark_intro_message(seq)
             # Add markdown render inside Left aligned or normal layout
             panel = Panel(Markdown(str(text)), border_style="#233e54", padding=(0, 1))
             log.append_or_update(seq, panel, prepend=prepend)

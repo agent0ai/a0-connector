@@ -144,8 +144,10 @@ class FakeChatLog:
         self._active_seq = None
         self._active_meta = {}
 
-    def clear(self) -> None:
+    def clear(self, *, preserve_intro: bool = False) -> None:
         self.cleared = True
+        if not preserve_intro:
+            self.intro_visible = False
         self.status_entries.clear()
         self.image_entries.clear()
         self._active_seq = None
@@ -3208,16 +3210,18 @@ async def test_attach_command_uploads_local_image_paths(
     assert notices == [("Attached 2 images.", False)]
 
 
-async def test_clear_command_clears_visible_chat_log(
+async def test_clear_command_keeps_intro_and_clears_visible_chat_log(
     dummy_app: DummyAgentZeroCLI,
 ) -> None:
     log = dummy_app._test_widgets["#chat-log"]  # type: ignore[index]
     input_widget = dummy_app._test_widgets["#message-input"]  # type: ignore[index]
+    log.intro_visible = True
     input_widget.set_activity("Working")
 
     await dummy_app._dispatch_command("/clear")
 
     assert log.cleared is True
+    assert log.intro_visible is True
     assert input_widget.activity_idle is True
 
 
@@ -5749,6 +5753,28 @@ async def test_chat_log_inserts_completion_immediately_before_response() -> None
         timeline = [child for child in log.children if isinstance(child, TranscriptEntry)]
         assert timeline[-2].copy_text() == "Completed in 1m2s"
         assert "Final response" in timeline[-1].copy_text()
+
+
+async def test_chat_log_clear_preserves_only_banner_and_initial_greeting() -> None:
+    app = TranscriptSelectionApp()
+
+    async with app.run_test() as pilot:
+        log = app.query_one("#chat-log", ChatLog)
+        log.ensure_intro_banner()
+        render_connector_event(
+            log,
+            {"event": "assistant_message", "sequence": "1", "data": {"text": "Welcome"}},
+        )
+        log.append_or_update(2, Panel("Conversation", padding=(0, 1)))
+        await pilot.pause()
+
+        log.clear(preserve_intro=True)
+        await pilot.pause()
+
+        assert set(log._seq_to_widget) == {1}
+        assert log._intro_widget in log.children
+        assert "Welcome" in log.copyable_text(visible_only=False)
+        assert "Conversation" not in log.copyable_text(visible_only=False)
 
 
 async def test_chat_log_requests_another_history_page_only_once(
