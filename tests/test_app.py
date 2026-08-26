@@ -722,9 +722,16 @@ async def test_full_cli_quit_resets_computer_use_enablement(dummy_app: DummyAgen
     class FakeClient:
         def __init__(self) -> None:
             self.disconnect_calls = 0
+            self.disconnect_callbacks = 0
+            self.on_disconnect = self._on_disconnect
+
+        def _on_disconnect(self) -> None:
+            self.disconnect_callbacks += 1
 
         async def disconnect(self) -> None:
             self.disconnect_calls += 1
+            if self.on_disconnect is not None:
+                self.on_disconnect()
 
     fake_tty = FakePythonTty()
     fake_client = FakeClient()
@@ -736,6 +743,17 @@ async def test_full_cli_quit_resets_computer_use_enablement(dummy_app: DummyAgen
     dummy_app.image_store = store  # type: ignore[assignment]
     dummy_app.exit = lambda: exit_calls.append(True)  # type: ignore[method-assign]
     dummy_app._computer_use.set_enabled(True)
+    recovery_cancelled: list[bool] = []
+
+    async def stale_recovery() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            recovery_cancelled.append(True)
+
+    recovery_task = asyncio.create_task(stale_recovery())
+    dummy_app._websocket_recovery_task = recovery_task
+    await asyncio.sleep(0)
 
     await dummy_app._disconnect_and_exit()
 
@@ -744,6 +762,10 @@ async def test_full_cli_quit_resets_computer_use_enablement(dummy_app: DummyAgen
     assert dummy_app._computer_use.disconnect_calls == 1
     assert fake_tty.close_calls == 1
     assert fake_client.disconnect_calls == 1
+    assert fake_client.disconnect_callbacks == 0
+    assert recovery_task.cancelled()
+    assert recovery_cancelled == [True]
+    assert dummy_app._websocket_recovery_task is None
     assert store.clear_calls == 1
     assert dummy_app._image_load_epoch == epoch_before_exit + 1
     assert exit_calls == [True]
@@ -1327,6 +1349,38 @@ def test_start_instance_discovery_can_be_disabled_for_manual_url_testing(
     assert splash.state.manual_entry_expanded is True
 
 
+async def test_splash_back_cancels_recovery_before_returning_to_hosts(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recovery_started = asyncio.Event()
+
+    async def stale_recovery() -> None:
+        recovery_started.set()
+        await asyncio.Event().wait()
+
+    recovery_task = asyncio.create_task(stale_recovery())
+    dummy_app._websocket_recovery_task = recovery_task
+    await recovery_started.wait()
+    discovery_calls: list[bool] = []
+    focus_calls: list[bool] = []
+    monkeypatch.setattr(
+        dummy_app,
+        "_start_instance_discovery",
+        lambda *, auto_connect_single=False: discovery_calls.append(auto_connect_single),
+    )
+    monkeypatch.setattr(dummy_app, "_focus_splash_primary", lambda: focus_calls.append(True))
+
+    await dummy_app.on_splash_view_action_requested(SimpleNamespace(action="back"))
+
+    splash = dummy_app._test_widgets["#splash-view"]  # type: ignore[index]
+    assert recovery_task.cancelled()
+    assert dummy_app._websocket_recovery_task is None
+    assert splash.state.stage == "host"
+    assert discovery_calls == [False]
+    assert focus_calls == [True]
+
+
 async def test_startup_direct_connect_skips_instance_discovery(
     dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,
@@ -1391,6 +1445,19 @@ async def test_begin_connection_to_protected_instance_advances_to_login(
     store = FakeImageStore()
     store.clear = lambda: base_urls_when_cleared.append(client.base_url)  # type: ignore[method-assign]
     dummy_app.image_store = store  # type: ignore[assignment]
+    recovery_cancelled_at: list[str] = []
+    recovery_started = asyncio.Event()
+
+    async def stale_recovery() -> None:
+        recovery_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            recovery_cancelled_at.append(client.base_url)
+
+    recovery_task = asyncio.create_task(stale_recovery())
+    dummy_app._websocket_recovery_task = recovery_task
+    await recovery_started.wait()
 
     async def fetch_capabilities() -> tuple[dict[str, object], bool, str]:
         return capabilities, False, ""
@@ -1410,6 +1477,9 @@ async def test_begin_connection_to_protected_instance_advances_to_login(
     status = dummy_app._test_widgets["#connection-status"]  # type: ignore[index]
     input_widget = dummy_app._test_widgets["#message-input"]  # type: ignore[index]
     assert client.base_url == "http://localhost:5080"
+    assert recovery_task.cancelled()
+    assert recovery_cancelled_at == [""]
+    assert dummy_app._websocket_recovery_task is None
     assert base_urls_when_cleared == [""]
     assert dummy_app._image_load_epoch == epoch_before_host_change + 1
     assert client.disconnect_calls == 1
@@ -5612,6 +5682,14 @@ async def test_recover_websocket_retries_past_bounded_delays(
     monkeypatch.setattr(
         dummy_app, "_publish_remote_tree_snapshot", fake_publish_remote_tree_snapshot
     )
+    stages: list[str] = []
+    original_set_splash_stage = dummy_app._set_splash_stage
+
+    def record_splash_stage(stage: str, **kwargs: object) -> None:
+        stages.append(stage)
+        original_set_splash_stage(stage, **kwargs)
+
+    monkeypatch.setattr(dummy_app, "_set_splash_stage", record_splash_stage)
 
     dummy_app.config.instance_url = "http://agent.test"
     dummy_app.client = client  # type: ignore[assignment]
@@ -5628,6 +5706,7 @@ async def test_recover_websocket_retries_past_bounded_delays(
     # steady cadence instead of giving up after exhausting them.
     assert client.connect_calls == 4
     assert dummy_app.connected is True
+    assert stages == ["connecting", "connecting", "error", "error", "ready"]
 
 
 async def test_recover_websocket_stops_when_host_changes(

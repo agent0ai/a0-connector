@@ -125,6 +125,7 @@ async def begin_connection(
     password: str = "",
     remember_host_flag: bool = False,
 ) -> None:
+    await _cancel_websocket_recovery(app)
     username, password = _connection_login_credentials(username, password)
     app._invalidate_image_loads()
     app._stop_remote_tree_publisher()
@@ -410,6 +411,16 @@ def _schedule_websocket_recovery(app: AgentZeroCLI) -> None:
     app._websocket_recovery_task = asyncio.create_task(_recover_websocket(app))
 
 
+async def _cancel_websocket_recovery(app: AgentZeroCLI) -> None:
+    task = getattr(app, "_websocket_recovery_task", None)
+    app._websocket_recovery_task = None
+    if task is None or task.done() or task is asyncio.current_task():
+        return
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
 def _mark_reconnecting(app: AgentZeroCLI) -> None:
     app.connected = False
     app._sync_connection_status("connecting", app.config.instance_url or app._splash_host())
@@ -444,7 +455,7 @@ async def _recover_websocket(app: AgentZeroCLI) -> None:
             if last_error:
                 detail = f"{detail} — last error: {last_error}"
             app._set_splash_stage(
-                "connecting",
+                "connecting" if attempt <= len(_RECOVERY_DELAYS_SECONDS) else "error",
                 message="Connection lost; reconnecting...",
                 detail=detail,
                 host=app._splash_host(),
@@ -626,14 +637,7 @@ async def disconnect_and_exit(app: AgentZeroCLI) -> None:
     app._stop_remote_tree_publisher()
     app._stop_token_refresh()
     app._stop_state_sync()
-    # Cancel any in-flight websocket recovery: with unbounded retries it can
-    # otherwise outlive the shutdown until loop teardown.
-    recovery_task = getattr(app, "_websocket_recovery_task", None)
-    app._websocket_recovery_task = None
-    if recovery_task is not None and not recovery_task.done():
-        recovery_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await recovery_task
+    await _cancel_websocket_recovery(app)
     await app._python_tty.close()
     app._computer_use.reset_enabled_for_shutdown()
     await app._computer_use.disconnect()
