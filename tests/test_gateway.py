@@ -4,11 +4,13 @@ import asyncio
 import io
 import json
 from pathlib import Path
+import re
 import threading
 from typing import Any
 
 import pytest
 
+from agent_zero_cli.attachments import AttachmentRef
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.gateway import (
     GatewayOptions,
@@ -28,6 +30,7 @@ class FakeManager:
     def __init__(self, config: CLIConfig, *, persist_enabled: bool) -> None:
         self.config = config
         self.persist_enabled = persist_enabled
+        self.launcher_tag_supported = False
 
 
 class FakeComputerManager(FakeManager):
@@ -67,6 +70,68 @@ class FakeComputerManager(FakeManager):
         raise AssertionError("gateway rearm must delegate to setup_permissions")
 
 
+class FakeTagComputerManager(FakeComputerManager):
+    def __init__(self, config: CLIConfig, *, persist_enabled: bool) -> None:
+        super().__init__(config, persist_enabled=persist_enabled)
+        self.launcher_tag_supported = True
+        self.applied: list[tuple[str, str]] = []
+        self.released: list[str] = []
+
+    async def tag_context(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "result": {
+                "target_token": "target-1",
+                "tag_text": "@a0 draft a reply",
+                "query": "draft a reply",
+                "profile_override": "",
+                "app_name": "Text Editor",
+                "window_title": "Notes",
+                "focused_text": "visible focused context",
+                "tree": {"role": "frame", "title": "Notes"},
+                "replace_supported": True,
+                "screenshot_status": "attached",
+                "artifact": {
+                    "encoding": "base64",
+                    "mime": "image/png",
+                    "filename": "capture.png",
+                    "data": "iVBORw0KGgo=",
+                },
+            },
+        }
+
+    async def tag_replace(self, target_token: str, replacement: str) -> dict[str, Any]:
+        self.applied.append((target_token, replacement))
+        return {"ok": True, "result": {"replaced": True}}
+
+    async def tag_release(self, target_token: str) -> dict[str, Any]:
+        self.released.append(target_token)
+        return {"ok": True, "result": {"released": True}}
+
+
+class FakeTagClient:
+    def __init__(self) -> None:
+        self.upload_batches: list[list[Any]] = []
+
+    async def get_settings(self) -> dict[str, Any]:
+        return {
+            "settings": {"agent_profile": "agent0"},
+            "additional": {
+                "agent_subdirs": [
+                    {"key": "agent0", "label": "Agent 0"},
+                    {"key": "developer", "label": "Developer"},
+                ]
+            },
+        }
+
+    async def upload_attachments(self, uploads: list[Any]) -> list[AttachmentRef]:
+        self.upload_batches.append(list(uploads))
+        return [
+            AttachmentRef(f"/a0/usr/uploads/{upload.filename}", upload.filename, upload.mime_type)
+            for upload in uploads
+        ]
+
+
 class FakeSession:
     instances: list["FakeSession"] = []
 
@@ -78,6 +143,7 @@ class FakeSession:
         self.connect_args: dict[str, Any] = {}
         self.gateway = dict(kwargs["gateway"])
         self.gateway.setdefault("state", "connected")
+        self.client = None
         self._state_callback = kwargs["on_gateway_state_change"]
         FakeSession.instances.append(self)
 
@@ -100,6 +166,11 @@ class FakeSession:
 
     async def refresh_remote_tool_metadata(self) -> bool:
         return True
+
+    def _scope_available(self, scope: str) -> bool:
+        return self.gateway.get("master_enabled") is not False and bool(
+            self.gateway.get("scopes", {}).get(scope)
+        )
 
 
 def _options(tmp_path: Path) -> GatewayOptions:
@@ -227,6 +298,132 @@ async def test_gateway_computer_use_setup_is_correlated_and_unwraps_manager_resu
     assert rearm["ok"] is False
     assert rearm["code"] == "COMPUTER_USE_RESTART_REQUIRED"
     assert rearm["result"] == {"state": "restart_required"}
+
+
+async def test_gateway_a0_tag_commands_are_correlated_bounded_and_uploaded(
+    tmp_path: Path,
+) -> None:
+    brief = tmp_path / "brief.txt"
+    brief.write_text("brief", encoding="utf-8")
+    folder = tmp_path / "references"
+    folder.mkdir()
+    (folder / "notes.md").write_text("notes", encoding="utf-8")
+    (folder / "data.json").write_text("{}", encoding="utf-8")
+
+    class TagSession(FakeSession):
+        def __init__(self, config: CLIConfig, observer: Any, **kwargs: Any) -> None:
+            super().__init__(config, observer, **kwargs)
+            self.client = FakeTagClient()
+
+    output = io.StringIO()
+    commands = io.StringIO(
+        "\n".join(
+            [
+                json.dumps({"request_id": "profiles-1", "action": "a0_tag_profiles"}),
+                json.dumps({"request_id": "capture-1", "action": "a0_tag_capture"}),
+                json.dumps(
+                    {
+                        "request_id": "upload-1",
+                        "action": "a0_tag_upload",
+                        "paths": [str(brief), str(folder)],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "request_id": "apply-1",
+                        "action": "a0_tag_apply",
+                        "target_token": "target-1",
+                        "replacement": "Draft reply",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "request_id": "release-1",
+                        "action": "a0_tag_release",
+                        "target_token": "target-1",
+                    }
+                ),
+                json.dumps({"request_id": "stop-1", "action": "shutdown"}),
+                "",
+            ]
+        )
+    )
+    runner = GatewayRunner(
+        _options(tmp_path),
+        CLIConfig(),
+        writer=JsonlWriter(output),
+        input_stream=commands,
+        session_factory=TagSession,
+        browser_factory=FakeManager,
+        computer_use_factory=FakeTagComputerManager,
+    )
+
+    assert await runner.run() == 0
+    records = [json.loads(line) for line in output.getvalue().splitlines()]
+    session = TagSession.instances[-1]
+    assert "a0_tag_v1" in session.gateway["features"]
+    profiles = next(record for record in records if record.get("request_id") == "profiles-1")
+    assert profiles["result"]["default_profile"] == "agent0"
+    assert profiles["result"]["profiles"][1] == {"key": "developer", "label": "Developer"}
+    capture = next(record for record in records if record.get("request_id") == "capture-1")
+    assert re.fullmatch(
+        r"/a0/usr/uploads/a0-tag-[0-9a-f]{32}\.png",
+        capture["result"]["attachment_ref"],
+    )
+    assert capture["result"]["focused_text_chunks"] == ["visible focused context"]
+    assert capture["result"]["tree_chunks"] == ['{"role":"frame","title":"Notes"}']
+    upload = next(record for record in records if record.get("request_id") == "upload-1")
+    assert len(upload["result"]["attachment_refs"]) == 3
+    assert all(ref.startswith("/a0/usr/uploads/") for ref in upload["result"]["attachment_refs"])
+    assert len(session.client.upload_batches) == 2
+    assert session.client.upload_batches[0][0].content == b"\x89PNG\r\n\x1a\n"
+    assert re.fullmatch(r"a0-tag-[0-9a-f]{32}\.png", session.client.upload_batches[0][0].filename)
+    assert {item.content for item in session.client.upload_batches[1]} == {b"brief", b"notes", b"{}"}
+    manager = session.kwargs["computer_use_manager"]
+    assert manager.applied == [("target-1", "Draft reply")]
+    assert manager.released == ["target-1"]
+
+
+async def test_gateway_a0_tag_capture_releases_target_when_upload_fails(
+    tmp_path: Path,
+) -> None:
+    class BrokenTagClient(FakeTagClient):
+        async def upload_attachments(self, uploads: list[Any]) -> list[AttachmentRef]:
+            del uploads
+            raise RuntimeError("upload failed")
+
+    class TagSession(FakeSession):
+        def __init__(self, config: CLIConfig, observer: Any, **kwargs: Any) -> None:
+            super().__init__(config, observer, **kwargs)
+            self.client = BrokenTagClient()
+
+    output = io.StringIO()
+    commands = io.StringIO(
+        "\n".join(
+            [
+                json.dumps({"request_id": "capture-1", "action": "a0_tag_capture"}),
+                json.dumps({"request_id": "stop-1", "action": "shutdown"}),
+                "",
+            ]
+        )
+    )
+    runner = GatewayRunner(
+        _options(tmp_path),
+        CLIConfig(),
+        writer=JsonlWriter(output),
+        input_stream=commands,
+        session_factory=TagSession,
+        browser_factory=FakeManager,
+        computer_use_factory=FakeTagComputerManager,
+    )
+
+    assert await runner.run() == 0
+    records = [json.loads(line) for line in output.getvalue().splitlines()]
+    capture = next(record for record in records if record.get("request_id") == "capture-1")
+    assert capture["ok"] is False
+    assert capture["code"] == "GATEWAY_COMMAND_FAILED"
+    manager = TagSession.instances[-1].kwargs["computer_use_manager"]
+    assert manager.released == ["target-1"]
 
 
 async def test_gateway_rejects_invalid_workspace_without_starting_session(tmp_path: Path) -> None:

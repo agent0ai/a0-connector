@@ -206,6 +206,98 @@ async def test_status_is_allowed_while_disabled_but_other_actions_are_rejected(
     assert rejected["code"] == "COMPUTER_USE_DISABLED"
 
 
+async def test_launcher_tag_uses_private_backend_actions_without_remote_advertising(
+    _temp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _manager(
+        enabled=True,
+        backend_selection=_selection(features=("inline-png-capture", "a0-tag")),
+    )
+
+    async def fake_start(op_id: str, session: _HelperSession) -> dict[str, object]:
+        session.active = True
+        session.session_id = "tag-session"
+        return {"op_id": op_id, "ok": True, "result": {"session_id": session.session_id}}
+
+    dispatched: list[dict[str, object]] = []
+
+    async def fake_dispatch(
+        op_id: str,
+        session: _HelperSession,
+        request: dict[str, object],
+    ) -> dict[str, object]:
+        assert session.session_id == "tag-session"
+        dispatched.append(dict(request))
+        return {"op_id": op_id, "ok": True, "result": {"action": request["action"]}}
+
+    monkeypatch.setattr(manager, "_start_session", fake_start)
+    monkeypatch.setattr(manager, "_dispatch_session_action", fake_dispatch)
+
+    assert manager.launcher_tag_supported is True
+    assert "tag_context" not in computer_use_mod._SUPPORTED_ACTIONS
+    assert (await manager.tag_context())["ok"] is True
+    assert (await manager.tag_replace("target-1", "reply"))["ok"] is True
+    assert (await manager.tag_release("target-1"))["ok"] is True
+    assert manager._sessions["launcher-tag"].active is False
+    assert dispatched == [
+        {"action": "tag_context", "context_id": "launcher-tag"},
+        {
+            "action": "tag_replace",
+            "context_id": "launcher-tag",
+            "target_token": "target-1",
+            "replacement": "reply",
+        },
+        {
+            "action": "tag_release",
+            "context_id": "launcher-tag",
+            "target_token": "target-1",
+        },
+    ]
+
+
+async def test_launcher_tag_rejects_unadvertised_backend(_temp_env: Path) -> None:
+    manager = _manager(enabled=True, backend_selection=_selection())
+
+    result = await manager.tag_context()
+
+    assert result["ok"] is False
+    assert result["code"] == "COMPUTER_USE_UNSUPPORTED"
+
+
+async def test_launcher_tag_capture_failure_closes_its_private_session(
+    _temp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _manager(
+        enabled=True,
+        backend_selection=_selection(features=("inline-png-capture", "a0-tag")),
+    )
+    session = manager._sessions.setdefault("launcher-tag", _HelperSession(context_id="launcher-tag"))
+    session.active = True
+    session.session_id = "tag-session"
+
+    async def failed_action(_action: str, **_payload: object) -> dict[str, object]:
+        return {"ok": False, "code": "A0_TAG_NOT_FOUND", "error": "No tag found."}
+
+    stopped: list[str] = []
+
+    async def stop_session(_op_id: str, current: _HelperSession) -> dict[str, object]:
+        stopped.append(current.context_id)
+        current.active = False
+        current.session_id = ""
+        return {"ok": True, "result": {"status": "stopped"}}
+
+    monkeypatch.setattr(manager, "_tag_action", failed_action)
+    monkeypatch.setattr(manager, "_stop_session", stop_session)
+
+    result = await manager.tag_context()
+
+    assert result["code"] == "A0_TAG_NOT_FOUND"
+    assert stopped == ["launcher-tag"]
+    assert session.active is False
+
+
 async def test_allow_without_restore_token_returns_rearm_required(
     _temp_env: Path,
 ) -> None:

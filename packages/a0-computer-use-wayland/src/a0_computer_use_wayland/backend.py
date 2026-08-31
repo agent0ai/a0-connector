@@ -35,6 +35,7 @@ WAYLAND_BACKEND_SPEC = ComputerUseBackendSpec(
         "accessibility-tree-snapshot",
         "accessibility-structural-targeting",
         "real-cursor-may-move",
+        "a0-tag",
     ),
     interpreter_strategy="system_python",
     helper_target=str(HELPER_SCRIPT),

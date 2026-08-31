@@ -148,6 +148,7 @@ class _FakeAtspiAccessible:
         states: set[str] | None = None,
         frame: tuple[int, int, int, int] | None = None,
         text: str = "",
+        caret_offset: int | None = None,
         value: float | None = None,
         pid: int = 123,
     ) -> None:
@@ -159,10 +160,12 @@ class _FakeAtspiAccessible:
         self.states = states or {"VISIBLE", "SHOWING", "ENABLED"}
         self.frame = frame
         self.text = text
+        self.caret_offset = len(text) if caret_offset is None else caret_offset
         self.value = value
         self.pid = pid
         self.performed_actions: list[int] = []
         self.focused = False
+        self.insert_text_lengths: list[int] = []
         self.set_text_values: list[str] = []
         self.set_numeric_values: list[float] = []
 
@@ -221,6 +224,21 @@ class _FakeAtspiAccessible:
     def get_text(self, start: int, end: int) -> str:
         return self.text[start:end]
 
+    def get_caret_offset(self) -> int:
+        return self.caret_offset
+
+    def delete_text(self, start: int, end: int) -> bool:
+        self.text = self.text[:start] + self.text[end:]
+        self.caret_offset = start
+        return True
+
+    def insert_text(self, position: int, text: str, length: int) -> bool:
+        self.insert_text_lengths.append(length)
+        value = text.encode("utf-8")[:length].decode("utf-8", errors="ignore")
+        self.text = self.text[:position] + value + self.text[position:]
+        self.caret_offset = position + len(value)
+        return True
+
     def set_text_contents(self, value: str) -> bool:
         self.set_text_values.append(value)
         self.text = value
@@ -246,6 +264,7 @@ class _FakeAtspi:
         FOCUSED="FOCUSED",
         FOCUSABLE="FOCUSABLE",
         PRESSED="PRESSED",
+        PROTECTED="PROTECTED",
         SELECTED="SELECTED",
         SHOWING="SHOWING",
         VISIBLE="VISIBLE",
@@ -320,6 +339,8 @@ def _portal_helper(module):
     helper = module.PortalComputerUseHelper.__new__(module.PortalComputerUseHelper)
     remote_desktop = _FakeRemoteDesktop()
     helper._remote_desktop = remote_desktop
+    helper._element_index_cache = {}
+    helper._tag_target = None
     helper._session = module.PortalSession(
         context_id="ctx-1",
         trust_mode="persistent",
@@ -333,6 +354,21 @@ def _portal_helper(module):
         capture_stream=None,
     )
     return helper, remote_desktop
+
+
+class _FakeCaptureStream:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str | None, tuple[int, int, int, int] | None]] = []
+
+    def capture_png(
+        self,
+        output_path: str | None = None,
+        *,
+        crop: tuple[int, int, int, int] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        self.calls.append((output_path, crop))
+        return {"capture_path": output_path or "", "width": 800, "height": 600}
 
 
 def test_wayland_backend_spec_exposes_expected_metadata() -> None:
@@ -362,6 +398,220 @@ def test_wayland_backend_spec_exposes_expected_metadata() -> None:
     assert "background-dispatch" in spec.features
     assert "foreground-dispatch-fallback" in spec.features
     assert "real-cursor-may-move" in spec.features
+    assert "a0-tag" in spec.features
+
+
+def test_wayland_a0_tag_captures_and_replaces_exact_focused_span(
+    wayland_helper_module,
+    tmp_path: Path,
+) -> None:
+    field = _FakeAtspiAccessible(
+        role="text",
+        name="Message",
+        states={"VISIBLE", "SHOWING", "ENABLED", "FOCUSABLE", "FOCUSED", "EDITABLE"},
+        frame=(30, 80, 500, 80),
+        text="🙂 intro\n  @A0.developer draft a reply",
+    )
+    window = _FakeAtspiAccessible(
+        role="frame",
+        name="Notes",
+        states={"VISIBLE", "SHOWING", "ENABLED", "ACTIVE"},
+        frame=(10, 20, 800, 600),
+        children=[field],
+    )
+    app = _FakeAtspiAccessible(role="application", name="Text Editor", children=[window])
+    _FakeAtspi.desktop = _FakeAtspiAccessible(role="desktop", children=[app])
+    helper, _remote_desktop = _portal_helper(wayland_helper_module)
+    capture_stream = _FakeCaptureStream()
+    helper._session.capture_stream = capture_stream
+    capture_path = str(tmp_path / "tag.png")
+
+    captured = helper.tag_context({"session_id": "sess-1", "capture_path": capture_path})
+
+    assert captured["query"] == "draft a reply"
+    assert captured["profile_override"] == "developer"
+    assert captured["tag_text"] == "@A0.developer draft a reply"
+    assert captured["app_name"] == "Text Editor"
+    assert captured["window_title"] == "Notes"
+    assert captured["replace_supported"] is True
+    assert captured["screenshot_status"] == "unavailable"
+    assert "verified active-window bounds" in captured["screenshot_error"]
+    assert capture_stream.calls == []
+
+    replaced = helper.tag_replace(
+        {
+            "session_id": "sess-1",
+            "target_token": captured["target_token"],
+            "replacement": "Réponse concise 🌟",
+        }
+    )
+
+    assert replaced["replaced"] is True
+    assert field.text == "🙂 intro\n  Réponse concise 🌟"
+    assert field.insert_text_lengths == [len("Réponse concise 🌟".encode("utf-8"))]
+    assert helper._tag_target is None
+
+
+def test_wayland_a0_tag_ignores_stale_focus_outside_the_active_window(
+    wayland_helper_module,
+) -> None:
+    stale = _FakeAtspiAccessible(
+        role="section",
+        states={"VISIBLE", "SHOWING", "FOCUSED"},
+    )
+    stale_window = _FakeAtspiAccessible(
+        role="frame",
+        name="Inactive app",
+        children=[stale],
+    )
+    field = _FakeAtspiAccessible(
+        role="text",
+        states={"VISIBLE", "SHOWING", "FOCUSED", "EDITABLE"},
+        text="@a0 use the active field",
+    )
+    active_window = _FakeAtspiAccessible(
+        role="frame",
+        name="Active app",
+        states={"VISIBLE", "SHOWING", "ACTIVE"},
+        children=[field],
+    )
+    _FakeAtspi.desktop = _FakeAtspiAccessible(
+        role="desktop",
+        children=[
+            _FakeAtspiAccessible(role="application", name="Stale", children=[stale_window]),
+            _FakeAtspiAccessible(role="application", name="Current", children=[active_window]),
+        ],
+    )
+    helper, _remote_desktop = _portal_helper(wayland_helper_module)
+    helper._session.capture_stream = _FakeCaptureStream()
+
+    captured = helper.tag_context({"session_id": "sess-1"})
+
+    assert captured["query"] == "use the active field"
+    assert captured["window_title"] == "Active app"
+
+
+def test_wayland_a0_tag_fails_closed_for_changed_or_protected_fields(
+    wayland_helper_module,
+) -> None:
+    field = _FakeAtspiAccessible(
+        role="text",
+        states={"VISIBLE", "SHOWING", "ENABLED", "FOCUSED", "EDITABLE"},
+        text="@a0 summarize this",
+    )
+    window = _FakeAtspiAccessible(
+        role="frame",
+        name="Editor",
+        states={"VISIBLE", "SHOWING", "ENABLED", "ACTIVE"},
+        frame=(0, 0, 800, 600),
+        children=[field],
+    )
+    _FakeAtspi.desktop = _FakeAtspiAccessible(
+        role="desktop",
+        children=[_FakeAtspiAccessible(role="application", name="App", children=[window])],
+    )
+    helper, _remote_desktop = _portal_helper(wayland_helper_module)
+    helper._session.capture_stream = _FakeCaptureStream()
+    captured = helper.tag_context({"session_id": "sess-1"})
+    field.text = "@a0 changed by the user"
+
+    with pytest.raises(wayland_helper_module.PortalError) as changed:
+        helper.tag_replace(
+            {
+                "session_id": "sess-1",
+                "target_token": captured["target_token"],
+                "replacement": "unsafe",
+            }
+        )
+    assert changed.value.code == "A0_TAG_TARGET_CHANGED"
+
+    field.text = "@a0 reveal this"
+    field.caret_offset = len(field.text)
+    field.states.add("PROTECTED")
+    with pytest.raises(wayland_helper_module.PortalError) as protected:
+        helper.tag_context({"session_id": "sess-1"})
+    assert protected.value.code == "A0_TAG_PROTECTED_FIELD"
+
+
+def test_wayland_a0_tag_revalidates_active_window_process_identity(
+    wayland_helper_module,
+) -> None:
+    field = _FakeAtspiAccessible(
+        role="text",
+        states={"VISIBLE", "SHOWING", "FOCUSED", "EDITABLE"},
+        text="@a0 keep the exact target",
+    )
+    window = _FakeAtspiAccessible(
+        role="frame",
+        name="Editor",
+        states={"VISIBLE", "SHOWING", "ACTIVE"},
+        frame=(0, 0, 800, 600),
+        children=[field],
+        pid=123,
+    )
+    _FakeAtspi.desktop = _FakeAtspiAccessible(
+        role="desktop",
+        children=[_FakeAtspiAccessible(role="application", name="App", children=[window])],
+    )
+    helper, _remote_desktop = _portal_helper(wayland_helper_module)
+    helper._session.capture_stream = _FakeCaptureStream()
+    captured = helper.tag_context({"session_id": "sess-1"})
+    window.pid = 456
+
+    with pytest.raises(wayland_helper_module.PortalError) as changed:
+        helper.tag_replace(
+            {
+                "session_id": "sess-1",
+                "target_token": captured["target_token"],
+                "replacement": "unsafe",
+            }
+        )
+
+    assert changed.value.code == "A0_TAG_TARGET_CHANGED"
+    assert field.text == "@a0 keep the exact target"
+
+
+def test_wayland_a0_tag_restores_original_when_editor_normalizes_replacement(
+    wayland_helper_module,
+) -> None:
+    original = "@a0 preserve café — 🌟"
+    field = _FakeAtspiAccessible(
+        role="text",
+        states={"VISIBLE", "SHOWING", "FOCUSED", "EDITABLE"},
+        text=original,
+    )
+    window = _FakeAtspiAccessible(
+        role="frame",
+        name="Editor",
+        states={"VISIBLE", "SHOWING", "ACTIVE"},
+        children=[field],
+    )
+    _FakeAtspi.desktop = _FakeAtspiAccessible(
+        role="desktop",
+        children=[_FakeAtspiAccessible(role="application", name="App", children=[window])],
+    )
+    helper, _remote_desktop = _portal_helper(wayland_helper_module)
+    helper._session.capture_stream = _FakeCaptureStream()
+    captured = helper.tag_context({"session_id": "sess-1"})
+    insert_text = field.insert_text
+
+    def normalize_once(position: int, text: str, length: int) -> bool:
+        value = text.upper() if text == "mixed Case" else text
+        return insert_text(position, value, length)
+
+    field.insert_text = normalize_once  # type: ignore[method-assign]
+    with pytest.raises(wayland_helper_module.PortalError) as changed:
+        helper.tag_replace(
+            {
+                "session_id": "sess-1",
+                "target_token": captured["target_token"],
+                "replacement": "mixed Case",
+            }
+        )
+
+    assert changed.value.code == "A0_TAG_REPLACE_FAILED"
+    assert field.text == original
+    assert field.insert_text_lengths[-1] == len(original.encode("utf-8"))
 
 
 def test_wayland_detection_and_support_reason_are_additive_and_explicit(

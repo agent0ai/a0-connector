@@ -34,6 +34,9 @@
 - Computer Use must preserve explicit `window_id` targets through snapshot and type operations, and accept `window_id` as the top-level target for an explicit focus operation. Backends that advertise target-verified keyboard input fail closed unless the named window is active or focused.
 - Wayland top-level focus may fall back from AT-SPI to an unambiguous `wmctrl` PID/title activation for XWayland windows, but success still requires AT-SPI active/focused verification.
 - Keep the Wayland helper compatibility copy behavior-aligned with the packaged `a0-computer-use-wayland` helper; package-only bootstrap imports are the intentional difference.
+- Wayland AT-SPI text offsets and integrity checks use Unicode character
+  offsets, while `EditableText.insert_text` receives the UTF-8 byte length of
+  its string. Keep replacement and rollback calls aligned with that split.
 - Host-browser `open` must reuse an already-open tab with the same normalized URL before creating a new tab. Keep `list` and `set_active` workflows available for title-based or URL-based selection.
 - Remote host-browser operations may report status while Host Browser is off, but `ensure` and every effectful action must fail closed. Local `/browser` commands and Launcher-authorized setup may still prepare the browser through the direct manager API.
 - Host-browser metadata must advertise stable browser choices, including discovered CDP browser IDs that survive `DevToolsActivePort` port/GUID changes. Incoming `browser_selection` / `host_browser_selection` values must select that browser instead of falling back to the automatic profile picker. Browser preparation may briefly wait for an existing browser's active-port file, and a failed discovered-CDP attach may retry only after that file advertises a different endpoint; explicit custom endpoints remain exact. Consent failures must tell the user to choose a Chrome profile and click Allow before retrying.
@@ -115,6 +118,25 @@
   meaning. The command-line contract uses `file_read` for the new read-only
   selection and keeps legacy `files` read/write so a CLI update cannot silently
   downgrade an older Launcher.
+- `a0_tag_v1` is an independently advertised Wayland gateway feature. Its
+  correlated commands list profiles, capture one explicit foreground tag,
+  upload a uniquely named screenshot only when the backend supplies a verified
+  bounded active-window artifact, apply a revalidated reply, and release the
+  opaque target. Current Wayland capture is explicitly text/accessibility-only;
+  do not turn an unverified monitor crop into an attachment. Capture/apply
+  require the existing Computer Use scope; release remains best-effort during
+  teardown and stops the private tag portal session without ending the gateway
+  lease. These private manager calls must not enter the agent-visible Computer
+  Use action set.
+  Wayland tag focus resolution is scoped to the active top-level window before
+  choosing a readable focused descendant so stale inactive AT-SPI focus cannot
+  capture or revalidate the wrong application.
+- `a0_tag_upload` is a correlated, Computer-Use-gated gateway command for paths
+  selected explicitly by Launcher's native chooser. Accept only bounded
+  absolute paths, expand directories without following nested symlinks, cap
+  file count and bytes, reuse `A0Client.upload_attachments`, and return only
+  `/a0/usr/uploads/` references. It is not an agent-visible file-read action and
+  must never scan a workspace or user directory implicitly.
 
 ## Work Guidance
 

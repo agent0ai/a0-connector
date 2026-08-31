@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import dataclass, replace
 import json
 import os
@@ -10,19 +11,116 @@ import re
 import signal
 import sys
 import threading
+import uuid
 from typing import Any, Callable, TextIO
 from urllib.parse import urlsplit, urlunsplit
 
+from agent_zero_cli.attachments import AttachmentError, AttachmentUpload, create_file_upload
 from agent_zero_cli.client import DEFAULT_HOST
 from agent_zero_cli.computer_use import ComputerUseManager
 from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.host_browser_manager import HostBrowserManager
+from agent_zero_cli.profile_commands import profile_menu_state_from_settings
 from agent_zero_cli.session import ConnectorSession, SessionError
 
 
 _SCOPE_KEYS = ("files", "file_write", "code_execution", "browser", "computer_use")
 _GATEWAY_FEATURES = ("computer_use_setup_v1",)
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9._:-]+")
+_TAG_RESULT_MAX_CHARS = 16384
+_TAG_CONTEXT_CHUNK_CHARS = 2048
+_TAG_CONTEXT_MAX_CHUNKS = 16
+_TAG_SCREENSHOT_MAX_BYTES = 16 * 1024 * 1024
+_TAG_UPLOAD_MAX_SELECTIONS = 16
+_TAG_UPLOAD_MAX_FILES = 128
+_TAG_UPLOAD_MAX_FILE_BYTES = 25 * 1024 * 1024
+_TAG_UPLOAD_MAX_TOTAL_BYTES = 100 * 1024 * 1024
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _text_chunks(value: object) -> list[str]:
+    text = str(value or "")
+    return [
+        text[index : index + _TAG_CONTEXT_CHUNK_CHARS]
+        for index in range(0, min(len(text), _TAG_CONTEXT_CHUNK_CHARS * _TAG_CONTEXT_MAX_CHUNKS), _TAG_CONTEXT_CHUNK_CHARS)
+    ]
+
+
+def _tag_uploads_for_paths(value: object) -> list[AttachmentUpload]:
+    if not isinstance(value, list) or not value or len(value) > _TAG_UPLOAD_MAX_SELECTIONS:
+        raise SessionError(
+            "A0_TAG_ATTACHMENTS_INVALID",
+            f"Choose between 1 and {_TAG_UPLOAD_MAX_SELECTIONS} files or folders.",
+            exit_code=1,
+        )
+
+    files: list[Path] = []
+    seen: set[str] = set()
+    for raw_path in value:
+        raw = str(raw_path or "").strip()
+        if not raw or "\0" in raw or len(raw) > 4096:
+            raise SessionError("A0_TAG_ATTACHMENTS_INVALID", "A selected attachment path is invalid.", exit_code=1)
+        selected = Path(raw).expanduser()
+        if not selected.is_absolute():
+            raise SessionError("A0_TAG_ATTACHMENTS_INVALID", "Attachment paths must be absolute.", exit_code=1)
+        try:
+            selected = selected.resolve(strict=True)
+        except OSError as exc:
+            raise SessionError("A0_TAG_ATTACHMENT_READ_FAILED", f"Could not open {selected.name}.", exit_code=1) from exc
+
+        try:
+            candidates = [selected] if selected.is_file() else (
+                sorted(
+                    (item for item in selected.rglob("*") if item.is_file() and not item.is_symlink()),
+                    key=lambda item: str(item).casefold(),
+                )
+                if selected.is_dir()
+                else []
+            )
+        except OSError as exc:
+            raise SessionError(
+                "A0_TAG_ATTACHMENT_READ_FAILED",
+                f"Could not read files from {selected.name}.",
+                exit_code=1,
+            ) from exc
+        if not candidates:
+            raise SessionError("A0_TAG_ATTACHMENT_EMPTY", f"No files were found in {selected.name}.", exit_code=1)
+        for candidate in candidates:
+            try:
+                marker = os.path.normcase(str(candidate.resolve(strict=True)))
+            except OSError as exc:
+                raise SessionError(
+                    "A0_TAG_ATTACHMENT_READ_FAILED",
+                    f"Could not open {candidate.name}.",
+                    exit_code=1,
+                ) from exc
+            if marker in seen:
+                continue
+            seen.add(marker)
+            files.append(candidate)
+            if len(files) > _TAG_UPLOAD_MAX_FILES:
+                raise SessionError(
+                    "A0_TAG_ATTACHMENTS_TOO_MANY",
+                    f"A0 Tag accepts up to {_TAG_UPLOAD_MAX_FILES} files per request.",
+                    exit_code=1,
+                )
+
+    uploads: list[AttachmentUpload] = []
+    total_bytes = 0
+    try:
+        for source in files:
+            upload = create_file_upload(source, max_bytes=_TAG_UPLOAD_MAX_FILE_BYTES)
+            total_bytes += len(upload.content)
+            if total_bytes > _TAG_UPLOAD_MAX_TOTAL_BYTES:
+                raise SessionError(
+                    "A0_TAG_ATTACHMENTS_TOO_LARGE",
+                    "A0 Tag attachments may total at most 100 MiB.",
+                    exit_code=1,
+                )
+            uploads.append(upload)
+    except AttachmentError as exc:
+        raise SessionError("A0_TAG_ATTACHMENT_READ_FAILED", str(exc), exit_code=1) from exc
+    return uploads
 
 
 def sanitize_gateway_id(value: object) -> str:
@@ -177,7 +275,10 @@ class GatewayRunner:
             "host_label": self.options.host_label,
             "master_enabled": self.options.master_enabled,
             "scopes": scopes,
-            "features": list(_GATEWAY_FEATURES),
+            "features": [
+                *_GATEWAY_FEATURES,
+                *(["a0_tag_v1"] if self.computer_use.launcher_tag_supported else []),
+            ],
         }
         self.session = self._session_factory(
             self.config,
@@ -299,6 +400,16 @@ class GatewayRunner:
                     prompt=bool(payload.get("prompt")),
                 )
                 refresh_metadata = True
+            elif action == "a0_tag_profiles":
+                result = await self._tag_profiles()
+            elif action == "a0_tag_capture":
+                result = await self._tag_capture()
+            elif action == "a0_tag_upload":
+                result = await self._tag_upload(payload)
+            elif action == "a0_tag_apply":
+                result = await self._tag_apply(payload)
+            elif action == "a0_tag_release":
+                result = await self._tag_release(payload)
             elif action in {"shutdown", "stop"}:
                 self.stop_event.set()
                 result = {"stopping": True}
@@ -346,6 +457,138 @@ class GatewayRunner:
                         self._emit_status(metadata)
                 except Exception as refresh_exc:
                     self._emit_error("GATEWAY_METADATA_REFRESH_FAILED", str(refresh_exc), fatal=False)
+
+    async def _tag_profiles(self) -> dict[str, Any]:
+        session = self._require_session()
+        client = session.client
+        if client is None:
+            raise SessionError("GATEWAY_NOT_CONNECTED", "Gateway is not connected.", exit_code=1)
+        default_profile, profiles = profile_menu_state_from_settings(await client.get_settings())
+        return {
+            "default_profile": default_profile,
+            "profiles": [
+                {
+                    "key": str(item.get("key") or "")[:64],
+                    "label": str(item.get("label") or item.get("key") or "")[:128],
+                }
+                for item in profiles[:64]
+                if str(item.get("key") or "").strip()
+            ],
+        }
+
+    async def _tag_capture(self) -> dict[str, Any]:
+        session = self._require_session()
+        computer_use = self._require_tag_computer_use(session)
+        response = await computer_use.tag_context()
+        result = self._computer_result(response)
+        target_token = str(result.get("target_token") or "").strip()
+        try:
+            artifact = result.pop("artifact", None)
+            result["focused_text_chunks"] = _text_chunks(result.pop("focused_text", ""))
+            tree = result.pop("tree", {})
+            result["tree_chunks"] = _text_chunks(
+                json.dumps(tree, ensure_ascii=False, separators=(",", ":"))
+                if isinstance(tree, dict)
+                else ""
+            )
+            result["attachment_ref"] = ""
+            if result.get("screenshot_status") == "attached":
+                result["screenshot_status"] = "unavailable"
+            if isinstance(artifact, dict):
+                encoded = str(artifact.get("data") or "")
+                try:
+                    content = base64.b64decode(encoded, validate=True)
+                except Exception as exc:
+                    raise SessionError(
+                        "A0_TAG_SCREENSHOT_INVALID",
+                        "Computer Use returned an invalid screenshot.",
+                        exit_code=1,
+                    ) from exc
+                if not content.startswith(_PNG_SIGNATURE) or len(content) > _TAG_SCREENSHOT_MAX_BYTES:
+                    raise SessionError(
+                        "A0_TAG_SCREENSHOT_INVALID",
+                        "Computer Use returned an invalid screenshot size.",
+                        exit_code=1,
+                    )
+                client = session.client
+                if client is None:
+                    raise SessionError("GATEWAY_NOT_CONNECTED", "Gateway is not connected.", exit_code=1)
+                refs = await client.upload_attachments(
+                    [
+                        AttachmentUpload(
+                            filename=f"a0-tag-{uuid.uuid4().hex}.png",
+                            content=content,
+                            mime_type="image/png",
+                        )
+                    ]
+                )
+                if refs:
+                    result["attachment_ref"] = refs[0].path
+                    result["screenshot_status"] = "attached"
+            return result
+        except Exception:
+            try:
+                await computer_use.tag_release(target_token)
+            except Exception:
+                pass
+            raise
+
+    async def _tag_apply(self, payload: dict[str, Any]) -> dict[str, Any]:
+        session = self._require_session()
+        computer_use = self._require_tag_computer_use(session)
+        token = str(payload.get("target_token") or "").strip()[:128]
+        replacement = str(payload.get("replacement") or "")
+        if not token:
+            raise ValueError("target_token is required")
+        if not replacement or len(replacement) > _TAG_RESULT_MAX_CHARS:
+            raise ValueError("replacement must contain 1 to 16384 characters")
+        return self._computer_result(await computer_use.tag_replace(token, replacement))
+
+    async def _tag_upload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        session = self._require_session()
+        self._require_tag_computer_use(session)
+        client = session.client
+        if client is None:
+            raise SessionError("GATEWAY_NOT_CONNECTED", "Gateway is not connected.", exit_code=1)
+        uploads = await asyncio.to_thread(_tag_uploads_for_paths, payload.get("paths"))
+        refs = await client.upload_attachments(uploads)
+        return {"attachment_refs": [ref.path for ref in refs]}
+
+    async def _tag_release(self, payload: dict[str, Any]) -> dict[str, Any]:
+        token = str(payload.get("target_token") or "").strip()[:128]
+        if not token or self.computer_use is None:
+            return {"released": False}
+        return self._computer_result(await self.computer_use.tag_release(token))
+
+    def _require_session(self) -> ConnectorSession:
+        if self.session is None:
+            raise SessionError("GATEWAY_NOT_CONNECTED", "Gateway is not connected.", exit_code=1)
+        return self.session
+
+    def _require_tag_computer_use(self, session: ConnectorSession) -> ComputerUseManager:
+        if not session._scope_available("computer_use"):
+            raise SessionError(
+                "COMPUTER_USE_DISABLED",
+                "A0 Tag requires the selected Instance's Computer Use permission.",
+                exit_code=1,
+            )
+        if self.computer_use is None or not self.computer_use.launcher_tag_supported:
+            raise SessionError(
+                "A0_TAG_UNSUPPORTED",
+                "A0 Tag is unavailable on this Computer Use backend.",
+                exit_code=1,
+            )
+        return self.computer_use
+
+    def _computer_result(self, response: dict[str, Any]) -> dict[str, Any]:
+        if not bool(response.get("ok")):
+            raise SessionError(
+                str(response.get("code") or "A0_TAG_FAILED"),
+                str(response.get("error") or "A0 Tag operation failed."),
+                exit_code=1,
+            )
+        result = response.get("result")
+        return dict(result) if isinstance(result, dict) else {}
 
     def _emit_status(self, gateway: dict[str, Any]) -> None:
         self.writer.write(

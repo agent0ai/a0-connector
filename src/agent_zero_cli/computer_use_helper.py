@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -183,6 +184,11 @@ _AX_DEFAULT_MAX_NODES = 120
 _AX_HARD_MAX_NODES = 500
 _AX_TARGET_SEARCH_MAX_NODES = 800
 _AX_TEXT_MAX_CHARS = 240
+_TAG_TEXT_WINDOW_CHARS = 4096
+_TAG_QUERY_MAX_CHARS = 2048
+_TAG_REPLACEMENT_MAX_CHARS = 16384
+_TAG_TARGET_TTL_SECONDS = 15 * 60
+_TAG_PROFILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _AX_SENTINEL_COORDINATE = -2147483648
 _AT_SPI_STATE_NAMES = (
     ("ACTIVE", "active"),
@@ -193,6 +199,7 @@ _AT_SPI_STATE_NAMES = (
     ("FOCUSED", "focused"),
     ("FOCUSABLE", "focusable"),
     ("PRESSED", "pressed"),
+    ("PROTECTED", "protected"),
     ("SELECTED", "selected"),
     ("SHOWING", "showing"),
     ("VISIBLE", "visible"),
@@ -247,6 +254,21 @@ class PortalSession:
     devices: int
     restore_token: str
     capture_stream: "CaptureStream"
+
+
+@dataclass
+class TagTarget:
+    token: str
+    path: list[int]
+    window_path: list[int]
+    window_id: str
+    app_name: str
+    window_title: str
+    start: int
+    end: int
+    original: str
+    editable: bool
+    captured_at: float
 
 
 def _dbus_dict(payload: dict[str, Any]) -> dbus.Dictionary:
@@ -648,6 +670,227 @@ def _atspi_element_for_path(desktop: object, path: list[int]) -> object | None:
         if element is None:
             return None
     return element
+
+
+def _atspi_interface_call(
+    Atspi: Any,
+    interface_name: str,
+    method_name: str,
+    element: object,
+    *args: object,
+) -> Any:
+    interface = getattr(Atspi, interface_name, None)
+    method = getattr(interface, method_name, None)
+    if callable(method):
+        try:
+            return method(element, *args)
+        except Exception:
+            pass
+    return _safe_call(element, method_name, *args)
+
+
+def _atspi_text_count(Atspi: Any, element: object) -> int:
+    return max(
+        0,
+        _safe_int(
+            _atspi_interface_call(Atspi, "Text", "get_character_count", element),
+            default=0,
+        ),
+    )
+
+
+def _atspi_text_range(Atspi: Any, element: object, start: int, end: int) -> str:
+    value = _atspi_interface_call(Atspi, "Text", "get_text", element, start, end)
+    return str(value or "").replace("\x00", "")
+
+
+def _atspi_caret_offset(Atspi: Any, element: object) -> int:
+    value = _atspi_interface_call(Atspi, "Text", "get_caret_offset", element)
+    if value is None:
+        value = _safe_call(element, "get_caret_offset")
+    return _safe_int(value, default=-1)
+
+
+def _atspi_find_focused(
+    Atspi: Any,
+    root: object,
+    *,
+    max_nodes: int = _AX_TARGET_SEARCH_MAX_NODES,
+) -> tuple[object, list[int]] | None:
+    active_roots: list[tuple[object, list[int]]] = []
+    for app_index in range(_atspi_child_count(root)):
+        app = _atspi_child_at(root, app_index)
+        if app is None:
+            continue
+        app_active = "active" in _atspi_states(Atspi, app)
+        active_window_found = False
+        for window_index in range(_atspi_child_count(app)):
+            window = _atspi_child_at(app, window_index)
+            if window is not None and "active" in _atspi_states(Atspi, window):
+                active_roots.append((window, [app_index, window_index]))
+                active_window_found = True
+        if app_active and not active_window_found:
+            active_roots.append((app, [app_index]))
+
+    search_roots = active_roots or [(root, [])]
+    candidates: list[tuple[object, list[int]]] = []
+    for search_root, search_path in search_roots:
+        stack: list[tuple[object, list[int]]] = [(search_root, search_path)]
+        visited = 0
+        while stack and visited < max_nodes:
+            element, path = stack.pop()
+            visited += 1
+            if "focused" in _atspi_states(Atspi, element):
+                candidates.append((element, path))
+            for index in range(_atspi_child_count(element)):
+                child = _atspi_child_at(element, index)
+                if child is not None:
+                    stack.append((child, [*path, index]))
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda item: (
+            _atspi_text_count(Atspi, item[0]) > 0 and _atspi_caret_offset(Atspi, item[0]) >= 0,
+            len(item[1]),
+        ),
+    )
+
+
+def _atspi_window_path(Atspi: Any, desktop: object, path: list[int]) -> list[int]:
+    for length in range(len(path), 0, -1):
+        candidate_path = path[:length]
+        candidate = _atspi_element_for_path(desktop, candidate_path)
+        if candidate is not None and _atspi_role(candidate).casefold() in _AT_SPI_WINDOW_ROLES:
+            return candidate_path
+    raise PortalError(
+        "A0_TAG_WINDOW_UNAVAILABLE",
+        "The focused field is not inside an accessible application window.",
+    )
+
+
+def _atspi_window_is_active(Atspi: Any, desktop: object, window_path: list[int]) -> bool:
+    for candidate_path in (window_path, window_path[:1]):
+        candidate = _atspi_element_for_path(desktop, candidate_path)
+        if candidate is not None and {"active", "focused"} & set(_atspi_states(Atspi, candidate)):
+            return True
+    return False
+
+
+def _parse_tag_invocation(
+    Atspi: Any,
+    element: object,
+) -> tuple[int, int, str, str, str, str]:
+    character_count = _atspi_text_count(Atspi, element)
+    caret = _atspi_caret_offset(Atspi, element)
+    if character_count <= 0 or caret < 0 or caret > character_count:
+        raise PortalError("A0_TAG_TEXT_UNAVAILABLE", "The focused field has no readable caret text.")
+
+    before_start = max(0, caret - _TAG_TEXT_WINDOW_CHARS)
+    before = _atspi_text_range(Atspi, element, before_start, caret)
+    newline = max(before.rfind("\n"), before.rfind("\r"))
+    if newline < 0 and before_start > 0:
+        raise PortalError("A0_TAG_QUERY_TOO_LONG", "The A0 Tag line is too long.")
+    line_start = before_start + newline + 1
+    line = before[newline + 1 :]
+
+    after_end = min(character_count, caret + _TAG_TEXT_WINDOW_CHARS)
+    after = _atspi_text_range(Atspi, element, caret, after_end)
+    after_line = re.split(r"[\r\n]", after, maxsplit=1)[0]
+    after_line_bounded = "\n" in after or "\r" in after or after_end == character_count
+    if not after_line_bounded or after_line.strip():
+        raise PortalError("A0_TAG_CARET_POSITION", "Place the caret at the end of the A0 Tag request.")
+
+    match = re.fullmatch(
+        r"(?P<indent>[ \t]*)(?P<tag>@a0(?:\.(?P<profile>[A-Za-z0-9][A-Za-z0-9_-]{0,63}))?[ \t]+(?P<query>.*?))(?P<trailing>[ \t]*)",
+        line,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        raise PortalError("A0_TAG_NOT_FOUND", "The focused line does not contain a valid @a0 request.")
+    query = str(match.group("query") or "").strip()
+    if not query:
+        raise PortalError("A0_TAG_EMPTY_QUERY", "A0 Tag requires a request after the tag.")
+    if len(query) > _TAG_QUERY_MAX_CHARS:
+        raise PortalError("A0_TAG_QUERY_TOO_LONG", "A0 Tag requests are limited to 2048 characters.")
+    profile = str(match.group("profile") or "")
+    if profile and not _TAG_PROFILE_RE.fullmatch(profile):
+        raise PortalError("A0_TAG_INVALID_PROFILE", "The A0 Tag profile key is invalid.")
+    original = str(match.group("tag") or "")
+    start = line_start + len(str(match.group("indent") or ""))
+    end = start + len(original)
+    focused_context = _atspi_text_range(
+        Atspi,
+        element,
+        max(0, start - _TAG_TEXT_WINDOW_CHARS),
+        min(character_count, end + _TAG_TEXT_WINDOW_CHARS),
+    )
+    return start, end, original, query, profile, focused_context
+
+
+def _replace_atspi_text(
+    Atspi: Any,
+    element: object,
+    *,
+    start: int,
+    end: int,
+    original: str,
+    replacement: str,
+) -> None:
+    original_count = _atspi_text_count(Atspi, element)
+    replacement_bytes = len(replacement.encode("utf-8"))
+    original_bytes = len(original.encode("utf-8"))
+    deleted = _atspi_interface_call(Atspi, "EditableText", "delete_text", element, start, end)
+    if deleted is False or deleted is None:
+        raise PortalError("A0_TAG_REPLACE_FAILED", "The focused field rejected range deletion.")
+    inserted = _atspi_interface_call(
+        Atspi,
+        "EditableText",
+        "insert_text",
+        element,
+        start,
+        replacement,
+        replacement_bytes,
+    )
+    if inserted is False or inserted is None:
+        _atspi_interface_call(
+            Atspi,
+            "EditableText",
+            "insert_text",
+            element,
+            start,
+            original,
+            original_bytes,
+        )
+        raise PortalError(
+            "A0_TAG_REPLACE_FAILED",
+            "The field rejected replacement; the original tag was restored where possible.",
+        )
+    actual = _atspi_text_range(Atspi, element, start, start + len(replacement))
+    inserted_count = _atspi_text_count(Atspi, element) - (original_count - (end - start))
+    if actual != replacement or inserted_count != len(replacement):
+        if 0 <= inserted_count <= _TAG_REPLACEMENT_MAX_CHARS:
+            _atspi_interface_call(
+                Atspi,
+                "EditableText",
+                "delete_text",
+                element,
+                start,
+                start + inserted_count,
+            )
+            _atspi_interface_call(
+                Atspi,
+                "EditableText",
+                "insert_text",
+                element,
+                start,
+                original,
+                original_bytes,
+            )
+        raise PortalError(
+            "A0_TAG_REPLACE_FAILED",
+            "The field changed the replacement; the original tag was restored where possible.",
+        )
 
 
 def _atspi_window_id(node: dict[str, Any], *, path: list[int]) -> str:
@@ -1078,12 +1321,16 @@ class PortalComputerUseHelper:
         self._screencast = dbus.Interface(portal, PORTAL_SCREENCAST_IFACE)
         self._session: PortalSession | None = None
         self._element_index_cache: dict[int, dict[str, Any]] = {}
+        self._tag_target: TagTarget | None = None
 
     def dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         handlers = {
             "start_session": self.start_session,
             "status": self.status,
             "capture": self.capture,
+            "tag_context": self.tag_context,
+            "tag_replace": self.tag_replace,
+            "tag_release": self.tag_release,
             "list_windows": self.list_windows,
             "get_window_state": self.get_window_state,
             "element_action": self.element_action,
@@ -1182,6 +1429,159 @@ class PortalComputerUseHelper:
         result["stream_id"] = session.stream_id
         result["session_id"] = session.session_id
         return result
+
+    def tag_context(self, params: dict[str, Any]) -> dict[str, Any]:
+        session = self._require_session(params)
+        Atspi = _load_atspi_module()
+        desktop = _atspi_desktop(Atspi)
+        focused = _atspi_find_focused(Atspi, desktop)
+        if focused is None:
+            raise PortalError("A0_TAG_FOCUS_UNAVAILABLE", "No accessible focused field was found.")
+        element, path = focused
+        role = _atspi_role(element).casefold()
+        states = set(_atspi_states(Atspi, element))
+        if "protected" in states or "password" in role:
+            raise PortalError("A0_TAG_PROTECTED_FIELD", "A0 Tag is unavailable in protected fields.")
+
+        start, end, original, query, profile, focused_context = _parse_tag_invocation(
+            Atspi,
+            element,
+        )
+        window_path = _atspi_window_path(Atspi, desktop, path)
+        window_element = _atspi_element_for_path(desktop, window_path)
+        if window_element is None:
+            raise PortalError("A0_TAG_WINDOW_UNAVAILABLE", "The active window is no longer available.")
+        if not _atspi_window_is_active(Atspi, desktop, window_path):
+            raise PortalError("A0_TAG_WINDOW_INACTIVE", "The tagged window is no longer active.")
+        window = _atspi_node_metadata(
+            Atspi,
+            window_element,
+            path=window_path,
+            session=session,
+        )
+        window_id = _atspi_window_id(window, path=window_path)
+        app_element = _atspi_element_for_path(desktop, path[:1]) if path else None
+        app_name = _atspi_name(app_element) if app_element is not None else "Linux app"
+        window_title = str(window.get("title") or window.get("name") or app_name or "Linux app")
+        budget: dict[str, Any] = {"count": 0, "max_nodes": 120, "truncated": False}
+        tree = _serialize_atspi_element(
+            Atspi,
+            window_element,
+            path=window_path,
+            session=session,
+            depth=0,
+            max_depth=5,
+            budget=budget,
+        ) or {}
+        editable = "editable" in states and (
+            callable(getattr(getattr(Atspi, "EditableText", None), "delete_text", None))
+            or callable(getattr(element, "delete_text", None))
+        )
+        target = TagTarget(
+            token=uuid.uuid4().hex,
+            path=list(path),
+            window_path=list(window_path),
+            window_id=window_id,
+            app_name=app_name or "Linux app",
+            window_title=window_title,
+            start=start,
+            end=end,
+            original=original,
+            editable=editable,
+            captured_at=time.time(),
+        )
+        self._tag_target = target
+
+        screenshot_status = "unavailable"
+        screenshot_error = (
+            "The Wayland compositor did not expose verified active-window bounds; "
+            "A0 Tag continued with text and accessibility context only."
+        )
+
+        return {
+            "session_id": session.session_id,
+            "context_id": session.context_id,
+            "target_token": target.token,
+            "tag_text": original,
+            "query": query,
+            "profile_override": profile,
+            "app_name": target.app_name,
+            "window_title": target.window_title,
+            "window_id": target.window_id,
+            "focused_text": focused_context,
+            "tree": tree,
+            "tree_truncated": bool(budget["truncated"]),
+            "replace_supported": editable,
+            "screenshot_status": screenshot_status,
+            **({"screenshot_error": screenshot_error} if screenshot_error else {}),
+        }
+
+    def tag_replace(self, params: dict[str, Any]) -> dict[str, Any]:
+        session = self._require_session(params)
+        token = str(params.get("target_token") or "").strip()
+        replacement = str(params.get("replacement") or "")
+        target = self._tag_target
+        if target is None or not token or token != target.token:
+            raise PortalError("A0_TAG_TARGET_EXPIRED", "The original A0 Tag field is no longer available.")
+        if time.time() - target.captured_at > _TAG_TARGET_TTL_SECONDS:
+            self._tag_target = None
+            raise PortalError("A0_TAG_TARGET_EXPIRED", "The original A0 Tag field expired.")
+        if not target.editable:
+            raise PortalError("A0_TAG_REPLACE_UNSUPPORTED", "The tagged field does not support safe replacement.")
+        if not replacement or len(replacement) > _TAG_REPLACEMENT_MAX_CHARS:
+            raise PortalError(
+                "A0_TAG_INVALID_REPLACEMENT",
+                "A0 Tag replacement must contain 1 to 16384 characters.",
+            )
+
+        Atspi = _load_atspi_module()
+        desktop = _atspi_desktop(Atspi)
+        focused = _atspi_find_focused(Atspi, desktop)
+        if focused is None or focused[1] != target.path:
+            raise PortalError("A0_TAG_TARGET_CHANGED", "The focused field changed while Agent Zero was working.")
+        element, _path = focused
+        if _atspi_window_path(Atspi, desktop, target.path) != target.window_path:
+            raise PortalError("A0_TAG_TARGET_CHANGED", "The active window changed while Agent Zero was working.")
+        window_element = _atspi_element_for_path(desktop, target.window_path)
+        if window_element is None or not _atspi_window_is_active(Atspi, desktop, target.window_path):
+            raise PortalError("A0_TAG_TARGET_CHANGED", "The active window changed while Agent Zero was working.")
+        window = _atspi_node_metadata(
+            Atspi,
+            window_element,
+            path=target.window_path,
+            session=session,
+        )
+        current_title = str(window.get("title") or window.get("name") or target.app_name or "Linux app")
+        if (
+            _atspi_window_id(window, path=target.window_path) != target.window_id
+            or current_title != target.window_title
+        ):
+            raise PortalError("A0_TAG_TARGET_CHANGED", "The active window changed while Agent Zero was working.")
+        current = _atspi_text_range(Atspi, element, target.start, target.end)
+        if current != target.original:
+            raise PortalError("A0_TAG_TARGET_CHANGED", "The original A0 Tag text changed while Agent Zero was working.")
+        _replace_atspi_text(
+            Atspi,
+            element,
+            start=target.start,
+            end=target.end,
+            original=target.original,
+            replacement=replacement,
+        )
+        self._tag_target = None
+        return {
+            "session_id": session.session_id,
+            "replaced": True,
+            "characters": len(replacement),
+        }
+
+    def tag_release(self, params: dict[str, Any]) -> dict[str, Any]:
+        self._require_session(params)
+        token = str(params.get("target_token") or "").strip()
+        released = self._tag_target is not None and token == self._tag_target.token
+        if released:
+            self._tag_target = None
+        return {"released": released}
 
     def list_windows(self, params: dict[str, Any]) -> dict[str, Any]:
         session = self._require_session(params)
@@ -2261,6 +2661,7 @@ class PortalComputerUseHelper:
             return
 
     def _close_session(self) -> None:
+        self._tag_target = None
         session = self._session
         self._session = None
         if session is None:

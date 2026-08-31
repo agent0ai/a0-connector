@@ -57,6 +57,7 @@ WAYLAND_BACKEND_SPEC = register_builtin_backend_spec(
             "accessibility-tree-snapshot",
             "accessibility-structural-targeting",
             "real-cursor-may-move",
+            "a0-tag",
         ),
         interpreter_strategy="system_python",
         helper_target=_HELPER_TARGET,

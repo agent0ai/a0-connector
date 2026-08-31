@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import mimetypes
 import os
 import re
 from dataclasses import dataclass
@@ -93,6 +94,24 @@ def create_image_file_upload(path: str | Path) -> AttachmentUpload:
         filename=_unique_upload_filename(source),
         content=source.read_bytes(),
         mime_type=mime_type,
+    )
+
+
+def create_file_upload(path: str | Path, *, max_bytes: int = 0) -> AttachmentUpload:
+    source = Path(path).expanduser()
+    if not source.is_file():
+        raise AttachmentError(f"File not found: {source}")
+
+    read_limit = max(0, int(max_bytes))
+    with source.open("rb") as stream:
+        content = stream.read(read_limit + 1 if read_limit else -1)
+    if read_limit and len(content) > read_limit:
+        raise AttachmentError(f"File is larger than {read_limit} bytes: {source}")
+
+    return AttachmentUpload(
+        filename=_unique_upload_filename(source),
+        content=content,
+        mime_type=mimetypes.guess_type(source.name)[0] or "application/octet-stream",
     )
 
 
@@ -236,8 +255,8 @@ def _sanitize_filename_stem(stem: str) -> str:
 
 
 def _unique_upload_filename(path: Path) -> str:
-    suffix = path.suffix.lower()
-    stem = _sanitize_filename_stem(path.stem)
+    suffix = path.suffix.lower()[:16]
+    stem = _sanitize_filename_stem(path.stem)[:180].rstrip("._-") or "file"
     return f"{stem}-{uuid.uuid4().hex}{suffix}"
 
 

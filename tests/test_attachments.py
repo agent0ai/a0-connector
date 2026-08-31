@@ -108,6 +108,30 @@ def test_create_image_file_upload_rejects_non_image(tmp_path: Path) -> None:
         raise AssertionError("Expected AttachmentError")
 
 
+def test_create_file_upload_preserves_bytes_and_detects_mime_type(tmp_path: Path) -> None:
+    source = tmp_path / "project notes.txt"
+    source.write_bytes(b"plain-text")
+
+    upload = attachments_mod.create_file_upload(source, max_bytes=32)
+
+    assert upload.filename.startswith("project-notes-")
+    assert upload.filename.endswith(".txt")
+    assert upload.mime_type == "text/plain"
+    assert upload.content == b"plain-text"
+
+
+def test_create_file_upload_enforces_read_limit(tmp_path: Path) -> None:
+    source = tmp_path / "large.bin"
+    source.write_bytes(b"12345")
+
+    try:
+        attachments_mod.create_file_upload(source, max_bytes=4)
+    except attachments_mod.AttachmentError as exc:
+        assert "larger than 4 bytes" in str(exc)
+    else:
+        raise AssertionError("Expected AttachmentError")
+
+
 def test_remote_upload_path_normalizes_server_filename() -> None:
     assert (
         attachments_mod.remote_upload_path("nested\\server-image.png")

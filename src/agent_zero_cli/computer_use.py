@@ -71,6 +71,7 @@ _MUTATING_ACTIONS = {
     "element_action",
     "ax_action",
     "uia_action",
+    "tag_replace",
 }
 _SUPPORTED_DISPATCH_MODES = {"background", "foreground", "auto"}
 _DEFAULT_FRESH_CAPTURE_TIMEOUT_SECONDS = 0.45
@@ -470,6 +471,10 @@ class ComputerUseManager:
     def status_detail(self) -> str:
         return self.last_error
 
+    @property
+    def launcher_tag_supported(self) -> bool:
+        return "a0-tag" in set(self._backend_metadata.get("features") or [])
+
     def hello_metadata(self) -> dict[str, Any]:
         metadata = {
             "supported": self.supported,
@@ -631,6 +636,65 @@ class ComputerUseManager:
 
     async def disconnect(self) -> None:
         await self.close()
+
+    async def tag_context(self) -> dict[str, Any]:
+        response = await self._tag_action("tag_context")
+        if not bool(response.get("ok")):
+            session = self._sessions.get("launcher-tag")
+            if session is not None:
+                with contextlib.suppress(Exception):
+                    await self._stop_session(f"tag-{uuid.uuid4().hex}", session)
+        return response
+
+    async def tag_replace(self, target_token: str, replacement: str) -> dict[str, Any]:
+        return await self._tag_action(
+            "tag_replace",
+            target_token=str(target_token or "").strip(),
+            replacement=str(replacement or ""),
+        )
+
+    async def tag_release(self, target_token: str) -> dict[str, Any]:
+        context_id = "launcher-tag"
+        session = self._sessions.get(context_id)
+        if session is None or not session.active or not session.session_id:
+            return self._success(f"tag-{uuid.uuid4().hex}", {"released": False})
+        try:
+            return await self._dispatch_session_action(
+                f"tag-{uuid.uuid4().hex}",
+                session,
+                {
+                    "action": "tag_release",
+                    "context_id": context_id,
+                    "target_token": str(target_token or "").strip(),
+                },
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                await self._stop_session(f"tag-{uuid.uuid4().hex}", session)
+
+    async def _tag_action(self, action: str, **payload: Any) -> dict[str, Any]:
+        op_id = f"tag-{uuid.uuid4().hex}"
+        if not self.launcher_tag_supported:
+            return self._error(
+                op_id,
+                _UNSUPPORTED_ERROR,
+                message="A0 Tag is not supported by this Computer Use backend.",
+            )
+        if not self.supported:
+            return self._error(op_id, _UNSUPPORTED_ERROR)
+        if not self.enabled:
+            return self._error(op_id, _DISABLED_ERROR)
+        context_id = "launcher-tag"
+        session = self._sessions.setdefault(context_id, _HelperSession(context_id=context_id))
+        if not session.active or not session.session_id:
+            started = await self._start_session(op_id, session)
+            if not bool(started.get("ok")):
+                return started
+        return await self._dispatch_session_action(
+            op_id,
+            session,
+            {"action": action, "context_id": context_id, **payload},
+        )
 
     async def rearm(self, context_id: str | None = None) -> dict[str, Any]:
         """Prompt the user once and keep the resulting approved session attached."""
@@ -1563,7 +1627,7 @@ class ComputerUseManager:
                     result_dict.pop("host_path", None)
                     result_dict.pop("container_path", None)
                     self._prune_capture_artifacts()
-            if _coerce_bool(helper_request.get("fresh")):
+            if action_name == "capture" and _coerce_bool(helper_request.get("fresh")):
                 result_dict.setdefault("fresh", True)
                 fresh_after = helper_request.get("fresh_after")
                 if fresh_after is not None:
