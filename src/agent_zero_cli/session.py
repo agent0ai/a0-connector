@@ -169,6 +169,7 @@ class ConnectorSession:
         context_id: str = "",
         chat_last: bool = False,
         new_chat: bool = False,
+        new_chat_agent_profile: str = "",
         restore_session: bool = True,
     ) -> str:
         await self._reset_runtime()
@@ -257,6 +258,7 @@ class ConnectorSession:
                 requested_context_id=context_id,
                 chat_last=chat_last,
                 new_chat=new_chat,
+                new_chat_agent_profile=new_chat_agent_profile,
             )
             self.context_id = resolved_context_id
             self.context_has_messages = has_messages_hint
@@ -596,10 +598,13 @@ class ConnectorSession:
         requested_context_id: str,
         chat_last: bool,
         new_chat: bool,
+        new_chat_agent_profile: str = "",
     ) -> tuple[str, bool]:
         client = self._require_client()
         if new_chat:
-            return await client.create_chat(), False
+            return await client.create_chat(
+                agent_profile=str(new_chat_agent_profile or "").strip() or None,
+            ), False
 
         default_context_id = str(requested_context_id or "").strip()
         if not default_context_id and not chat_last:

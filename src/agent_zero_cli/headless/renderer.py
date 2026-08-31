@@ -12,6 +12,15 @@ class HeadlessRenderer(Protocol):
     def render_event(self, event: dict[str, Any]) -> list[str]: ...
     def render_snapshot(self, events: list[dict[str, Any]], queue: list[dict[str, Any]]) -> list[str]: ...
     def render_complete(self, context_id: str) -> list[str]: ...
+    def render_tag_result(
+        self,
+        context_id: str,
+        *,
+        mode: str,
+        text: str,
+        valid: bool,
+        error: str = "",
+    ) -> list[str]: ...
     def render_error(self, code: str, message: str) -> list[str]: ...
     def render_notice(self, message: str, *, error: bool = False) -> list[str]: ...
 
@@ -87,6 +96,18 @@ class TextRenderer:
         self._last_status = None
         return []
 
+    def render_tag_result(
+        self,
+        context_id: str,
+        *,
+        mode: str,
+        text: str,
+        valid: bool,
+        error: str = "",
+    ) -> list[str]:
+        del context_id, mode, valid, error
+        return [text] if text else []
+
     def render_error(self, code: str, message: str) -> list[str]:
         return [self._style(f"{code}: {message}", "red")]
 
@@ -139,6 +160,26 @@ class JsonlRenderer:
 
     def render_complete(self, context_id: str) -> list[str]:
         return [_json_line({"type": "complete", "context_id": context_id})]
+
+    def render_tag_result(
+        self,
+        context_id: str,
+        *,
+        mode: str,
+        text: str,
+        valid: bool,
+        error: str = "",
+    ) -> list[str]:
+        payload: dict[str, Any] = {
+            "type": "tag_result",
+            "context_id": context_id,
+            "mode": mode,
+            "text": text,
+            "valid": valid,
+        }
+        if error:
+            payload["error"] = error
+        return [_json_line(payload)]
 
     def render_error(self, code: str, message: str) -> list[str]:
         return [_json_line({"type": "error", "code": code, "message": message})]

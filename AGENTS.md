@@ -33,6 +33,12 @@
 - Launcher direct-connect path is `a0 --host <local-url> --no-docker-discovery --connect`; `--host` selects the target URL, `--no-docker-discovery` skips Docker discovery, and `--connect` connects immediately instead of opening the host picker.
 - Run the plain stdin/stdout connector with `a0 headless`; use
   `a0 headless --print` for one-shot pipe-friendly runs.
+- Launcher-owned A0 Tag requests use the capability-silent
+  `a0 headless --launcher-tag --new-chat --output jsonl --print` path with an
+  explicit agent profile and optional existing `/a0/usr/uploads/` attachment
+  references. The prompt remains on stdin, the tagged client advertises no host
+  tools of its own, and its final replace/action marker becomes one normalized
+  `tag_result` JSONL record before `complete`.
 - Active TUI and headless terminal sessions emit one ready-for-input notification
   per completed run by default. `A0_TERMINAL_NOTIFY=0` disables it; headless
   writes notification bytes only to terminal stderr so stdout stays pipe-safe.

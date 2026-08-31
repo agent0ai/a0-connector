@@ -70,6 +70,7 @@ class FakeClient:
         self.unsubscribe_calls: list[str] = []
         self.remote_tree_updates: list[dict[str, Any]] = []
         self.create_calls = 0
+        self.create_profiles: list[str | None] = []
         self.sent_messages: list[tuple[str, str, list[str] | None]] = []
         self.queued_messages: list[tuple[str, str, list[str] | None]] = []
         self.queue_send_calls: list[tuple[str, str | None, bool]] = []
@@ -118,9 +119,16 @@ class FakeClient:
         self.hello_calls.append(payload)
         return {"exec_config": {"version": 1}}
 
-    async def create_chat(self, *, current_context_id: str | None = None) -> str:
-        del current_context_id
+    async def create_chat(
+        self,
+        *,
+        current_context_id: str | None = None,
+        agent_profile: str | None = None,
+        project_name: str | None = None,
+    ) -> str:
+        del current_context_id, project_name
         self.create_calls += 1
+        self.create_profiles.append(agent_profile)
         return self.create_chat_id
 
     async def list_chats(self) -> list[dict[str, Any]]:
@@ -241,6 +249,28 @@ async def test_session_connects_and_advertises_headless_metadata(tmp_path: Path)
     }
     assert client.hello_calls[-1]["remote_exec"] == {"enabled": True}
 
+    await session.close()
+
+
+async def test_new_chat_uses_requested_agent_profile(tmp_path: Path) -> None:
+    session = ConnectorSession(
+        CLIConfig(),
+        Observer(),
+        workspace=tmp_path,
+        client_factory=FakeClient,
+        remember_context=False,
+    )
+
+    context_id = await session.connect(
+        "http://agent.test",
+        new_chat=True,
+        new_chat_agent_profile="developer",
+    )
+
+    client = FakeClient.instances[-1]
+    assert context_id == "ctx-created"
+    assert client.create_profiles == ["developer"]
+    assert client.subscribe_calls == [("ctx-created", 0)]
     await session.close()
 
 

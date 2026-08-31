@@ -170,6 +170,58 @@ def test_main_headless_routes_to_headless_launcher(
             "print_prompt": "what is 2+2",
             "workspace": "/tmp/work",
             "discover_instances": False,
+            "launcher_tag": False,
+            "agent_profile": "",
+            "attachment_refs": [],
+        }
+    ]
+
+
+def test_main_launcher_tag_routes_safe_headless_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launched: list[dict[str, object]] = []
+    monkeypatch.setattr(__main__, "_run_headless", lambda **kwargs: launched.append(dict(kwargs)) or 0)
+
+    exit_code = __main__.main(
+        [
+            "headless",
+            "--host",
+            "http://agent.test:32080",
+            "--new-chat",
+            "--output",
+            "jsonl",
+            "--print",
+            "--workspace",
+            "/tmp/work",
+            "--no-docker-discovery",
+            "--launcher-tag",
+            "--agent-profile",
+            "developer",
+            "--attachment-ref",
+            "/a0/usr/uploads/a0-tag-window.png",
+            "--attachment-ref",
+            "/a0/usr/uploads/brief.pdf",
+        ]
+    )
+
+    assert exit_code == 0
+    assert launched == [
+        {
+            "host": "http://agent.test:32080",
+            "chat": "",
+            "chat_last": False,
+            "new_chat": True,
+            "output": "jsonl",
+            "print_prompt": "",
+            "workspace": "/tmp/work",
+            "discover_instances": False,
+            "launcher_tag": True,
+            "agent_profile": "developer",
+            "attachment_refs": [
+                "/a0/usr/uploads/a0-tag-window.png",
+                "/a0/usr/uploads/brief.pdf",
+            ],
         }
     ]
 

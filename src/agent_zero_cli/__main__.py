@@ -123,6 +123,25 @@ def _build_parser() -> argparse.ArgumentParser:
         default=".",
         help="Local workspace root for remote file and exec operations.",
     )
+    headless.add_argument(
+        "--launcher-tag",
+        action="store_true",
+        help="Run one Launcher-owned A0 Tag request without exposing local host tools.",
+    )
+    headless.add_argument(
+        "--agent-profile",
+        default="",
+        metavar="KEY",
+        help="Agent profile for a new Launcher-tag chat.",
+    )
+    headless.add_argument(
+        "--attachment-ref",
+        dest="attachment_refs",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Existing Agent Zero upload reference attached to a Launcher-tag request; repeat for more.",
+    )
     acp = subparsers.add_parser(
         "acp",
         help="Run an Agent Client Protocol stdio server through Agent Zero.",
@@ -217,6 +236,9 @@ def _run_headless(
     print_prompt: str | None = None,
     workspace: str = ".",
     discover_instances: bool = True,
+    launcher_tag: bool = False,
+    agent_profile: str = "",
+    attachment_refs: Sequence[str] = (),
 ) -> int:
     from agent_zero_cli.config import load_config
     from agent_zero_cli.headless.runner import HeadlessOptions, run_headless
@@ -239,6 +261,9 @@ def _run_headless(
             print_prompt=print_prompt,
             workspace=Path(workspace),
             discover_instances=discover_instances,
+            launcher_tag=launcher_tag,
+            agent_profile=agent_profile,
+            attachment_refs=list(attachment_refs),
             config=config,
         )
     )
@@ -317,6 +342,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print_prompt=args.print_prompt,
             workspace=args.workspace,
             discover_instances=not args.headless_no_docker_discovery,
+            launcher_tag=bool(args.launcher_tag),
+            agent_profile=args.agent_profile,
+            attachment_refs=args.attachment_refs,
         )
 
     if args.command == "gateway":

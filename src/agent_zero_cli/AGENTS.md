@@ -20,6 +20,14 @@
 - Refresh the active chat tab metadata after context completion so server-side automatic chat renames become visible in the TUI.
 - Completed TUI runs show a muted elapsed-time line immediately above the final response; the goal bar uses the same hour-aware duration format.
 - Active TUI and headless runs emit one terminal-native ready-for-input notification by default. `A0_TERMINAL_NOTIFY=0` disables it; non-TTY and browser output stay silent, headless writes only to terminal stderr after final output settles, and ACP/gateway stdout contracts remain untouched.
+- Launcher-tag headless mode is a strict one-shot/new-chat/JSONL contract. It
+  creates the requested agent profile, accepts only bounded validated existing
+  Agent Zero upload references, does not remember the chat, emits no raw context
+  events, suppresses terminal notifications, and advertises local file, exec,
+  Browser, and Computer Use capabilities as disabled so the existing Launcher
+  gateway remains the only Host access provider. Its first-line
+  `<!--a0-tag:v1;mode=replace|action-->` marker is stripped into one bounded
+  `tag_result`; malformed or empty results use overlay-safe invalid metadata.
 - `/clear` and F5 clear the visible conversation without resetting the current context; keep the initial Core greeting and Agent Zero banner visible.
 - Model switcher state must use the backend's effective preset for display and identify the configured settings preset when clearing a chat override. The runtime editor updates the global `Default` preset, preserves untouched Utility and Embedding selections, and clears the active chat override after saving.
 - `/computer-use on` is a human approval command. It must force `ComputerUseManager.rearm()` immediately instead of silently validating a saved restore token first.

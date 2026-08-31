@@ -6,9 +6,10 @@ from dataclasses import dataclass, field
 import getpass
 import json
 import os
+import re
 import signal
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TextIO
 
 from agent_zero_cli.client import DEFAULT_HOST
@@ -29,6 +30,69 @@ EXIT_ERROR = 1
 EXIT_CONNECT_OR_AUTH = 2
 _COMPLETION_SETTLE_SECONDS = 0.2
 _COMPLETION_SNAPSHOT_TIMEOUT_SECONDS = 1.0
+_TAG_PROFILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_TAG_RESULT_PREFIX = "<!--a0-tag:v1;mode="
+_TAG_RESULT_MARKERS = {
+    "replace": "<!--a0-tag:v1;mode=replace-->",
+    "action": "<!--a0-tag:v1;mode=action-->",
+}
+_TAG_UPLOAD_ROOT = PurePosixPath("/a0/usr/uploads")
+
+
+def parse_launcher_tag_result(value: str) -> tuple[str, str, bool, str]:
+    text = str(value or "")
+    lines = text.splitlines(keepends=True)
+    first = lines[0].rstrip("\r\n") if lines else ""
+    matches = [mode for mode, marker in _TAG_RESULT_MARKERS.items() if first == marker]
+    if len(matches) != 1 or text.count(_TAG_RESULT_PREFIX) != 1:
+        return "overlay", text.strip(), False, "INVALID_TAG_RESULT"
+    body = "".join(lines[1:])
+    if not body.strip():
+        return "overlay", "", False, "EMPTY_TAG_RESULT"
+    return matches[0], body, True, ""
+
+
+def normalize_launcher_tag_attachment_ref(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    path = PurePosixPath(raw)
+    name = path.name
+    if (
+        path.parent != _TAG_UPLOAD_ROOT
+        or not name
+        or name in {".", ".."}
+        or len(name) > 255
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name)
+    ):
+        raise SessionError(
+            "INVALID_ATTACHMENT_REF",
+            "Launcher-tag attachment must be one Agent Zero upload reference.",
+            stage="options",
+            exit_code=1,
+        )
+    return str(path)
+
+
+def normalize_launcher_tag_attachment_refs(values: object) -> list[str]:
+    if values is None:
+        return []
+    source = values if isinstance(values, (list, tuple)) else [values]
+    if len(source) > 129:
+        raise SessionError(
+            "INVALID_ATTACHMENT_REF",
+            "Launcher-tag accepts at most 129 Agent Zero upload references.",
+            stage="options",
+            exit_code=1,
+        )
+    refs: list[str] = []
+    seen: set[str] = set()
+    for value in source:
+        ref = normalize_launcher_tag_attachment_ref(str(value or ""))
+        if ref and ref not in seen:
+            refs.append(ref)
+            seen.add(ref)
+    return refs
 
 
 @dataclass
@@ -41,6 +105,9 @@ class HeadlessOptions:
     print_prompt: str | None = None
     workspace: Path = field(default_factory=Path.cwd)
     discover_instances: bool = True
+    launcher_tag: bool = False
+    agent_profile: str = ""
+    attachment_refs: list[str] = field(default_factory=list)
     config: CLIConfig | None = None
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
     stdout: TextIO = field(default_factory=lambda: sys.stdout)
@@ -67,17 +134,29 @@ class HeadlessRunner:
         self._deferred_complete_context_id = ""
         self._snapshot_event = asyncio.Event()
         self._event_fingerprints: dict[tuple[str, int, str], str] = {}
+        self._tag_response_text = ""
+        self._tag_response_sequence = -1
+        self._tag_attachment_sent = False
 
     async def run(self) -> int:
         self._install_signal_handlers()
         try:
+            self._validate_options()
             host = await self._resolve_host()
+            session_options: dict[str, object] = {
+                "workspace": self.options.workspace,
+                "remote_file_write_enabled": not self.options.launcher_tag,
+                "remote_exec_enabled": not self.options.launcher_tag,
+            }
+            if self.options.launcher_tag:
+                session_options.update(
+                    remote_files_enabled=False,
+                    remember_context=False,
+                )
             self.session = ConnectorSession(
                 self.config,
                 self,
-                workspace=self.options.workspace,
-                remote_file_write_enabled=True,
-                remote_exec_enabled=True,
+                **session_options,
             )
             connected = await self._connect_with_auth_retry(host)
             if not connected:
@@ -105,11 +184,17 @@ class HeadlessRunner:
     def on_event(self, event: dict) -> None:
         self._sigint_count = 0
         self._remember_event(event)
+        self._remember_tag_response(event)
+        if self.options.launcher_tag:
+            return
         self._write_lines(self.renderer.render_event(event))
 
     def on_snapshot(self, events: list[dict], queue: list[dict]) -> None:
         changed_events = [event for event in events if self._snapshot_event_changed(event)]
-        self._write_lines(self.renderer.render_snapshot(changed_events, queue))
+        for event in changed_events:
+            self._remember_tag_response(event)
+        if not self.options.launcher_tag:
+            self._write_lines(self.renderer.render_snapshot(changed_events, queue))
         self._snapshot_event.set()
 
     def on_complete(self, context_id: str) -> None:
@@ -121,6 +206,7 @@ class HeadlessRunner:
             self._complete_event.set()
             return
         self._complete_event.set()
+        self._render_tag_result(context_id)
         self._write_lines(self.renderer.render_complete(context_id))
         self._notify_terminal_completion()
         if self._stdin_isatty() and self._waiting_for_line and not self._stop_event.is_set():
@@ -150,6 +236,9 @@ class HeadlessRunner:
                     context_id=self.options.chat,
                     chat_last=self.options.chat_last,
                     new_chat=self.options.new_chat,
+                    new_chat_agent_profile=(
+                        self.options.agent_profile if self.options.launcher_tag else ""
+                    ),
                     restore_session=True,
                 )
                 return True
@@ -222,7 +311,15 @@ class HeadlessRunner:
         self._deferred_complete_context_id = ""
         self._defer_complete_render = defer_completion
         try:
-            await self._require_session().send_message(text)
+            attachments: list[str] | None = None
+            if (
+                self.options.launcher_tag
+                and self.options.attachment_refs
+                and not self._tag_attachment_sent
+            ):
+                attachments = list(self.options.attachment_refs)
+                self._tag_attachment_sent = True
+            await self._require_session().send_message(text, attachments=attachments)
         except Exception as exc:
             self._defer_complete_render = False
             self._write_error("SEND_FAILED", str(exc))
@@ -271,12 +368,15 @@ class HeadlessRunner:
         self._defer_complete_render = False
         if not context_id:
             return
+        self._render_tag_result(context_id)
         self._write_lines(self.renderer.render_complete(context_id))
         self._notify_terminal_completion()
         if self._stdin_isatty() and self._waiting_for_line and not self._stop_event.is_set():
             self._prompt()
 
     def _notify_terminal_completion(self) -> None:
+        if self.options.launcher_tag:
+            return
         sequence = completion_notification_sequence(is_tty=self._stderr_isatty())
         if not sequence:
             return
@@ -301,6 +401,66 @@ class HeadlessRunner:
         if key is None:
             return
         self._event_fingerprints[key] = self._event_fingerprint(event)
+
+    def _remember_tag_response(self, event: dict) -> None:
+        if (
+            not self.options.launcher_tag
+            or str(event.get("event") or "") != "assistant_message"
+        ):
+            return
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        text = data.get("text")
+        if not isinstance(text, str) or not text:
+            return
+        try:
+            sequence = int(event.get("sequence"))
+        except (TypeError, ValueError):
+            sequence = self._tag_response_sequence
+        if sequence < self._tag_response_sequence:
+            return
+        self._tag_response_sequence = sequence
+        self._tag_response_text = text
+
+    def _render_tag_result(self, context_id: str) -> None:
+        if not self.options.launcher_tag:
+            return
+        mode, text, valid, error = parse_launcher_tag_result(self._tag_response_text)
+        self._write_lines(
+            self.renderer.render_tag_result(
+                context_id,
+                mode=mode,
+                text=text,
+                valid=valid,
+                error=error,
+            )
+        )
+
+    def _validate_options(self) -> None:
+        if not self.options.launcher_tag:
+            return
+        profile = str(self.options.agent_profile or "").strip()
+        if (
+            not self.options.new_chat
+            or self.options.output != "jsonl"
+            or self.options.print_prompt is None
+        ):
+            raise SessionError(
+                "INVALID_TAG_MODE",
+                "--launcher-tag requires --new-chat --output jsonl --print.",
+                stage="options",
+                exit_code=1,
+            )
+        if not _TAG_PROFILE_RE.fullmatch(profile):
+            raise SessionError(
+                "INVALID_AGENT_PROFILE",
+                "--agent-profile must be a non-empty Agent Zero profile key.",
+                stage="options",
+                exit_code=1,
+            )
+        self.options.agent_profile = profile
+        self.options.attachment_refs = normalize_launcher_tag_attachment_refs(
+            self.options.attachment_refs
+        )
 
     def _event_key(self, event: dict) -> tuple[str, int, str] | None:
         try:
