@@ -1026,6 +1026,8 @@ def test_browser_runtime_endpoint_updates_browser_plugin_config() -> None:
                 "proxy_bypass": "",
                 "proxy_username": "",
                 "proxy_password": "",
+                "keyboard_layout": "",
+                "keyboard_variant": "",
                 "model_preset": "Research",
             },
         )

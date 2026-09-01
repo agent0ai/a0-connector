@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from codecs import getincrementaldecoder
+import sys
 
 import pytest
 
 from agent_zero_cli import textual_compat
+
+
+pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux Textual driver")
 
 
 def test_textual_linux_input_guard_replaces_invalid_utf8_bytes(monkeypatch) -> None:

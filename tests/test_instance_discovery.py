@@ -83,7 +83,7 @@ def test_docker_socket_paths_include_colima_context_profile(
     context_socket.parent.mkdir(parents=True)
     context_socket.write_text("", encoding="utf-8")
 
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(discovery.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(discovery, "_socket_path_exists", lambda path: str(path) == str(context_socket))
 
     assert discovery._docker_socket_paths() == (str(context_socket),)
