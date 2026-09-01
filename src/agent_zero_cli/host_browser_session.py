@@ -465,13 +465,15 @@ class HostBrowserSession:
             raise ValueError("multi requires a non-empty calls list")
         return await self.multi(calls)
 
+    async def is_started(self) -> bool:
+        return await self._runtime.is_started(self)
+
     async def ensure_started(self) -> None:
-        runtime = self._runtime
-        if await runtime.is_started(self):
+        if await self.is_started():
             return
         async with self._start_lock:
             runtime = self._runtime
-            if await runtime.is_started(self):
+            if await self.is_started():
                 return
             if self.context is not None:
                 await runtime.close_runtime(self)

@@ -41,6 +41,7 @@ _URL_SCHEME_RE = re.compile(r"^[a-z][a-z\d+\-.]*:", re.I)
 _SAFE_CONTEXT_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SUPPORTED_ACTIONS = {
     "open",
+    "open_remote_debugging",
     "list",
     "state",
     "set_active",

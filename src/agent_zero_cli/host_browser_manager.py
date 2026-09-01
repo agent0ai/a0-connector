@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import importlib.util
 from pathlib import Path
+import platform
+import subprocess
 import sys
 from typing import Any, Awaitable, Callable
 
@@ -41,6 +43,13 @@ from agent_zero_cli.host_browser_common import (
     _trim_install_output,
 )
 from agent_zero_cli.host_browser_session import HostBrowserSession, ProfileLockedError
+
+
+_REMOTE_DEBUGGING_SETUP = {
+    "chrome": ("chrome://inspect/#remote-debugging", {"chrome"}),
+    "opera": ("opera://inspect/#remote-debugging", {"opera"}),
+    "edge": ("edge://inspect/#remote-debugging", {"edge", "edge-dev"}),
+}
 
 
 def normalize_host_browser_profile_mode(value: object, *, default: str = "") -> str:
@@ -513,7 +522,7 @@ class HostBrowserManager:
         if support_reason:
             raise RuntimeError(support_reason)
         lock = profile_lock_state_for_profile(profile)
-        active_context = self._active_context_for_profile(profile)
+        active_context = await self._live_context_for_profile(profile)
         if active_context:
             self.set_enabled(True)
             return self.status_snapshot(
@@ -570,6 +579,8 @@ class HostBrowserManager:
             )
             snapshot["context_id"] = context_id
             return self._success(op_id, snapshot)
+        if action == "open_remote_debugging":
+            return self._open_remote_debugging(op_id, payload.get("browser_family"))
         if not self.enabled:
             return self._error(op_id, "HOST_BROWSER_DISABLED", "Host browser is disabled in the A0 CLI.")
         try:
@@ -622,7 +633,7 @@ class HostBrowserManager:
             return self._error(op_id, "HOST_BROWSER_NO_PROFILE", "No supported host browser was found.")
 
         lock = profile_lock_state_for_profile(profile)
-        active_context = self._active_context_for_profile(profile)
+        active_context = await self._live_context_for_profile(profile)
         if (
             profile.is_safari
             and active_context
@@ -675,6 +686,52 @@ class HostBrowserManager:
             return self._error(op_id, "HOST_BROWSER_ERROR", str(exc))
         return self._success(op_id, result)
 
+    def _open_remote_debugging(self, op_id: str, browser_family: object) -> dict[str, Any]:
+        family = str(browser_family or "").strip().lower()
+        setup = _REMOTE_DEBUGGING_SETUP.get(family)
+        if setup is None:
+            return self._error(
+                op_id,
+                "HOST_BROWSER_SETUP_UNSUPPORTED",
+                "Remote-debugging setup can open only Chrome, Opera, or Edge.",
+            )
+        url, candidate_families = setup
+        candidate = next(
+            (
+                item
+                for item in self._candidate_provider()
+                if item.family in candidate_families and item.executable_path
+            ),
+            None,
+        )
+        if candidate is None:
+            return self._error(
+                op_id,
+                "HOST_BROWSER_NOT_FOUND",
+                f"{family.title()} is not installed on the connected A0 CLI host.",
+            )
+        try:
+            command = [candidate.executable_path, url]
+            if platform.system() == "Darwin":
+                command = ["/usr/bin/open", "-a", candidate.label, url]
+            subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            self.last_error = str(exc)
+            return self._error(op_id, "HOST_BROWSER_SETUP_ERROR", str(exc))
+        return self._success(
+            op_id,
+            {
+                "browser_family": family,
+                "browser_label": candidate.label,
+                "url": url,
+            },
+        )
+
     async def _session(self, context_id: str, *, profile: BrowserProfile) -> HostBrowserSession:
         session = self._sessions.get(context_id)
         if session is not None and session.profile != profile:
@@ -725,6 +782,18 @@ class HostBrowserManager:
         for context_id, session in self._sessions.items():
             if session.profile == profile and session.context is not None:
                 return context_id
+        return ""
+
+    async def _live_context_for_profile(self, profile: BrowserProfile) -> str:
+        context_id = self._active_context_for_profile(profile)
+        if not context_id or not profile.is_safari:
+            return context_id
+        session = self._sessions[context_id]
+        if await session.is_started():
+            return context_id
+        await session.close()
+        if self._sessions.get(context_id) is session:
+            self._sessions.pop(context_id, None)
         return ""
 
     def _active_profile(self) -> BrowserProfile | None:

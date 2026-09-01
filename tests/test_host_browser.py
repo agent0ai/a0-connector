@@ -426,6 +426,90 @@ async def test_safari_session_restarts_after_driver_or_session_exits(
     await session.close()
 
 
+async def test_safari_manager_releases_stale_session_for_new_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import agent_zero_cli.host_browser_session as host_browser_session_module
+
+    instances = []
+
+    class FakeProcess:
+        returncode: int | None = None
+
+    class FakeSafariContext(FakeContext):
+        async def discover_pages(self) -> list[FakePage]:
+            return []
+
+    class FakeSafariDriver:
+        def __init__(self) -> None:
+            self.process = FakeProcess()
+            self.context = FakeSafariContext()
+            self.closed = False
+            self.session_active = True
+            instances.append(self)
+
+        async def start(self) -> FakeSafariContext:
+            return self.context
+
+        async def session_request(self, *_: object) -> list[str]:
+            if not self.session_active:
+                raise host_browser_safari.SafariDriverError("invalid session id")
+            return []
+
+        async def close(self) -> None:
+            self.closed = True
+
+    executable = tmp_path / "Safari"
+    driver = tmp_path / "safaridriver"
+    executable.touch()
+    driver.touch()
+    monkeypatch.setattr(host_browser_manager_module.sys, "platform", "darwin")
+    monkeypatch.setattr(host_browser_manager_module, "SAFARI_DRIVER_PATH", driver)
+    monkeypatch.setattr(host_browser_session_module, "SafariDriver", FakeSafariDriver)
+    manager = HostBrowserManager(
+        CLIConfig(host_browser_enabled=True),
+        candidate_provider=lambda: [
+            BrowserCandidate("safari", "Safari", str(executable), Path())
+        ],
+        playwright_available=False,
+    )
+
+    first = await manager.handle_op(
+        {
+            "op_id": "op-safari-first",
+            "context_id": "ctx-safari-first",
+            "action": "list",
+            "browser_selection": "safari",
+        }
+    )
+    instances[0].session_active = False
+    second = await manager.handle_op(
+        {
+            "op_id": "op-safari-second",
+            "context_id": "ctx-safari-second",
+            "action": "list",
+            "browser_selection": "safari",
+        }
+    )
+    third = await manager.handle_op(
+        {
+            "op_id": "op-safari-third",
+            "context_id": "ctx-safari-third",
+            "action": "list",
+            "browser_selection": "safari",
+        }
+    )
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert third["code"] == "HOST_BROWSER_CONTEXT_ACTIVE"
+    assert instances[0].closed is True
+    assert len(instances) == 2
+    assert set(manager._sessions) == {"ctx-safari-second"}
+    await manager.close()
+
+
 def test_safari_permission_error_names_the_current_settings_path() -> None:
     message = host_browser_safari._friendly_driver_error(
         "Remote automation is not enabled."
@@ -1848,6 +1932,109 @@ async def test_host_browser_session_stops_playwright_after_launch_failure(tmp_pa
     assert playwright.stopped is True
     assert session.playwright is None
     assert session.context is None
+
+
+@pytest.mark.parametrize(
+    ("family", "expected_url"),
+    [
+        ("chrome", "chrome://inspect/#remote-debugging"),
+        ("opera", "opera://inspect/#remote-debugging"),
+        ("edge", "edge://inspect/#remote-debugging"),
+    ],
+)
+async def test_host_browser_opens_allowlisted_remote_debugging_page_while_disabled(
+    family: str,
+    expected_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    launched: list[list[str]] = []
+    monkeypatch.setattr(host_browser_manager_module.platform, "system", lambda: "Linux")
+    candidates = [
+        BrowserCandidate(name, name.title(), str(tmp_path / name), tmp_path / name)
+        for name in ("chrome", "opera", "edge")
+    ]
+    monkeypatch.setattr(
+        host_browser_manager_module.subprocess,
+        "Popen",
+        lambda command, **_kwargs: launched.append(command),
+    )
+    manager = HostBrowserManager(
+        CLIConfig(host_browser_enabled=False),
+        candidate_provider=lambda: candidates,
+        playwright_available=True,
+    )
+
+    result = await manager.handle_op(
+        {
+            "op_id": f"open-{family}-setup",
+            "action": "open_remote_debugging",
+            "browser_family": family,
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["url"] == expected_url
+    assert launched == [[str(tmp_path / family), expected_url]]
+
+
+async def test_host_browser_uses_macos_open_for_internal_setup_urls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    launched: list[list[str]] = []
+    monkeypatch.setattr(host_browser_manager_module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        host_browser_manager_module.subprocess,
+        "Popen",
+        lambda command, **_kwargs: launched.append(command),
+    )
+    manager = HostBrowserManager(
+        CLIConfig(host_browser_enabled=False),
+        candidate_provider=lambda: [
+            BrowserCandidate("chrome", "Google Chrome", str(tmp_path / "chrome"), tmp_path)
+        ],
+        playwright_available=True,
+    )
+
+    result = await manager.handle_op(
+        {
+            "op_id": "open-chrome-setup-macos",
+            "action": "open_remote_debugging",
+            "browser_family": "chrome",
+        }
+    )
+
+    assert result["ok"] is True
+    assert launched == [
+        [
+            "/usr/bin/open",
+            "-a",
+            "Google Chrome",
+            "chrome://inspect/#remote-debugging",
+        ]
+    ]
+
+
+async def test_host_browser_rejects_arbitrary_remote_debugging_target(tmp_path: Path) -> None:
+    manager = HostBrowserManager(
+        CLIConfig(host_browser_enabled=False),
+        candidate_provider=lambda: [
+            BrowserCandidate("chrome", "Google Chrome", str(tmp_path / "chrome"), tmp_path)
+        ],
+        playwright_available=True,
+    )
+
+    result = await manager.handle_op(
+        {
+            "op_id": "open-arbitrary-setup",
+            "action": "open_remote_debugging",
+            "browser_family": "chrome --arbitrary-flag",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["code"] == "HOST_BROWSER_SETUP_UNSUPPORTED"
 
 
 async def test_set_checked_dispatch_parses_false_string(tmp_path: Path) -> None:

@@ -90,6 +90,9 @@
   viewport-only and must reject full-page requests explicitly. If the driver
   exits or Safari invalidates its WebDriver session, the next browser operation
   must replace the stale runtime instead of reusing it.
+- Browser Settings may ask the connected CLI to open the fixed remote-debugging
+  setup page in an installed Chrome, Opera, or Edge browser. Keep this action
+  strictly allowlisted and available before Host Browser itself is enabled.
 - Use Linux commands and paths by default. Prefer `./.venv/bin/python`, not Windows-only virtualenv paths.
 - UI preview is the primary loop for TUI work: `./.venv/bin/python devtools/serve.py` at `http://localhost:8566`.
 - The CLI talks to Agent Zero through the connector protocol `a0-connector.v1`, HTTP routes under `/api/plugins/_a0_connector/v1/`, and Socket.IO events on namespace `/ws` with `connector_*` event names.
