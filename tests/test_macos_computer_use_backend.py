@@ -22,6 +22,19 @@ from a0_computer_use_macos.runtime import (
 from a0_computer_use_macos.shared import normalize_action_payload
 
 
+def _python_index_for_utf16(text: str, offset: int) -> int:
+    units = 0
+    for index, character in enumerate(text):
+        if units == offset:
+            return index
+        units += len(character.encode("utf-16-le")) // 2
+        if units > offset:
+            raise ValueError("UTF-16 offset split a surrogate pair")
+    if units == offset:
+        return len(text)
+    raise ValueError("UTF-16 offset exceeds text")
+
+
 class _FakeDriver:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
@@ -38,6 +51,19 @@ class _FakeDriver:
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5wAAAABJRU5ErkJggg=="
         )
         return png_bytes, 1, 1
+
+    def capture_window_png(
+        self,
+        *,
+        pid: int,
+        bounds: tuple[float, float, float, float],
+        title: str,
+    ) -> tuple[bytes, int, int, int]:
+        self.calls.append(("capture_window_png", (pid, bounds, title), {}))
+        png_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5wAAAABJRU5ErkJggg=="
+        )
+        return png_bytes, 1, 1, 42
 
     def move(self, x: float, y: float) -> None:
         self.calls.append(("move", (x, y), {}))
@@ -103,23 +129,33 @@ def _install_fake_ax_tree(
         },
         children=[button, text_field],
     )
+    text_field.attrs.update(
+        {
+            "AXFocused": True,
+            "AXNumberOfCharacters": len("draft"),
+            "AXSelectedTextRange": (len("draft"), 0),
+            "AXWindow": window,
+        }
+    )
     app_root = _FakeAXElement(
         {
             "AXRole": "AXApplication",
             "AXTitle": "Fake App",
+            "AXFocusedWindow": window,
+            "AXFocusedUIElement": text_field,
         },
         windows=[window],
     )
 
     class FakeApplication:
         def localizedName(self) -> str:
-            return "Fake App"
+            return FakeAccessibility.app_name
 
         def bundleIdentifier(self) -> str:
-            return "com.example.fake"
+            return FakeAccessibility.bundle_id
 
         def processIdentifier(self) -> int:
-            return 123
+            return FakeAccessibility.pid
 
     class FakeWorkspace:
         def frontmostApplication(self) -> FakeApplication:
@@ -135,21 +171,33 @@ def _install_fake_ax_tree(
         kAXDescriptionAttribute = "AXDescription"
         kAXEnabledAttribute = "AXEnabled"
         kAXFocusedAttribute = "AXFocused"
+        kAXFocusedUIElementAttribute = "AXFocusedUIElement"
+        kAXFocusedWindowAttribute = "AXFocusedWindow"
         kAXIdentifierAttribute = "AXIdentifier"
+        kAXNumberOfCharactersAttribute = "AXNumberOfCharacters"
         kAXPositionAttribute = "AXPosition"
         kAXPressAction = "AXPress"
         kAXRoleAttribute = "AXRole"
+        kAXSelectedTextAttribute = "AXSelectedText"
+        kAXSelectedTextRangeAttribute = "AXSelectedTextRange"
         kAXSizeAttribute = "AXSize"
+        kAXStringForRangeParameterizedAttribute = "AXStringForRange"
         kAXSubroleAttribute = "AXSubrole"
         kAXTitleAttribute = "AXTitle"
         kAXValueAttribute = "AXValue"
+        kAXValueCFRangeType = 4
+        kAXWindowAttribute = "AXWindow"
         kAXWindowsAttribute = "AXWindows"
+        app_name = "Fake App"
+        bundle_id = "com.example.fake"
+        pid = 123
         performed: list[tuple[_FakeAXElement, str]] = []
         set_values: list[tuple[_FakeAXElement, str, object]] = []
+        parameterized_reads = 0
 
         @staticmethod
         def AXUIElementCreateApplication(pid: int) -> _FakeAXElement:
-            assert pid == 123
+            assert pid == FakeAccessibility.pid
             return app_root
 
         @staticmethod
@@ -163,9 +211,49 @@ def _install_fake_ax_tree(
                 return 0, element.children
             if attribute == "AXWindows":
                 return 0, element.windows
+            if attribute == "AXNumberOfCharacters" and "AXValue" in element.attrs:
+                return 0, len(str(element.attrs["AXValue"]).encode("utf-16-le")) // 2
             if attribute in element.attrs:
                 return 0, element.attrs[attribute]
             return 1, None
+
+        @staticmethod
+        def AXUIElementCopyParameterizedAttributeValue(
+            element: _FakeAXElement,
+            attribute: str,
+            value: object,
+            stop: object = None,
+        ) -> tuple[int, object]:
+            del stop
+            FakeAccessibility.parameterized_reads += 1
+            if attribute != "AXStringForRange" or not isinstance(value, tuple):
+                return 1, None
+            text = str(element.attrs.get("AXValue") or "")
+            start, length = (int(value[0]), int(value[1]))
+            start_index = _python_index_for_utf16(text, start)
+            end_index = _python_index_for_utf16(text, start + length)
+            return 0, text[start_index:end_index]
+
+        @staticmethod
+        def AXUIElementIsAttributeSettable(
+            element: _FakeAXElement,
+            attribute: str,
+            stop: object = None,
+        ) -> tuple[int, bool]:
+            del stop
+            overrides = getattr(element, "settable", {})
+            if attribute in overrides:
+                return 0, bool(overrides[attribute])
+            return 0, attribute in {"AXValue", "AXSelectedTextRange", "AXSelectedText"}
+
+        @staticmethod
+        def AXValueCreate(value_type: int, value: object) -> object:
+            assert value_type == 4
+            return value
+
+        @staticmethod
+        def CFEqual(left: object, right: object) -> bool:
+            return left is right
 
         @staticmethod
         def AXUIElementCopyActionNames(
@@ -187,12 +275,39 @@ def _install_fake_ax_tree(
             value: object,
         ) -> int:
             FakeAccessibility.set_values.append((element, attribute, value))
+            if attribute == "AXSelectedText" and getattr(element, "reject_selected_text", False):
+                return 1
+            if attribute == "AXSelectedText":
+                text = str(element.attrs.get("AXValue") or "")
+                start, length = element.attrs.get("AXSelectedTextRange", (0, 0))
+                start_index = _python_index_for_utf16(text, int(start))
+                end_index = _python_index_for_utf16(text, int(start) + int(length))
+                replacement = str(value)
+                normalizer = getattr(element, "normalize_replacement", None)
+                if callable(normalizer):
+                    replacement = str(normalizer(replacement))
+                element.attrs["AXValue"] = text[:start_index] + replacement + text[end_index:]
+                element.attrs["AXSelectedTextRange"] = (
+                    int(start) + len(replacement.encode("utf-16-le")) // 2,
+                    0,
+                )
+                return 0
             element.attrs[attribute] = value
             return 0
+
+    FakeAccessibility.app_root = app_root
+    FakeAccessibility.tag_field = text_field
+    FakeAccessibility.tag_window = window
+
+    class FakeQuartz:
+        @staticmethod
+        def CGPreflightScreenCaptureAccess() -> bool:
+            return True
 
     fake_appkit = type("FakeAppKit", (), {"NSWorkspace": FakeNSWorkspace})
     monkeypatch.setattr(macos_runtime_mod, "_load_appkit_module", lambda: fake_appkit)
     monkeypatch.setattr(macos_runtime_mod, "_load_accessibility_module", lambda: FakeAccessibility)
+    monkeypatch.setattr(macos_runtime_mod, "_load_quartz_module", lambda: FakeQuartz)
     return FakeAccessibility, window, button, text_field
 
 
@@ -201,6 +316,39 @@ def _runtime(tmp_path: Path) -> MacOSComputerUseRuntime:
     runtime._ensure_accessibility_permission = lambda **kwargs: None  # type: ignore[method-assign]
     runtime._probe_capture_dimensions = lambda **kwargs: (1280, 720)  # type: ignore[method-assign]
     return runtime
+
+
+def _set_tag_text(
+    field: _FakeAXElement,
+    text: str,
+    *,
+    caret: int | None = None,
+) -> None:
+    field.attrs["AXValue"] = text
+    field.attrs["AXSelectedTextRange"] = (
+        len(text.encode("utf-16-le")) // 2 if caret is None else caret,
+        0,
+    )
+
+
+def _tag_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+    *,
+    caret: int | None = None,
+) -> tuple[MacOSComputerUseRuntime, type, _FakeAXElement, _FakeAXElement]:
+    runtime = _runtime(tmp_path)
+    fake_accessibility, window, _button, field = _install_fake_ax_tree(monkeypatch)
+    _set_tag_text(field, text, caret=caret)
+    runtime.start_session(
+        {
+            "context_id": "ctx-1",
+            "trust_mode": "persistent",
+            "restore_token": "123e4567-e89b-12d3-a456-426614174000",
+        }
+    )
+    return runtime, fake_accessibility, window, field
 
 
 def test_macos_backend_spec_exports_expected_metadata() -> None:
@@ -233,6 +381,7 @@ def test_macos_backend_spec_exports_expected_metadata() -> None:
     assert "real-cursor-may-move" in spec.features
     assert "cursor-position-restore-after-click" in spec.features
     assert "frontmost-app-restore-after-click" in spec.features
+    assert "a0-tag" in spec.features
 
 
 def test_macos_backend_wrapper_uses_current_python() -> None:
@@ -403,6 +552,27 @@ def test_macos_runtime_session_policies_are_persisted_when_valid(tmp_path: Path)
     assert stored.restore_token == restore_token
 
 
+def test_macos_launcher_tag_session_does_not_probe_screen_capture(tmp_path: Path) -> None:
+    runtime = MacOSComputerUseRuntime(driver=_FakeDriver(), state_dir=tmp_path / "state")
+    runtime._ensure_accessibility_permission = lambda **kwargs: None  # type: ignore[method-assign]
+
+    def unexpected_capture_probe(**_kwargs: object) -> tuple[int, int]:
+        raise AssertionError("tag startup must not require Screen Recording")
+
+    runtime._probe_capture_dimensions = unexpected_capture_probe  # type: ignore[method-assign]
+
+    session = runtime.start_session(
+        {
+            "context_id": "launcher-tag",
+            "trust_mode": "persistent",
+            "restore_token": "123e4567-e89b-12d3-a456-426614174000",
+        }
+    )
+
+    assert session["width"] == 0
+    assert session["height"] == 0
+
+
 def test_macos_runtime_capture_returns_inline_png_payload(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     runtime.start_session(
@@ -461,6 +631,429 @@ def test_macos_runtime_capture_writes_requested_path_without_inline_payload(tmp_
     assert capture["capture_path"] == str(capture_path)
     assert "png_base64" not in capture
     assert capture_path.exists()
+
+
+def test_macos_a0_tag_captures_ascii_and_replaces_only_the_exact_range(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = "prefix untouched\n"
+    tag = "@a0 draft a reply"
+    suffix = "\nsuffix untouched"
+    runtime, _accessibility, _window, field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        prefix + tag + suffix,
+        caret=len((prefix + tag).encode("utf-16-le")) // 2,
+    )
+
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+
+    assert captured["query"] == "draft a reply"
+    assert captured["tag_text"] == tag
+    assert captured["app_name"] == "Fake App"
+    assert captured["window_title"] == "Document"
+    assert captured["replace_supported"] is True
+    assert captured["screenshot_status"] == "attached"
+    assert base64.b64decode(captured["artifact"]["data"]).startswith(b"\x89PNG\r\n\x1a\n")
+
+    replaced = runtime.tag_replace(
+        {
+            "context_id": "ctx-1",
+            "target_token": captured["target_token"],
+            "replacement": "Concise answer",
+        }
+    )
+
+    assert replaced["replaced"] is True
+    assert field.attrs["AXValue"] == prefix + "Concise answer" + suffix
+    assert field.attrs["AXSelectedTextRange"] == (
+        len((prefix + "Concise answer").encode("utf-16-le")) // 2,
+        0,
+    )
+    assert [call[0] for call in runtime._driver.calls] == ["capture_window_png"]
+
+
+@pytest.mark.parametrize("native_x", [13.0, float("nan")])
+def test_macos_a0_tag_window_capture_rejects_unverified_native_bounds(native_x: float) -> None:
+    class FakeQuartz:
+        kCGNullWindowID = 0
+        kCGWindowBounds = "bounds"
+        kCGWindowLayer = "layer"
+        kCGWindowName = "title"
+        kCGWindowNumber = "number"
+        kCGWindowOwnerPID = "pid"
+
+        @staticmethod
+        def CGWindowListCopyWindowInfo(_options: int, _window_id: int) -> list[dict[str, object]]:
+            return [
+                {
+                    "pid": 123,
+                    "layer": 0,
+                    "number": 42,
+                    "title": "Document",
+                    "bounds": {"X": native_x, "Y": 20, "Width": 640, "Height": 480},
+                }
+            ]
+
+        @staticmethod
+        def CGWindowListCreateImage(*_args: object) -> object:
+            raise AssertionError("an unverified window must not be captured")
+
+    driver = object.__new__(macos_runtime_mod._MacOSDesktopAutomation)
+    driver._quartz = FakeQuartz()
+
+    with pytest.raises(MacOSComputerUseError) as exc_info:
+        driver.capture_window_png(
+            pid=123,
+            bounds=(10.0, 20.0, 640.0, 480.0),
+            title="Document",
+        )
+
+    assert exc_info.value.code == "A0_TAG_SCREENSHOT_UNAVAILABLE"
+
+
+def test_macos_a0_tag_preserves_unicode_before_inside_and_after_the_range(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = "🙂 café before\n  "
+    tag = "@a0 translate naïve 🌟"
+    suffix = "\n終わり 🐍"
+    runtime, _accessibility, _window, field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        prefix + tag + suffix,
+        caret=len((prefix + tag).encode("utf-16-le")) // 2,
+    )
+
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+    runtime.tag_replace(
+        {
+            "context_id": "ctx-1",
+            "target_token": captured["target_token"],
+            "replacement": "Réponse 世界 ✨",
+        }
+    )
+
+    assert captured["query"] == "translate naïve 🌟"
+    assert field.attrs["AXValue"] == prefix + "Réponse 世界 ✨" + suffix
+
+
+def test_macos_a0_tag_preserves_unicode_at_bounded_ax_range_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tag = "@a0 preserve unicode"
+    prefix_units = 4097 - len(tag.encode("utf-16-le")) // 2
+    prefix = "🙂" + "x" * (prefix_units - 3) + "\n"
+    suffix = "\n" + "y" * 4094 + "🙂tail"
+    runtime, _accessibility, _window, field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        prefix + tag + suffix,
+        caret=len((prefix + tag).encode("utf-16-le")) // 2,
+    )
+
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+    runtime.tag_replace(
+        {
+            "context_id": "ctx-1",
+            "target_token": captured["target_token"],
+            "replacement": "Preserved 🌍",
+        }
+    )
+
+    assert captured["query"] == "preserve unicode"
+    assert captured["focused_text"] == prefix + tag + "\n" + "y" * 4094
+    assert field.attrs["AXValue"] == prefix + "Preserved 🌍" + suffix
+
+
+def test_macos_a0_tag_keeps_caret_after_untouched_trailing_whitespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = "before\n"
+    tag = "@a0 answer"
+    trailing = " \t"
+    suffix = "\nafter"
+    runtime, _accessibility, _window, field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        prefix + tag + trailing + suffix,
+        caret=len((prefix + tag + trailing).encode("utf-16-le")) // 2,
+    )
+
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+    runtime.tag_replace(
+        {
+            "context_id": "ctx-1",
+            "target_token": captured["target_token"],
+            "replacement": "result",
+        }
+    )
+
+    assert captured["tag_text"] == tag
+    assert field.attrs["AXValue"] == prefix + "result" + trailing + suffix
+    assert field.attrs["AXSelectedTextRange"] == (
+        len((prefix + "result" + trailing).encode("utf-16-le")) // 2,
+        0,
+    )
+
+
+def test_macos_a0_tag_parses_suffixed_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _accessibility, _window, _field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        "@A0.developer review this",
+    )
+
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+
+    assert captured["profile_override"] == "developer"
+    assert captured["query"] == "review this"
+
+
+def test_macos_a0_tag_rejects_caret_before_the_logical_request_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = "@a0 draft more text"
+    runtime, _accessibility, _window, _field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        text,
+        caret=len("@a0 draft".encode("utf-16-le")) // 2,
+    )
+
+    with pytest.raises(MacOSComputerUseError) as exc_info:
+        runtime.tag_context({"context_id": "ctx-1"})
+
+    assert exc_info.value.code == "A0_TAG_CARET_POSITION"
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [
+        ("@a0   ", "A0_TAG_EMPTY_QUERY"),
+        ("@a0 " + "x" * 2049, "A0_TAG_QUERY_TOO_LONG"),
+    ],
+)
+def test_macos_a0_tag_rejects_empty_or_oversized_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+    code: str,
+) -> None:
+    runtime, _accessibility, _window, _field = _tag_runtime(tmp_path, monkeypatch, text)
+
+    with pytest.raises(MacOSComputerUseError) as exc_info:
+        runtime.tag_context({"context_id": "ctx-1"})
+
+    assert exc_info.value.code == code
+
+
+def test_macos_a0_tag_rejects_protected_field_before_text_or_screenshot_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, accessibility, _window, field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        "@a0 reveal this",
+    )
+    field.attrs["AXSubrole"] = "AXSecureTextField"
+
+    with pytest.raises(MacOSComputerUseError) as exc_info:
+        runtime.tag_context({"context_id": "ctx-1"})
+
+    assert exc_info.value.code == "A0_TAG_PROTECTED_FIELD"
+    assert accessibility.parameterized_reads == 0
+    assert [call[0] for call in runtime._driver.calls] == []
+
+
+@pytest.mark.parametrize("change", ["process", "window", "element", "text", "caret"])
+def test_macos_a0_tag_rejects_changed_process_window_element_text_or_focus(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    original = "@a0 keep the exact target"
+    runtime, accessibility, window, field = _tag_runtime(tmp_path, monkeypatch, original)
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+
+    if change == "process":
+        accessibility.pid = 456
+    elif change == "window":
+        accessibility.app_root.attrs["AXFocusedWindow"] = _FakeAXElement(
+            {"AXRole": "AXWindow", "AXTitle": "Other"}
+        )
+    elif change == "element":
+        accessibility.app_root.attrs["AXFocusedUIElement"] = _FakeAXElement(
+            {"AXRole": "AXTextField", "AXWindow": window}
+        )
+    elif change == "text":
+        field.attrs["AXValue"] = "@a0 changed by the user"
+    else:
+        field.attrs["AXSelectedTextRange"] = (0, 0)
+
+    with pytest.raises(MacOSComputerUseError) as exc_info:
+        runtime.tag_replace(
+            {
+                "context_id": "ctx-1",
+                "target_token": captured["target_token"],
+                "replacement": "unsafe",
+            }
+        )
+
+    assert exc_info.value.code == "A0_TAG_TARGET_CHANGED"
+    assert "unsafe" not in str(field.attrs.get("AXValue") or "")
+
+
+def test_macos_a0_tag_rejects_wrong_and_expired_target_tokens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _accessibility, _window, _field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        "@a0 summarize this",
+    )
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+
+    with pytest.raises(MacOSComputerUseError) as wrong:
+        runtime.tag_replace(
+            {"context_id": "ctx-1", "target_token": "wrong", "replacement": "unsafe"}
+        )
+    assert wrong.value.code == "A0_TAG_TARGET_EXPIRED"
+
+    assert runtime._tag_target is not None
+    runtime._tag_target.captured_at -= 16 * 60
+    with pytest.raises(MacOSComputerUseError) as expired:
+        runtime.tag_replace(
+            {
+                "context_id": "ctx-1",
+                "target_token": captured["target_token"],
+                "replacement": "unsafe",
+            }
+        )
+    assert expired.value.code == "A0_TAG_TARGET_EXPIRED"
+    assert runtime._tag_target is None
+
+
+def test_macos_a0_tag_restores_original_when_editor_normalizes_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = "intro\n@a0 preserve café — 🌟\noutro"
+    caret = len("intro\n@a0 preserve café — 🌟".encode("utf-16-le")) // 2
+    runtime, _accessibility, _window, field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        original,
+        caret=caret,
+    )
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+    field.normalize_replacement = lambda value: value.upper() if value == "mixed Case" else value
+
+    with pytest.raises(MacOSComputerUseError) as exc_info:
+        runtime.tag_replace(
+            {
+                "context_id": "ctx-1",
+                "target_token": captured["target_token"],
+                "replacement": "mixed Case",
+            }
+        )
+
+    assert exc_info.value.code == "A0_TAG_REPLACE_FAILED"
+    assert field.attrs["AXValue"] == original
+    assert field.attrs["AXSelectedTextRange"] == (caret, 0)
+
+
+def test_macos_a0_tag_reports_noneditable_and_clears_on_release_and_teardown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _accessibility, _window, field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        "@a0 summarize this",
+    )
+    field.settable = {"AXSelectedText": False}
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+    assert captured["replace_supported"] is False
+    with pytest.raises(MacOSComputerUseError) as unsupported:
+        runtime.tag_replace(
+            {
+                "context_id": "ctx-1",
+                "target_token": captured["target_token"],
+                "replacement": "answer",
+            }
+        )
+    assert unsupported.value.code == "A0_TAG_REPLACE_UNSUPPORTED"
+    assert runtime.tag_release({"context_id": "ctx-1", "target_token": "wrong"}) == {"released": False}
+    assert runtime.tag_release(
+        {"context_id": "ctx-1", "target_token": captured["target_token"]}
+    ) == {"released": True}
+    assert runtime._tag_target is None
+
+    field.settable = {}
+    runtime.tag_context({"context_id": "ctx-1"})
+    runtime.stop_session({"context_id": "ctx-1"})
+    assert runtime._tag_target is None
+
+
+def test_macos_a0_tag_continues_without_screen_recording_permission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _accessibility, _window, _field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        "@a0 summarize this",
+    )
+    quartz = macos_runtime_mod._load_quartz_module()
+    monkeypatch.setattr(quartz, "CGPreflightScreenCaptureAccess", staticmethod(lambda: False))
+
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+
+    assert captured["screenshot_status"] == "unavailable"
+    assert "Screen Recording permission" in captured["screenshot_error"]
+    assert "artifact" not in captured
+    assert [call[0] for call in runtime._driver.calls] == []
+
+
+def test_macos_a0_tag_continues_when_screen_recording_preflight_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _accessibility, _window, _field = _tag_runtime(
+        tmp_path,
+        monkeypatch,
+        "@a0 summarize this",
+    )
+    quartz = macos_runtime_mod._load_quartz_module()
+
+    def failed_preflight() -> bool:
+        raise RuntimeError("preflight failed")
+
+    monkeypatch.setattr(quartz, "CGPreflightScreenCaptureAccess", staticmethod(failed_preflight))
+
+    captured = runtime.tag_context({"context_id": "ctx-1"})
+
+    assert captured["screenshot_status"] == "unavailable"
+    assert "could not be verified" in captured["screenshot_error"]
+    assert "artifact" not in captured
+    assert [call[0] for call in runtime._driver.calls] == []
+
+
+def test_macos_a0_tag_private_actions_do_not_leak_into_public_computer_use_surface() -> None:
+    from agent_zero_cli import computer_use as computer_use_mod
+
+    assert {"tag_context", "tag_replace", "tag_release"}.isdisjoint(computer_use_mod._SUPPORTED_ACTIONS)
 
 
 def test_macos_runtime_ax_snapshot_returns_bounded_structural_tree(
@@ -675,6 +1268,8 @@ def test_macos_runtime_ax_action_rejects_ambiguous_targets(
 def test_macos_driver_capture_prefers_coregraphics_without_screencapture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    captured_window_ids: list[int] = []
+
     class FakePNGData(bytes):
         pass
 
@@ -696,6 +1291,18 @@ def test_macos_driver_capture_prefers_coregraphics_without_screencapture(
     class FakeQuartz:
         kCGEventMouseMoved = 5
         kCGMouseButtonLeft = 0
+        kCGNullWindowID = 0
+        kCGWindowBounds = "bounds"
+        kCGWindowImageBestResolution = 8
+        kCGWindowImageBoundsIgnoreFraming = 1
+        kCGWindowLayer = "layer"
+        kCGWindowListExcludeDesktopElements = 16
+        kCGWindowListOptionIncludingWindow = 8
+        kCGWindowListOptionOnScreenOnly = 1
+        kCGWindowName = "title"
+        kCGWindowNumber = "number"
+        kCGWindowOwnerPID = "pid"
+        CGRectNull = "null"
 
         @staticmethod
         def CGMainDisplayID() -> int:
@@ -704,6 +1311,40 @@ def test_macos_driver_capture_prefers_coregraphics_without_screencapture(
         @staticmethod
         def CGDisplayCreateImage(display_id: int) -> object:
             assert display_id == 1
+            return object()
+
+        @staticmethod
+        def CGWindowListCopyWindowInfo(options: int, window_id: int) -> list[dict[str, object]]:
+            assert options == 17
+            assert window_id == 0
+            return [
+                {
+                    "pid": 123,
+                    "layer": 0,
+                    "bounds": {"X": 10, "Y": 20, "Width": 640, "Height": 480},
+                    "number": 42,
+                    "title": "Document",
+                },
+                {
+                    "pid": 999,
+                    "layer": 0,
+                    "bounds": {"X": 10, "Y": 20, "Width": 640, "Height": 480},
+                    "number": 99,
+                    "title": "Other",
+                },
+            ]
+
+        @staticmethod
+        def CGWindowListCreateImage(
+            bounds: object,
+            options: int,
+            window_id: int,
+            image_options: int,
+        ) -> object:
+            assert bounds == "null"
+            assert options == 8
+            assert image_options == 9
+            captured_window_ids.append(window_id)
             return object()
 
     fake_appkit = type(
@@ -721,9 +1362,25 @@ def test_macos_driver_capture_prefers_coregraphics_without_screencapture(
     driver = macos_runtime_mod._MacOSDesktopAutomation()
 
     _png_bytes, width, height = driver.capture_png()
+    assert driver.last_capture_strategy == "coregraphics"
+    _window_png, window_width, window_height, window_id = driver.capture_window_png(
+        pid=123,
+        bounds=(10.0, 20.0, 640.0, 480.0),
+        title="Document",
+    )
 
     assert (width, height) == (2, 3)
-    assert driver.last_capture_strategy == "coregraphics"
+    assert (window_width, window_height, window_id) == (2, 3, 42)
+    assert captured_window_ids == [42]
+    assert driver.last_capture_strategy == "coregraphics-window"
+
+    with pytest.raises(MacOSComputerUseError) as unverified:
+        driver.capture_window_png(
+            pid=123,
+            bounds=(11.0, 20.0, 630.0, 480.0),
+            title="Document",
+        )
+    assert unverified.value.code == "A0_TAG_SCREENSHOT_UNAVAILABLE"
 
 
 def test_macos_driver_click_restores_cursor_and_frontmost_app(

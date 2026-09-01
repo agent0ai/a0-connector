@@ -35,6 +35,7 @@ MACOS_BACKEND_FEATURES = (
     "frontmost-app-restore-after-click",
     "accessibility-trust",
     "session-reuse-metadata",
+    "a0-tag",
 )
 MACOS_TRUST_MODES = ("interactive", "persistent", "allow")
 STATE_DIR_ENV = "A0_COMPUTER_USE_MACOS_STATE_DIR"

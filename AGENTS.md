@@ -62,15 +62,15 @@
 - Gateway release 2.6 adds `computer_use_setup_v1`: correlated setup commands,
   staged macOS Accessibility then Screen Recording approval, and fresh-helper
   polling bounded to 120 seconds so the initiating agent tool call can resume.
-- Wayland-capable gateways may also advertise `a0_tag_v1`. Its correlated
+- Supported Wayland and macOS gateways may also advertise `a0_tag_v1`. Its correlated
   profile, capture, apply, and release commands reuse the authenticated gateway
   client and existing Computer Use grant. A backend may return a verified,
   bounded active-window PNG; the gateway gives each such upload a unique name
   and never returns base64 through Launcher JSONL. The current Wayland helper
   reports text/accessibility-only context because GNOME does not expose
   trustworthy native-window screen bounds to AT-SPI callers. Release and failed
-  capture stop the private tag portal session while the outbound gateway lease
-  remains connected.
+  capture stop the private tag session, including its Wayland portal resources,
+  while the outbound gateway lease remains connected.
 - The same `a0_tag_v1` gateway accepts explicitly user-selected absolute file
   or folder paths through its correlated upload command, reads no implicit
   location, expands folders to bounded regular files, and uploads them through

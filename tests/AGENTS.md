@@ -41,6 +41,9 @@
   complete shutdown cleanup. macOS Computer Use coverage must assert staged
   Accessibility then Screen Recording setup, one prompt per service, fresh
   helper polling, bounded timeout, and resumption of the original start request.
+  macOS A0 Tag coverage must separately prove that its private session still
+  requires Accessibility but can return text-only context without Screen
+  Recording, while verified native-window screenshots remain fail-closed.
 
 ## Verification
 

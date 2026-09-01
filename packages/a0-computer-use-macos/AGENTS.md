@@ -19,6 +19,16 @@
   `request_accessibility`, and explicit `request_screen_recording` internal
   operations. Screen status/request uses Core Graphics preflight/request APIs;
   Accessibility uses the ApplicationServices trust APIs.
+- The backend advertises `a0-tag` only with the complete private capture,
+  replace, and release contract. Capture resolves the frontmost app, focused
+  window, and focused non-protected field through Accessibility; text ranges use
+  native UTF-16 offsets. Replacement must revalidate the same app/window/field,
+  caret, exact original range, editability, and protection state, then verify
+  the exact write and restore the original tag best-effort on failure.
+- A private `launcher-tag` session requires Accessibility but skips the ordinary
+  full-display capture probe. Its optional screenshot requires Screen Recording
+  plus one CoreGraphics window matching the Accessibility PID and finite native
+  bounds; otherwise capture continues with an explicit unavailable reason.
 
 ## Work Guidance
 

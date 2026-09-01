@@ -43,6 +43,7 @@ def test_macos_backend_spec_exposes_expected_metadata() -> None:
     assert "real-cursor-may-move" in spec.features
     assert "cursor-position-restore-after-click" in spec.features
     assert "frontmost-app-restore-after-click" in spec.features
+    assert "a0-tag" in spec.features
 
 
 def test_macos_detection_and_support_reason_are_additive_and_explicit(

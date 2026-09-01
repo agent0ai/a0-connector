@@ -98,7 +98,7 @@ def _manager(
             computer_use_trust_mode=trust_mode,
             computer_use_restore_token=restore_token,
         ),
-        backend_selection=backend_selection,
+        backend_selection=backend_selection or _selection(),
     )
     if supported is not None:
         manager.supported = supported
@@ -296,6 +296,50 @@ async def test_launcher_tag_capture_failure_closes_its_private_session(
     assert result["code"] == "A0_TAG_NOT_FOUND"
     assert stopped == ["launcher-tag"]
     assert session.active is False
+
+
+async def test_macos_launcher_tag_start_does_not_require_screen_recording_setup(
+    _temp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _manager(
+        enabled=True,
+        trust_mode="persistent",
+        restore_token="123e4567-e89b-12d3-a456-426614174000",
+        backend_selection=_selection(
+            backend_id="macos",
+            backend_family="macos",
+            features=("inline-png-capture", "a0-tag"),
+        ),
+    )
+    prepare = AsyncMock(side_effect=AssertionError("tag startup must not require Screen Recording"))
+
+    async def helper_request(
+        _session: _HelperSession,
+        request: dict[str, object],
+    ) -> dict[str, object]:
+        assert request["action"] == "start_session"
+        assert request["context_id"] == "launcher-tag"
+        return {
+            "ok": True,
+            "result": {
+                "context_id": "launcher-tag",
+                "session_id": "tag-session",
+                "status": "active",
+                "active": True,
+            },
+        }
+
+    monkeypatch.setattr(manager, "_prepare_macos_permissions", prepare)
+    monkeypatch.setattr(manager, "_helper_request", helper_request)
+
+    session = _HelperSession(context_id="launcher-tag")
+    result = await manager._start_session("tag-start", session)
+
+    assert result["ok"] is True
+    assert session.active is True
+    assert session.session_id == "tag-session"
+    prepare.assert_not_awaited()
 
 
 async def test_allow_without_restore_token_returns_rearm_required(

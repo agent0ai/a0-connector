@@ -118,7 +118,8 @@
   meaning. The command-line contract uses `file_read` for the new read-only
   selection and keeps legacy `files` read/write so a CLI update cannot silently
   downgrade an older Launcher.
-- `a0_tag_v1` is an independently advertised Wayland gateway feature. Its
+- `a0_tag_v1` is an independently advertised feature for supported Wayland and
+  macOS Computer Use backends. Its
   correlated commands list profiles, capture one explicit foreground tag,
   upload a uniquely named screenshot only when the backend supplies a verified
   bounded active-window artifact, apply a revalidated reply, and release the
@@ -131,6 +132,10 @@
   Wayland tag focus resolution is scoped to the active top-level window before
   choosing a readable focused descendant so stale inactive AT-SPI focus cannot
   capture or revalidate the wrong application.
+  The private macOS `launcher-tag` session requires Accessibility but must not
+  require Screen Recording: without the latter it returns bounded text/AX
+  context and an explicit unavailable screenshot reason. Ordinary Computer Use
+  sessions retain staged Accessibility and Screen Recording setup.
 - `a0_tag_upload` is a correlated, Computer-Use-gated gateway command for paths
   selected explicitly by Launcher's native chooser. Accept only bounded
   absolute paths, expand directories without following nested symlinks, cap

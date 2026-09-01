@@ -34,6 +34,11 @@ from agent_zero_cli.host_browser import (
 
 pytestmark = pytest.mark.anyio
 
+
+@pytest.fixture(autouse=True)
+def _linux_host_browser_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(host_browser_common.platform, "system", lambda: "Linux")
+
 MINIMAL_CONTENT_HELPER_SOURCE = """
 (() => {
   globalThis.__spaceBrowserPageContent__ = {
@@ -223,7 +228,7 @@ class FakeStarter:
 
 
 def test_discover_profiles_reads_local_state_names(tmp_path: Path) -> None:
-    root = tmp_path / "Chrome"
+    root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     (root / "Profile 1").mkdir()
     (root / "Local State").write_text(
@@ -959,7 +964,7 @@ def test_agent_profile_mode_selects_supported_a0_profile_when_default_is_restric
 
 
 def test_hello_metadata_marks_missing_playwright_as_preparable(tmp_path: Path) -> None:
-    root = tmp_path / "Chrome"
+    root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -1023,7 +1028,7 @@ def test_hello_metadata_marks_restricted_saved_profile_as_preparable(
 
 
 async def test_host_browser_manager_dispatches_open_and_screenshot_artifact(tmp_path: Path) -> None:
-    root = tmp_path / "Chrome"
+    root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -1061,7 +1066,7 @@ async def test_host_browser_manager_dispatches_open_and_screenshot_artifact(tmp_
 
 
 async def test_host_browser_manager_uses_agent_zero_supplied_content_helper(tmp_path: Path) -> None:
-    root = tmp_path / "Chrome"
+    root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -1115,7 +1120,7 @@ async def test_relaunch_session_is_adopted_by_first_browser_context(
 ) -> None:
     import agent_zero_cli.host_browser_common as host_browser_common_module
 
-    root = tmp_path / "Chrome"
+    root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -1450,7 +1455,7 @@ async def test_remote_debugging_session_opens_lists_and_reads_content(
 async def test_remote_ensure_respects_disabled_state_while_local_preparation_can_enable(
     tmp_path: Path,
 ) -> None:
-    root = tmp_path / "Chrome"
+    root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -1585,7 +1590,7 @@ async def test_locked_profile_owned_by_active_context_reports_context_conflict(
 ) -> None:
     import agent_zero_cli.host_browser_common as host_browser_common_module
 
-    root = tmp_path / "Chrome"
+    root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")

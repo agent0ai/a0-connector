@@ -1678,7 +1678,11 @@ class ComputerUseManager:
             return self._success(op_id, result)
 
         allow_prompt = self.trust_mode != "allow"
-        if self._uses_macos_permission_setup() and allow_prompt:
+        if (
+            self._uses_macos_permission_setup()
+            and session.context_id != "launcher-tag"
+            and allow_prompt
+        ):
             prepared = await self._prepare_macos_permissions(
                 session,
                 prompt=True,
