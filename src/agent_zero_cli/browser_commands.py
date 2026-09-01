@@ -201,7 +201,7 @@ async def _cmd_browser_profile(app: "AgentZeroCLI", args: list[str]) -> None:
     if not args:
         rows = format_profile_rows(profiles)
         if not rows:
-            app._show_notice("No installed Chromium-family profiles were detected.", error=True)
+            app._show_notice("No supported host browsers were detected.", error=True)
             return
         selected = app._host_browser.selected_profile()
         selected_text = ""
@@ -335,7 +335,10 @@ def _selected_profile_needs_playwright(app: "AgentZeroCLI") -> bool:
 
 
 def _profile_needs_playwright(profile: object | None) -> bool:
-    return profile is None or not bool(getattr(profile, "is_remote_debugging", False))
+    return profile is None or not bool(
+        getattr(profile, "is_remote_debugging", False)
+        or getattr(profile, "is_safari", False)
+    )
 
 
 def _host_browser_choices(app: "AgentZeroCLI") -> list[dict[str, str]]:

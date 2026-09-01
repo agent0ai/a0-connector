@@ -16,6 +16,7 @@ from agent_zero_cli.config import (
 )
 from agent_zero_cli.host_browser_common import (
     RELAUNCH_CONTEXT_ID,
+    SAFARI_DRIVER_PATH,
     _SUPPORTED_ACTIONS,
     BrowserCandidate,
     BrowserProfile,
@@ -113,7 +114,9 @@ class HostBrowserManager:
             profile_mode=profile_mode,
             browser_selection=browser_selection,
         )
-        can_repair = not self._has_playwright() and not bool(profile and profile.is_remote_debugging)
+        can_repair = not self._has_playwright() and not bool(
+            profile and (profile.is_remote_debugging or profile.is_safari)
+        )
         return {
             "supported": bool(status["supported"]),
             "can_prepare": bool(status["can_prepare"]),
@@ -134,6 +137,7 @@ class HostBrowserManager:
                 "dedicated_profile",
                 "user_authorized_remote_debugging",
                 "playwright",
+                *(["safari_webdriver"] if profile and profile.is_safari else []),
                 "artifacts",
                 "background_tabs",
                 "content_helper_rpc",
@@ -206,11 +210,15 @@ class HostBrowserManager:
             return f"Host browser unsupported: {status['support_reason']}"
         if status["status"] == "disabled":
             return "Host browser is disabled. Use /browser host on to advertise it to Agent Zero."
-        profile_text = (
-            f"remote debugging browser at {status['cdp_endpoint']}"
-            if status.get("cdp_endpoint")
-            else f"{status['browser_family']} profile {status['profile_label']} ({status['profile_path']})"
-        )
+        if status["browser_family"] == "safari":
+            profile_text = "Safari automation window"
+        elif status.get("cdp_endpoint"):
+            profile_text = f"remote debugging browser at {status['cdp_endpoint']}"
+        else:
+            profile_text = (
+                f"{status['browser_family']} profile {status['profile_label']} "
+                f"({status['profile_path']})"
+            )
         if status["status"] == "relaunch_required":
             return (
                 f"Host browser needs relaunch consent for {profile_text}. "
@@ -460,7 +468,7 @@ class HostBrowserManager:
                 continue
             self._persist_selected_profile(profile)
             return profile
-        raise ValueError("No matching Chromium-family profile was found.")
+        raise ValueError("No matching host browser was found.")
 
     async def relaunch(self) -> dict[str, Any]:
         return await self.ensure_available()
@@ -491,14 +499,15 @@ class HostBrowserManager:
                     profile_mode=mode,
                     browser_selection=selection,
                 )
-        if profile is None and not self._has_playwright():
+        safari_selection = selection in {"safari", "safari:default"}
+        if profile is None and not safari_selection and not self._has_playwright():
             await self.ensure_playwright_dependency()
             profile = self._auto_start_profile(profile_mode=mode, browser_selection=selection)
         if profile is None:
             if selection:
-                raise RuntimeError(f"No Chromium-family browser matched selection {selection!r}.")
-            raise RuntimeError("No Chromium-family browser profile was found.")
-        if not profile.is_remote_debugging and not self._has_playwright():
+                raise RuntimeError(f"No host browser matched selection {selection!r}.")
+            raise RuntimeError("No supported host browser was found.")
+        if not profile.is_remote_debugging and not profile.is_safari and not self._has_playwright():
             await self.ensure_playwright_dependency()
         support_reason = self._support_reason(profile)
         if support_reason:
@@ -604,16 +613,31 @@ class HostBrowserManager:
             return self._error(
                 op_id,
                 "HOST_BROWSER_NO_PROFILE",
-                f"No Chromium-family browser matched selection {browser_selection!r}.",
+                f"No host browser matched selection {browser_selection!r}.",
             )
         support_reason = self._support_reason(profile)
         if support_reason:
             return self._error(op_id, "HOST_BROWSER_UNSUPPORTED", support_reason)
         if profile is None:
-            return self._error(op_id, "HOST_BROWSER_NO_PROFILE", "No Chromium-family browser profile was found.")
+            return self._error(op_id, "HOST_BROWSER_NO_PROFILE", "No supported host browser was found.")
 
         lock = profile_lock_state_for_profile(profile)
         active_context = self._active_context_for_profile(profile)
+        if (
+            profile.is_safari
+            and active_context
+            and context_id not in self._sessions
+            and active_context != RELAUNCH_CONTEXT_ID
+        ):
+            return self._error(
+                op_id,
+                "HOST_BROWSER_CONTEXT_ACTIVE",
+                (
+                    "Safari is already controlled by another Agent Zero browser context. "
+                    "Close that browser context before starting another one."
+                ),
+                result={"active_context": active_context, "profile": profile.as_dict()},
+            )
         if lock.locked and context_id not in self._sessions and active_context != RELAUNCH_CONTEXT_ID:
             if active_context:
                 return self._error(
@@ -862,7 +886,7 @@ class HostBrowserManager:
 
     def _support_reason(self, profile: BrowserProfile | None = None) -> str:
         profile = profile if profile is not None else self.selected_profile()
-        if profile is not None and profile.is_remote_debugging:
+        if profile is not None and (profile.is_remote_debugging or profile.is_safari):
             return self._profile_support_reason(profile)
         if not self._has_playwright():
             return (
@@ -875,7 +899,15 @@ class HostBrowserManager:
 
     def _profile_support_reason(self, profile: BrowserProfile | None) -> str:
         if profile is None:
-            return "No installed Chromium-family browser profile was detected."
+            return "No supported host browser was detected."
+        if profile.is_safari:
+            if sys.platform != "darwin":
+                return "Safari host browser control is available only on macOS."
+            if not profile.executable_path or not Path(profile.executable_path).is_file():
+                return "Safari was not found in /Applications."
+            if not SAFARI_DRIVER_PATH.is_file():
+                return "Safari WebDriver was not found at /usr/bin/safaridriver."
+            return ""
         if profile.is_remote_debugging:
             return ""
         if not profile.executable_path or not Path(profile.executable_path).exists():
