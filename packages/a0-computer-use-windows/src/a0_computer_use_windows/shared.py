@@ -28,6 +28,7 @@ WINDOWS_BACKEND_FEATURES = (
     "keyboard-injection",
     "real-cursor-may-move",
     "session-reuse-metadata",
+    "a0-tag",
 )
 WINDOWS_TRUST_MODES = ("interactive", "persistent", "allow")
 STATE_DIR_ENV = "A0_COMPUTER_USE_WINDOWS_STATE_DIR"

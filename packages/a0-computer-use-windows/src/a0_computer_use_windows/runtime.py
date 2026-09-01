@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import ctypes
 import io
 import json
 import os
@@ -10,6 +11,7 @@ import re
 import sys
 import time
 import uuid
+from ctypes import wintypes
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -51,6 +53,25 @@ _UIA_DEFAULT_MAX_NODES = 200
 _UIA_HARD_MAX_DEPTH = 8
 _UIA_HARD_MAX_NODES = 500
 _UIA_TEXT_LIMIT = 240
+_TAG_TEXT_WINDOW_CHARS = 4096
+_TAG_FIELD_MAX_CHARS = 256 * 1024
+_TAG_QUERY_MAX_CHARS = 2048
+_TAG_REPLACEMENT_MAX_CHARS = 16384
+_TAG_SCREENSHOT_MAX_BYTES = 16 * 1024 * 1024
+_TAG_TARGET_TTL_SECONDS = 15 * 60
+_TAG_PROFILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_TEXT_PATTERN_RANGE_START = 0
+_TEXT_PATTERN_RANGE_END = 1
+_TEXT_UNIT_CHARACTER = 0
+_WM_GETTEXT = 0x000D
+_WM_GETTEXTLENGTH = 0x000E
+_EM_GETSEL = 0x00B0
+_EM_SETSEL = 0x00B1
+_EM_REPLACESEL = 0x00C2
+_ES_PASSWORD = 0x0020
+_ES_READONLY = 0x0800
+_GWL_STYLE = -16
+_DWMWA_EXTENDED_FRAME_BOUNDS = 9
 _WINDOW_OPERATION_ALIASES = {
     "activate_window": "focus_window",
     "bring_to_front": "focus_window",
@@ -129,6 +150,47 @@ class WindowsDesktopDriver(Protocol):
         ...
 
     def uia_roots(self) -> list[Any]:
+        ...
+
+    def active_window(self) -> dict[str, Any]:
+        ...
+
+    def focused_uia_element(self) -> Any:
+        ...
+
+    def uia_elements_equal(self, left: Any, right: Any) -> bool:
+        ...
+
+    def native_text(self, hwnd: int, *, max_chars: int) -> str | None:
+        ...
+
+    def native_selection(self, hwnd: int) -> tuple[int, int]:
+        ...
+
+    def set_native_selection(self, hwnd: int, start: int, end: int) -> None:
+        ...
+
+    def replace_native_selection(self, hwnd: int, text: str) -> None:
+        ...
+
+    def native_editable(self, hwnd: int) -> bool:
+        ...
+
+    def native_protected(self, hwnd: int) -> bool:
+        ...
+
+    def focused_native_handle(self) -> int:
+        ...
+
+    def type_unicode_text(self, text: str) -> None:
+        ...
+
+    def capture_window_png(
+        self,
+        *,
+        hwnd: int,
+        bounds: tuple[int, int, int, int],
+    ) -> tuple[bytes, int, int]:
         ...
 
 
@@ -425,9 +487,9 @@ class _WindowsDesktopAutomation:
         keyboard.send_keys(_format_key_sequence(keys), pause=0.01, with_spaces=True)
 
     def type_text(self, text: str, *, submit: bool) -> None:  # pragma: no cover - Windows only
-        keyboard, _ = _load_pywinauto_modules()
-        keyboard.send_keys(text, pause=0.01, with_spaces=True)
+        self.type_unicode_text(text)
         if submit:
+            keyboard, _ = _load_pywinauto_modules()
             keyboard.send_keys("{ENTER}", pause=0.01, with_spaces=True)
 
     def uia_roots(self) -> list[Any]:  # pragma: no cover - only exercised on Windows
@@ -444,12 +506,202 @@ class _WindowsDesktopAutomation:
                 ),
             ) from exc
 
+    def active_window(self) -> dict[str, Any]:  # pragma: no cover - only exercised on Windows
+        import win32gui
+        import win32process
+
+        hwnd = int(win32gui.GetForegroundWindow())
+        if hwnd <= 0 or not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+            raise WindowsComputerUseError(
+                "A0_TAG_FOCUS_UNAVAILABLE",
+                "No verifiable foreground Windows application is available.",
+            )
+        _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
+        if not pid:
+            raise WindowsComputerUseError(
+                "A0_TAG_FOCUS_UNAVAILABLE",
+                "The foreground Windows application has no verifiable process identity.",
+            )
+        bounds: tuple[int, int, int, int] | None = None
+        rect = wintypes.RECT()
+        with contextlib.suppress(Exception):
+            dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+            get_window_attribute = dwmapi.DwmGetWindowAttribute
+            get_window_attribute.argtypes = [
+                wintypes.HWND,
+                wintypes.DWORD,
+                wintypes.LPVOID,
+                wintypes.DWORD,
+            ]
+            get_window_attribute.restype = wintypes.LONG
+            if int(
+                get_window_attribute(
+                    wintypes.HWND(hwnd),
+                    _DWMWA_EXTENDED_FRAME_BOUNDS,
+                    ctypes.byref(rect),
+                    ctypes.sizeof(rect),
+                )
+            ) == 0 and rect.right > rect.left and rect.bottom > rect.top:
+                bounds = (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom))
+        return {
+            "hwnd": hwnd,
+            "pid": int(pid),
+            "title": win32gui.GetWindowText(hwnd),
+            "bounds": bounds,
+        }
+
+    def focused_uia_element(self) -> Any:  # pragma: no cover - only exercised on Windows
+        try:
+            from pywinauto.controls.uiawrapper import UIAWrapper
+            from pywinauto.uia_defines import IUIA
+            from pywinauto.uia_element_info import UIAElementInfo
+
+            raw = IUIA().get_focused_element()
+            return UIAWrapper(UIAElementInfo(raw))
+        except Exception as exc:
+            raise WindowsComputerUseError(
+                "A0_TAG_FOCUS_UNAVAILABLE",
+                "Windows UI Automation did not expose a focused field.",
+            ) from exc
+
+    def uia_elements_equal(self, left: Any, right: Any) -> bool:  # pragma: no cover - Windows only
+        if left is right:
+            return True
+        try:
+            from pywinauto.uia_defines import IUIA
+
+            return bool(IUIA().iuia.CompareElements(_uia_raw_element(left), _uia_raw_element(right)))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _send_message(hwnd: int, message: int, wparam: int = 0, lparam: int = 0) -> int:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        send_message = user32.SendMessageW
+        send_message.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        send_message.restype = ctypes.c_ssize_t
+        return int(send_message(wintypes.HWND(hwnd), message, wparam, lparam))
+
+    def native_text(self, hwnd: int, *, max_chars: int) -> str | None:  # pragma: no cover - Windows only
+        if self._native_edit_style(hwnd) is None:
+            return None
+        length = self._send_message(hwnd, _WM_GETTEXTLENGTH)
+        if length < 0 or length > max_chars:
+            return None
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        copied = self._send_message(
+            hwnd,
+            _WM_GETTEXT,
+            length + 1,
+            ctypes.addressof(buffer),
+        )
+        if copied != length:
+            return None
+        return buffer.value
+
+    def native_selection(self, hwnd: int) -> tuple[int, int]:  # pragma: no cover - Windows only
+        start = wintypes.DWORD()
+        end = wintypes.DWORD()
+        self._send_message(
+            hwnd,
+            _EM_GETSEL,
+            ctypes.addressof(start),
+            ctypes.addressof(end),
+        )
+        return int(start.value), int(end.value)
+
+    def set_native_selection(self, hwnd: int, start: int, end: int) -> None:  # pragma: no cover
+        self._send_message(hwnd, _EM_SETSEL, int(start), int(end))
+
+    def replace_native_selection(self, hwnd: int, text: str) -> None:  # pragma: no cover - Windows only
+        buffer = ctypes.create_unicode_buffer(text)
+        self._send_message(hwnd, _EM_REPLACESEL, 1, ctypes.addressof(buffer))
+
+    @staticmethod
+    def _native_edit_style(hwnd: int) -> int | None:  # pragma: no cover - only exercised on Windows
+        import win32gui
+
+        try:
+            class_name = win32gui.GetClassName(hwnd).casefold()
+        except Exception:
+            return None
+        if not (class_name == "edit" or "richedit" in class_name):
+            return None
+        return int(win32gui.GetWindowLong(hwnd, _GWL_STYLE))
+
+    def native_editable(self, hwnd: int) -> bool:  # pragma: no cover - only exercised on Windows
+        import win32gui
+
+        style = self._native_edit_style(hwnd)
+        if style is None:
+            return False
+        return bool(win32gui.IsWindowEnabled(hwnd)) and not bool(style & (_ES_PASSWORD | _ES_READONLY))
+
+    def native_protected(self, hwnd: int) -> bool:  # pragma: no cover - only exercised on Windows
+        style = self._native_edit_style(hwnd)
+        return style is not None and bool(style & _ES_PASSWORD)
+
+    def focused_native_handle(self) -> int:  # pragma: no cover - only exercised on Windows
+        class GUITHREADINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("hwndActive", wintypes.HWND),
+                ("hwndFocus", wintypes.HWND),
+                ("hwndCapture", wintypes.HWND),
+                ("hwndMenuOwner", wintypes.HWND),
+                ("hwndMoveSize", wintypes.HWND),
+                ("hwndCaret", wintypes.HWND),
+                ("rcCaret", wintypes.RECT),
+            ]
+
+        import win32gui
+        import win32process
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        get_gui_thread_info = user32.GetGUIThreadInfo
+        get_gui_thread_info.argtypes = [wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)]
+        get_gui_thread_info.restype = wintypes.BOOL
+        foreground = int(win32gui.GetForegroundWindow())
+        thread_id, _pid = win32process.GetWindowThreadProcessId(foreground)
+        info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+        if thread_id <= 0 or not get_gui_thread_info(thread_id, ctypes.byref(info)):
+            return 0
+        return int(info.hwndFocus or 0)
+
+    def type_unicode_text(self, text: str) -> None:  # pragma: no cover - only exercised on Windows
+        keyboard, _ = _load_pywinauto_modules()
+        encoded = text.encode("utf-16-le")
+        for index in range(0, len(encoded), 2):
+            keyboard.KeyAction(chr(int.from_bytes(encoded[index : index + 2], "little"))).run()
+
+    def capture_window_png(
+        self,
+        *,
+        hwnd: int,
+        bounds: tuple[int, int, int, int],
+    ) -> tuple[bytes, int, int]:  # pragma: no cover - only exercised on Windows
+        del hwnd
+        from PIL import ImageGrab
+
+        image = ImageGrab.grab(bbox=bounds, all_screens=True)
+        expected_width = bounds[2] - bounds[0]
+        expected_height = bounds[3] - bounds[1]
+        if image.width != expected_width or image.height != expected_height:
+            raise WindowsComputerUseError(
+                "A0_TAG_SCREENSHOT_UNAVAILABLE",
+                "Windows did not return the exact verified active-window crop.",
+            )
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue(), int(image.width), int(image.height)
+
 
 def _normalize_key_token(key: str) -> str:
     aliases = {
-        "alt": "ALT",
-        "ctrl": "CTRL",
-        "control": "CTRL",
+        "alt": "VK_MENU",
+        "ctrl": "VK_CONTROL",
+        "control": "VK_CONTROL",
         "delete": "DELETE",
         "down": "DOWN",
         "enter": "ENTER",
@@ -461,12 +713,17 @@ def _normalize_key_token(key: str) -> str:
         "pgdn": "PGDN",
         "pgup": "PGUP",
         "right": "RIGHT",
-        "shift": "SHIFT",
+        "shift": "VK_SHIFT",
         "space": "SPACE",
-        "super": "WIN",
+        "cmd": "LWIN",
+        "command": "LWIN",
+        "meta": "LWIN",
+        "super": "LWIN",
         "tab": "TAB",
         "up": "UP",
         "backspace": "BACKSPACE",
+        "win": "LWIN",
+        "windows": "LWIN",
     }
     cleaned = str(key or "").strip()
     if not cleaned:
@@ -858,6 +1115,234 @@ def _uia_operation_error(operation: str) -> WindowsComputerUseError:
     )
 
 
+def _utf16_length(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _python_index_for_utf16(value: str, offset: int) -> int:
+    units = 0
+    for index, character in enumerate(value):
+        if units == offset:
+            return index
+        units += _utf16_length(character)
+        if units > offset:
+            break
+    if units == offset:
+        return len(value)
+    raise WindowsComputerUseError(
+        "A0_TAG_TEXT_UNAVAILABLE",
+        "The focused field returned an invalid Unicode text offset.",
+    )
+
+
+def _uia_raw_element(element: Any) -> Any:
+    info = _uia_info(element)
+    return getattr(info, "element", info)
+
+
+def _uia_runtime_id(element: Any) -> tuple[int, ...]:
+    get_runtime_id = getattr(_uia_raw_element(element), "GetRuntimeId", None)
+    if not callable(get_runtime_id):
+        return ()
+    try:
+        return tuple(int(item) for item in get_runtime_id())
+    except Exception:
+        return ()
+
+
+def _uia_text_pattern(element: Any) -> Any | None:
+    try:
+        return getattr(element, "iface_text")
+    except Exception:
+        return None
+
+
+def _uia_value_pattern(element: Any) -> Any | None:
+    try:
+        return getattr(element, "iface_value")
+    except Exception:
+        return None
+
+
+def _uia_selection(text_pattern: Any) -> Any:
+    try:
+        selections = text_pattern.GetSelection()
+        if int(selections.Length) != 1:
+            raise ValueError("multiple selections")
+        selection = selections.GetElement(0)
+        if int(
+            selection.CompareEndpoints(
+                _TEXT_PATTERN_RANGE_START,
+                selection,
+                _TEXT_PATTERN_RANGE_END,
+            )
+        ) != 0:
+            raise ValueError("non-empty selection")
+        return selection
+    except Exception as exc:
+        raise WindowsComputerUseError(
+            "A0_TAG_TEXT_UNAVAILABLE",
+            "The focused field does not expose one exact caret range.",
+        ) from exc
+
+
+def _uia_prefix_and_suffix(text_pattern: Any, selection: Any) -> tuple[str, str]:
+    document = text_pattern.DocumentRange
+    before = document.Clone()
+    before.MoveEndpointByRange(
+        _TEXT_PATTERN_RANGE_END,
+        selection,
+        _TEXT_PATTERN_RANGE_START,
+    )
+    after = document.Clone()
+    after.MoveEndpointByRange(
+        _TEXT_PATTERN_RANGE_START,
+        selection,
+        _TEXT_PATTERN_RANGE_END,
+    )
+    return str(before.GetText(-1)), str(after.GetText(-1))
+
+
+def _uia_bounded_context(text_pattern: Any, selection: Any) -> tuple[str, str, bool, bool]:
+    before = selection.Clone()
+    moved_before = int(
+        before.MoveEndpointByUnit(
+            _TEXT_PATTERN_RANGE_START,
+            _TEXT_UNIT_CHARACTER,
+            -_TAG_TEXT_WINDOW_CHARS,
+        )
+    )
+    after = selection.Clone()
+    moved_after = int(
+        after.MoveEndpointByUnit(
+            _TEXT_PATTERN_RANGE_END,
+            _TEXT_UNIT_CHARACTER,
+            _TAG_TEXT_WINDOW_CHARS,
+        )
+    )
+    return (
+        str(before.GetText(-1)),
+        str(after.GetText(-1)),
+        abs(moved_before) < _TAG_TEXT_WINDOW_CHARS,
+        abs(moved_after) < _TAG_TEXT_WINDOW_CHARS,
+    )
+
+
+def _uia_caret_for_prefix(text_pattern: Any, full_text: str, prefix: str) -> Any:
+    if not full_text.startswith(prefix):
+        raise WindowsComputerUseError(
+            "A0_TAG_TARGET_CHANGED",
+            "The focused field value no longer matches the tagged range.",
+        )
+    document = text_pattern.DocumentRange
+    low = 0
+    high = _utf16_length(full_text)
+    while low <= high:
+        units = (low + high) // 2
+        caret = document.Clone()
+        caret.MoveEndpointByRange(
+            _TEXT_PATTERN_RANGE_END,
+            document,
+            _TEXT_PATTERN_RANGE_START,
+        )
+        caret.Move(_TEXT_UNIT_CHARACTER, units)
+        caret.MoveEndpointByRange(
+            _TEXT_PATTERN_RANGE_END,
+            caret,
+            _TEXT_PATTERN_RANGE_START,
+        )
+        before = document.Clone()
+        before.MoveEndpointByRange(
+            _TEXT_PATTERN_RANGE_END,
+            caret,
+            _TEXT_PATTERN_RANGE_START,
+        )
+        current = str(before.GetText(-1))
+        if current == prefix:
+            return caret
+        if prefix.startswith(current):
+            low = units + 1
+        elif current.startswith(prefix):
+            high = units - 1
+        else:
+            break
+    raise WindowsComputerUseError(
+        "A0_TAG_TEXT_UNAVAILABLE",
+        "Windows UI Automation could not resolve the exact Unicode caret boundary.",
+    )
+
+
+def _uia_range_for_span(text_pattern: Any, full_text: str, start: int, end: int) -> Any:
+    start_caret = _uia_caret_for_prefix(text_pattern, full_text, full_text[:start])
+    end_caret = _uia_caret_for_prefix(text_pattern, full_text, full_text[:end])
+    text_range = start_caret.Clone()
+    text_range.MoveEndpointByRange(
+        _TEXT_PATTERN_RANGE_END,
+        end_caret,
+        _TEXT_PATTERN_RANGE_END,
+    )
+    if str(text_range.GetText(-1)) != full_text[start:end]:
+        raise WindowsComputerUseError(
+            "A0_TAG_TEXT_UNAVAILABLE",
+            "Windows UI Automation did not preserve the exact tagged Unicode range.",
+        )
+    return text_range
+
+
+def _parse_tag_invocation_text(
+    before: str,
+    after: str,
+    *,
+    before_bounded: bool,
+    after_bounded: bool,
+) -> dict[str, Any]:
+    newline = max(before.rfind("\n"), before.rfind("\r"))
+    if newline < 0 and not before_bounded:
+        raise WindowsComputerUseError("A0_TAG_QUERY_TOO_LONG", "The A0 Tag line is too long.")
+    line_start = newline + 1
+    line_before = before[line_start:]
+    after_line = re.split(r"[\r\n]", after, maxsplit=1)[0]
+    after_line_bounded = "\n" in after or "\r" in after or after_bounded
+    if not after_line_bounded or after_line.strip():
+        raise WindowsComputerUseError(
+            "A0_TAG_CARET_POSITION",
+            "Place the caret at the end of the A0 Tag request.",
+        )
+    match = re.fullmatch(
+        r"(?P<indent>[ \t]*)(?P<tag>@a0(?:\.(?P<profile>[A-Za-z0-9][A-Za-z0-9_-]{0,63}))?[ \t]+(?P<query>.*?))(?P<trailing>[ \t]*)",
+        line_before,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        raise WindowsComputerUseError(
+            "A0_TAG_NOT_FOUND",
+            "The focused line does not contain a valid @a0 request.",
+        )
+    query = str(match.group("query") or "").strip()
+    if not query:
+        raise WindowsComputerUseError("A0_TAG_EMPTY_QUERY", "A0 Tag requires a request after the tag.")
+    if len(query) > _TAG_QUERY_MAX_CHARS:
+        raise WindowsComputerUseError(
+            "A0_TAG_QUERY_TOO_LONG",
+            "A0 Tag requests are limited to 2048 characters.",
+        )
+    profile = str(match.group("profile") or "")
+    if profile and not _TAG_PROFILE_RE.fullmatch(profile):
+        raise WindowsComputerUseError("A0_TAG_INVALID_PROFILE", "The A0 Tag profile key is invalid.")
+    original = str(match.group("tag") or "")
+    indent = str(match.group("indent") or "")
+    trailing = str(match.group("trailing") or "")
+    return {
+        "query": query,
+        "profile": profile,
+        "original": original,
+        "trailing": trailing,
+        "tag_start": line_start + len(indent),
+        "tag_end": line_start + len(indent) + len(original),
+        "focused_text": before + after,
+    }
+
+
 def _load_default_driver() -> _WindowsDesktopAutomation:
     if not windows_backend_supported():  # pragma: no cover - only exercised on Windows
         raise WindowsComputerUseError("COMPUTER_USE_UNSUPPORTED", windows_backend_support_reason())
@@ -868,6 +1353,32 @@ def _load_default_driver() -> _WindowsDesktopAutomation:
 class _RuntimeSession:
     session: WindowsSession
     policy: TrustModePolicy
+
+
+@dataclass
+class _TagTarget:
+    token: str
+    pid: int
+    hwnd: int
+    element_hwnd: int
+    runtime_id: tuple[int, ...]
+    app_name: str
+    window_title: str
+    window_bounds: tuple[int, int, int, int] | None
+    window: Any = field(repr=False)
+    element: Any = field(repr=False)
+    mode: str
+    original: str
+    trailing: str
+    full_value: str | None
+    start: int
+    end: int
+    caret: int
+    native_start: int
+    native_end: int
+    native_caret: int
+    editable: bool
+    captured_at: float
 
 
 class WindowsComputerUseRuntime:
@@ -888,6 +1399,7 @@ class WindowsComputerUseRuntime:
         )
         self._session: _RuntimeSession | None = None
         self._element_index_cache: dict[int, dict[str, Any]] = {}
+        self._tag_target: _TagTarget | None = None
 
     @property
     def supported(self) -> bool:
@@ -989,6 +1501,9 @@ class WindowsComputerUseRuntime:
             "start_session": self.start_session,
             "status": self.status,
             "capture": self.capture,
+            "tag_context": self.tag_context,
+            "tag_replace": self.tag_replace,
+            "tag_release": self.tag_release,
             "list_windows": self.list_windows,
             "get_window_state": self.get_window_state,
             "element_action": self.element_action,
@@ -1124,6 +1639,124 @@ class WindowsComputerUseRuntime:
         else:
             result["png_base64"] = base64.b64encode(png_bytes).decode("ascii")
         return result
+
+    def tag_context(self, params: dict[str, Any]) -> dict[str, Any]:
+        session = self._require_session(params)
+        self._tag_target = None
+        focus = self._tag_focus()
+        if self._tag_element_protected(focus["element"], focus["element_hwnd"]):
+            raise WindowsComputerUseError(
+                "A0_TAG_PROTECTED_FIELD",
+                "A0 Tag is unavailable in protected fields.",
+            )
+        text_state = self._tag_text_state(focus["element"], focus["element_hwnd"])
+        parsed = text_state["parsed"]
+        geometry = ScreenGeometry(
+            origin_x=session.session.origin_x,
+            origin_y=session.session.origin_y,
+            width=session.session.width,
+            height=session.session.height,
+        )
+        budget: dict[str, Any] = {"count": 0, "truncated": False}
+        tree = self._serialize_uia_element(
+            focus["window"],
+            path=[],
+            depth=0,
+            max_depth=5,
+            max_nodes=120,
+            budget=budget,
+            geometry=geometry,
+        ) or {}
+        target = _TagTarget(
+            token=uuid.uuid4().hex,
+            pid=focus["pid"],
+            hwnd=focus["hwnd"],
+            element_hwnd=focus["element_hwnd"],
+            runtime_id=focus["runtime_id"],
+            app_name=focus["app_name"],
+            window_title=focus["window_title"],
+            window_bounds=focus["window_bounds"],
+            window=focus["window"],
+            element=focus["element"],
+            mode=text_state["mode"],
+            original=parsed["original"],
+            trailing=parsed["trailing"],
+            full_value=text_state["full_value"],
+            start=text_state["start"],
+            end=text_state["end"],
+            caret=text_state["caret"],
+            native_start=text_state["native_start"],
+            native_end=text_state["native_end"],
+            native_caret=text_state["native_caret"],
+            editable=text_state["editable"],
+            captured_at=time.time(),
+        )
+        screenshot_status, screenshot_error, artifact = self._tag_window_screenshot(
+            target,
+            geometry=geometry,
+        )
+        self._tag_target = target
+        return {
+            "session_id": session.session.session_id,
+            "context_id": session.session.context_id,
+            "target_token": target.token,
+            "tag_text": target.original,
+            "query": parsed["query"],
+            "profile_override": parsed["profile"],
+            "app_name": target.app_name,
+            "window_title": target.window_title,
+            "window_id": f"uia-hwnd:{target.hwnd}",
+            "focused_text": text_state["focused_text"],
+            "tree": tree,
+            "tree_truncated": bool(budget["truncated"]),
+            "replace_supported": target.editable,
+            "screenshot_status": screenshot_status,
+            **({"screenshot_error": screenshot_error} if screenshot_error else {}),
+            **({"artifact": artifact} if artifact is not None else {}),
+        }
+
+    def tag_replace(self, params: dict[str, Any]) -> dict[str, Any]:
+        session = self._require_session(params)
+        token = str(params.get("target_token") or "").strip()
+        replacement = str(params.get("replacement") or "")
+        target = self._tag_target
+        if target is None or not token or token != target.token:
+            raise WindowsComputerUseError(
+                "A0_TAG_TARGET_EXPIRED",
+                "The original A0 Tag field is no longer available.",
+            )
+        if time.time() - target.captured_at > _TAG_TARGET_TTL_SECONDS:
+            self._tag_target = None
+            raise WindowsComputerUseError("A0_TAG_TARGET_EXPIRED", "The original A0 Tag field expired.")
+        if not target.editable or target.full_value is None:
+            raise WindowsComputerUseError(
+                "A0_TAG_REPLACE_UNSUPPORTED",
+                "The tagged field does not support safe replacement.",
+            )
+        if not replacement or len(replacement) > _TAG_REPLACEMENT_MAX_CHARS:
+            raise WindowsComputerUseError(
+                "A0_TAG_INVALID_REPLACEMENT",
+                "A0 Tag replacement must contain 1 to 16384 characters.",
+            )
+        self._validate_tag_focus(target)
+        if target.mode == "native":
+            self._replace_native_tag(target, replacement)
+        else:
+            self._replace_uia_tag(target, replacement)
+        self._tag_target = None
+        return {
+            "session_id": session.session.session_id,
+            "replaced": True,
+            "characters": len(replacement),
+        }
+
+    def tag_release(self, params: dict[str, Any]) -> dict[str, Any]:
+        self._require_session(params)
+        token = str(params.get("target_token") or "").strip()
+        released = self._tag_target is not None and token == self._tag_target.token
+        if released:
+            self._tag_target = None
+        return {"released": released}
 
     def list_windows(self, params: dict[str, Any]) -> dict[str, Any]:
         session = self._require_session(params)
@@ -1440,8 +2073,507 @@ class WindowsComputerUseRuntime:
             "submitted": submit,
         }
 
+    def _tag_focus(self) -> dict[str, Any]:
+        active_window = getattr(self._driver, "active_window", None)
+        focused_element = getattr(self._driver, "focused_uia_element", None)
+        if not callable(active_window) or not callable(focused_element):
+            raise WindowsComputerUseError(
+                "A0_TAG_FOCUS_UNAVAILABLE",
+                "The Windows backend cannot resolve the exact focused field.",
+            )
+        active = active_window()
+        if not isinstance(active, dict):
+            raise WindowsComputerUseError(
+                "A0_TAG_FOCUS_UNAVAILABLE",
+                "The Windows backend returned an invalid foreground-window identity.",
+            )
+        hwnd = _int_or_none(active.get("hwnd")) or 0
+        pid = _int_or_none(active.get("pid")) or 0
+        element = focused_element()
+        window = _uia_window_element(element)
+        window_hwnd = _uia_native_handle(window) or 0
+        element_hwnd = _uia_native_handle(element) or 0
+        element_pid = _int_or_none(
+            _read_first_attr(_uia_info(element), element, names=("process_id",))
+        ) or 0
+        window_pid = _int_or_none(
+            _read_first_attr(_uia_info(window), window, names=("process_id",))
+        ) or 0
+        runtime_id = _uia_runtime_id(element)
+        focused = _call_noarg(element, "has_keyboard_focus")
+        role = _uia_role_text(element).casefold()
+        if (
+            hwnd <= 0
+            or pid <= 0
+            or window_hwnd != hwnd
+            or element_pid != pid
+            or window_pid != pid
+            or not runtime_id
+            or focused is not True
+            or not any(token in role for token in ("edit", "document", "textbox", "combobox"))
+        ):
+            raise WindowsComputerUseError(
+                "A0_TAG_FOCUS_UNAVAILABLE",
+                "No exact accessible focused text field was found in the foreground Windows application.",
+            )
+        bounds_value = active.get("bounds")
+        bounds: tuple[int, int, int, int] | None = None
+        if isinstance(bounds_value, (list, tuple)) and len(bounds_value) >= 4:
+            try:
+                candidate = tuple(int(item) for item in bounds_value[:4])
+            except (TypeError, ValueError):
+                candidate = ()
+            if len(candidate) == 4 and candidate[2] > candidate[0] and candidate[3] > candidate[1]:
+                bounds = candidate
+        app_name = _bounded_text(
+            _read_first_attr(
+                _uia_info(window),
+                window,
+                names=("class_name", "framework_id", "friendly_class_name"),
+            )
+            or "Windows app",
+            limit=128,
+        )
+        window_title = _bounded_text(
+            active.get("title")
+            or _read_first_attr(_uia_info(window), window, names=("name", "window_text"))
+            or app_name,
+            limit=240,
+        )
+        return {
+            "hwnd": hwnd,
+            "pid": pid,
+            "element_hwnd": element_hwnd,
+            "runtime_id": runtime_id,
+            "app_name": app_name,
+            "window_title": window_title,
+            "window_bounds": bounds,
+            "window": window,
+            "element": element,
+        }
+
+    def _tag_element_protected(self, element: Any, element_hwnd: int = 0) -> bool:
+        native_protected = getattr(self._driver, "native_protected", None)
+        if element_hwnd and callable(native_protected):
+            with contextlib.suppress(Exception):
+                if native_protected(element_hwnd):
+                    return True
+        raw = _uia_raw_element(element)
+        protected = _read_first_attr(raw, names=("CurrentIsPassword", "current_is_password"))
+        role = _uia_role_text(element)
+        class_name = _read_first_attr(
+            _uia_info(element),
+            element,
+            names=("class_name", "friendly_class_name"),
+        )
+        semantic_role = f"{role} {class_name or ''}".casefold()
+        return bool(protected) or "password" in semantic_role or "secure" in semantic_role
+
+    def _tag_text_state(self, element: Any, element_hwnd: int) -> dict[str, Any]:
+        native_text = getattr(self._driver, "native_text", None)
+        native_selection = getattr(self._driver, "native_selection", None)
+        if element_hwnd and callable(native_text) and callable(native_selection):
+            full_value = native_text(element_hwnd, max_chars=_TAG_FIELD_MAX_CHARS)
+            if full_value is not None:
+                selection_start, selection_end = native_selection(element_hwnd)
+                if selection_start != selection_end:
+                    raise WindowsComputerUseError(
+                        "A0_TAG_TEXT_UNAVAILABLE",
+                        "The focused field must contain one caret with no active selection.",
+                    )
+                caret = _python_index_for_utf16(full_value, selection_start)
+                parsed = _parse_tag_invocation_text(
+                    full_value[:caret],
+                    full_value[caret:],
+                    before_bounded=True,
+                    after_bounded=True,
+                )
+                start = parsed["tag_start"]
+                end = parsed["tag_end"]
+                context_start = max(0, start - _TAG_TEXT_WINDOW_CHARS)
+                context_end = min(len(full_value), end + _TAG_TEXT_WINDOW_CHARS)
+                native_editable = getattr(self._driver, "native_editable", None)
+                return {
+                    "mode": "native",
+                    "parsed": parsed,
+                    "focused_text": full_value[context_start:context_end],
+                    "full_value": full_value,
+                    "start": start,
+                    "end": end,
+                    "caret": caret,
+                    "native_start": _utf16_length(full_value[:start]),
+                    "native_end": _utf16_length(full_value[:end]),
+                    "native_caret": selection_start,
+                    "editable": bool(callable(native_editable) and native_editable(element_hwnd)),
+                }
+
+        text_pattern = _uia_text_pattern(element)
+        if text_pattern is None:
+            raise WindowsComputerUseError(
+                "A0_TAG_TEXT_UNAVAILABLE",
+                "The focused field exposes neither a bounded native Edit range nor UIA TextPattern.",
+            )
+        selection = _uia_selection(text_pattern)
+        document_text = str(text_pattern.DocumentRange.GetText(_TAG_FIELD_MAX_CHARS + 1))
+        full_value: str | None = None
+        full_before = full_after = ""
+        if len(document_text) <= _TAG_FIELD_MAX_CHARS:
+            full_before, full_after = _uia_prefix_and_suffix(text_pattern, selection)
+            if document_text == full_before + full_after:
+                value_pattern = _uia_value_pattern(element)
+                if value_pattern is not None:
+                    with contextlib.suppress(Exception):
+                        current_value = str(value_pattern.CurrentValue)
+                        if current_value == document_text:
+                            full_value = current_value
+        if full_value is not None:
+            before = full_before
+            after = full_after
+            before_bounded = after_bounded = True
+        else:
+            before, after, before_bounded, after_bounded = _uia_bounded_context(
+                text_pattern,
+                selection,
+            )
+        parsed = _parse_tag_invocation_text(
+            before,
+            after,
+            before_bounded=before_bounded,
+            after_bounded=after_bounded,
+        )
+        start = end = caret = 0
+        focused_text = parsed["focused_text"]
+        editable = False
+        if full_value is not None:
+            caret = len(full_before)
+            start = parsed["tag_start"]
+            end = parsed["tag_end"]
+            context_start = max(0, start - _TAG_TEXT_WINDOW_CHARS)
+            context_end = min(len(full_value), end + _TAG_TEXT_WINDOW_CHARS)
+            focused_text = full_value[context_start:context_end]
+            value_pattern = _uia_value_pattern(element)
+            enabled = _read_first_attr(
+                _uia_info(element),
+                _uia_raw_element(element),
+                element,
+                names=("enabled", "CurrentIsEnabled"),
+            )
+            read_only = True
+            if value_pattern is not None:
+                with contextlib.suppress(Exception):
+                    read_only = bool(value_pattern.CurrentIsReadOnly)
+            editable = enabled is not False and value_pattern is not None and not read_only
+            if editable:
+                _uia_range_for_span(text_pattern, full_value, start, end)
+        return {
+            "mode": "uia",
+            "parsed": parsed,
+            "focused_text": focused_text,
+            "full_value": full_value,
+            "start": start,
+            "end": end,
+            "caret": caret,
+            "native_start": 0,
+            "native_end": 0,
+            "native_caret": 0,
+            "editable": editable,
+        }
+
+    def _validate_tag_focus(self, target: _TagTarget, *, require_editable: bool = True) -> dict[str, Any]:
+        focus = self._tag_focus()
+        elements_equal = getattr(self._driver, "uia_elements_equal", None)
+        if (
+            focus["pid"] != target.pid
+            or focus["hwnd"] != target.hwnd
+            or focus["element_hwnd"] != target.element_hwnd
+            or focus["runtime_id"] != target.runtime_id
+            or not callable(elements_equal)
+            or not elements_equal(focus["window"], target.window)
+            or not elements_equal(focus["element"], target.element)
+        ):
+            raise WindowsComputerUseError(
+                "A0_TAG_TARGET_CHANGED",
+                "The active window or focused field changed while Agent Zero was working.",
+            )
+        if self._tag_element_protected(focus["element"], focus["element_hwnd"]):
+            raise WindowsComputerUseError(
+                "A0_TAG_TARGET_CHANGED",
+                "The tagged field became protected while Agent Zero was working.",
+            )
+        if target.mode == "native" and target.element_hwnd:
+            focused_native_handle = getattr(self._driver, "focused_native_handle", None)
+            native_editable = getattr(self._driver, "native_editable", None)
+            if (
+                not callable(focused_native_handle)
+                or focused_native_handle() != target.element_hwnd
+                or (
+                    require_editable
+                    and (not callable(native_editable) or not native_editable(target.element_hwnd))
+                )
+            ):
+                raise WindowsComputerUseError(
+                    "A0_TAG_TARGET_CHANGED",
+                    "The native tagged field is no longer the exact focused editable control.",
+                )
+        elif require_editable:
+            value_pattern = _uia_value_pattern(focus["element"])
+            try:
+                read_only = value_pattern is None or bool(value_pattern.CurrentIsReadOnly)
+            except Exception:
+                read_only = True
+            if read_only:
+                raise WindowsComputerUseError(
+                    "A0_TAG_TARGET_CHANGED",
+                    "The tagged field is no longer safely editable.",
+                )
+        return focus
+
+    def _tag_window_screenshot(
+        self,
+        target: _TagTarget,
+        *,
+        geometry: ScreenGeometry,
+    ) -> tuple[str, str, dict[str, str] | None]:
+        bounds = target.window_bounds
+        if (
+            bounds is None
+            or bounds[0] < geometry.origin_x
+            or bounds[1] < geometry.origin_y
+            or bounds[2] > geometry.origin_x + geometry.width
+            or bounds[3] > geometry.origin_y + geometry.height
+        ):
+            return (
+                "unavailable",
+                "Windows did not expose verified on-screen active-window bounds; A0 Tag continued without a screenshot.",
+                None,
+            )
+        capture_window = getattr(self._driver, "capture_window_png", None)
+        if not callable(capture_window):
+            return (
+                "unavailable",
+                "The Windows backend cannot capture a verified active window; A0 Tag continued without a screenshot.",
+                None,
+            )
+        focus = self._validate_tag_focus(target, require_editable=False)
+        if focus["window_bounds"] != bounds:
+            return (
+                "unavailable",
+                "The active Windows window moved before its bounds could be verified; A0 Tag continued without a screenshot.",
+                None,
+            )
+        try:
+            png_bytes, width, height = capture_window(hwnd=target.hwnd, bounds=bounds)
+        except Exception:
+            return (
+                "unavailable",
+                "The verified active-window screenshot failed; A0 Tag continued without a screenshot.",
+                None,
+            )
+        focus = self._validate_tag_focus(target, require_editable=False)
+        if focus["window_bounds"] != bounds:
+            return (
+                "unavailable",
+                "The active Windows window moved during capture; A0 Tag discarded the screenshot.",
+                None,
+            )
+        if (
+            width != bounds[2] - bounds[0]
+            or height != bounds[3] - bounds[1]
+            or not png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+            or len(png_bytes) > _TAG_SCREENSHOT_MAX_BYTES
+        ):
+            return (
+                "unavailable",
+                "The verified active-window screenshot was invalid or too large; A0 Tag continued without it.",
+                None,
+            )
+        return (
+            "attached",
+            "",
+            {
+                "encoding": "base64",
+                "mime": "image/png",
+                "filename": "a0-tag-window.png",
+                "data": base64.b64encode(png_bytes).decode("ascii"),
+            },
+        )
+
+    def _replace_native_tag(self, target: _TagTarget, replacement: str) -> None:
+        native_text = getattr(self._driver, "native_text")
+        native_selection = getattr(self._driver, "native_selection")
+        set_selection = getattr(self._driver, "set_native_selection")
+        replace_selection = getattr(self._driver, "replace_native_selection")
+        current = native_text(target.element_hwnd, max_chars=_TAG_FIELD_MAX_CHARS)
+        if current != target.full_value or native_selection(target.element_hwnd) != (
+            target.native_caret,
+            target.native_caret,
+        ):
+            raise WindowsComputerUseError(
+                "A0_TAG_TARGET_CHANGED",
+                "The original Windows text range or caret changed while Agent Zero was working.",
+            )
+        expected = current[: target.start] + replacement + current[target.end :]
+        inserted_caret = target.native_start + _utf16_length(replacement)
+        final_caret = inserted_caret + _utf16_length(target.trailing)
+        set_selection(target.element_hwnd, target.native_start, target.native_end)
+        if native_selection(target.element_hwnd) != (target.native_start, target.native_end):
+            raise WindowsComputerUseError(
+                "A0_TAG_REPLACE_FAILED",
+                "The focused Windows field rejected exact range selection.",
+            )
+        replace_selection(target.element_hwnd, replacement)
+        actual = native_text(target.element_hwnd, max_chars=_TAG_FIELD_MAX_CHARS)
+        actual_selection = native_selection(target.element_hwnd)
+        if actual == expected and actual_selection == (inserted_caret, inserted_caret):
+            set_selection(target.element_hwnd, final_caret, final_caret)
+            if (
+                native_text(target.element_hwnd, max_chars=_TAG_FIELD_MAX_CHARS) == expected
+                and native_selection(target.element_hwnd) == (final_caret, final_caret)
+            ):
+                return
+        self._restore_native_tag(target, actual)
+        raise WindowsComputerUseError(
+            "A0_TAG_REPLACE_FAILED",
+            "The field changed or rejected the replacement; the original tag was restored where possible.",
+        )
+
+    def _restore_native_tag(self, target: _TagTarget, current: str | None) -> None:
+        if current is None or target.full_value is None:
+            return
+        prefix = target.full_value[: target.start]
+        suffix = target.full_value[target.end :]
+        if not current.startswith(prefix) or not current.endswith(suffix):
+            return
+        suffix_start = len(current) - len(suffix) if suffix else len(current)
+        inserted = current[len(prefix) : suffix_start]
+        if len(inserted) > _TAG_REPLACEMENT_MAX_CHARS * 2:
+            return
+        with contextlib.suppress(Exception):
+            self._validate_tag_focus(target, require_editable=True)
+            end = target.native_start + _utf16_length(inserted)
+            self._driver.set_native_selection(target.element_hwnd, target.native_start, end)
+            self._driver.replace_native_selection(target.element_hwnd, target.original)
+            self._driver.set_native_selection(
+                target.element_hwnd,
+                target.native_caret,
+                target.native_caret,
+            )
+
+    def _uia_value_state(self, element: Any) -> tuple[Any, Any, str, Any, str, str]:
+        text_pattern = _uia_text_pattern(element)
+        value_pattern = _uia_value_pattern(element)
+        if text_pattern is None or value_pattern is None:
+            raise WindowsComputerUseError(
+                "A0_TAG_TARGET_CHANGED",
+                "The tagged field no longer exposes the required UI Automation patterns.",
+            )
+        selection = _uia_selection(text_pattern)
+        document = str(text_pattern.DocumentRange.GetText(_TAG_FIELD_MAX_CHARS + 1))
+        if len(document) > _TAG_FIELD_MAX_CHARS:
+            raise WindowsComputerUseError(
+                "A0_TAG_TARGET_CHANGED",
+                "The tagged field grew beyond the bounded replacement limit.",
+            )
+        before, after = _uia_prefix_and_suffix(text_pattern, selection)
+        try:
+            value = str(value_pattern.CurrentValue)
+        except Exception as exc:
+            raise WindowsComputerUseError(
+                "A0_TAG_TARGET_CHANGED",
+                "The tagged field no longer exposes an exact value.",
+            ) from exc
+        if document != value or value != before + after:
+            raise WindowsComputerUseError(
+                "A0_TAG_TARGET_CHANGED",
+                "The tagged field value and caret range no longer agree.",
+            )
+        return text_pattern, value_pattern, value, selection, before, after
+
+    def _replace_uia_tag(self, target: _TagTarget, replacement: str) -> None:
+        focus = self._validate_tag_focus(target)
+        text_pattern, _value_pattern, current, selection, before, after = self._uia_value_state(
+            focus["element"]
+        )
+        if (
+            current != target.full_value
+            or before != current[: target.caret]
+            or after != current[target.caret :]
+        ):
+            raise WindowsComputerUseError(
+                "A0_TAG_TARGET_CHANGED",
+                "The original Windows value, range, or caret changed while Agent Zero was working.",
+            )
+        text_range = _uia_range_for_span(text_pattern, current, target.start, target.end)
+        text_range.Select()
+        selected = text_pattern.GetSelection().GetElement(0)
+        if str(selected.GetText(-1)) != target.original:
+            raise WindowsComputerUseError(
+                "A0_TAG_REPLACE_FAILED",
+                "The focused Windows field rejected exact range selection.",
+            )
+        self._validate_tag_focus(target)
+        type_unicode = getattr(self._driver, "type_unicode_text", None)
+        if not callable(type_unicode):
+            raise WindowsComputerUseError(
+                "A0_TAG_REPLACE_FAILED",
+                "The Windows backend cannot enter exact Unicode replacement text.",
+            )
+        type_unicode(replacement)
+        expected = current[: target.start] + replacement + current[target.end :]
+        inserted_caret = target.start + len(replacement)
+        final_caret = inserted_caret + len(target.trailing)
+        try:
+            focus = self._validate_tag_focus(target)
+            text_pattern, _value_pattern, actual, _selection, actual_before, actual_after = (
+                self._uia_value_state(focus["element"])
+            )
+            if (
+                actual != expected
+                or actual_before != expected[:inserted_caret]
+                or actual_after != expected[inserted_caret:]
+            ):
+                raise WindowsComputerUseError("A0_TAG_REPLACE_FAILED", "replacement mismatch")
+            final_range = _uia_caret_for_prefix(text_pattern, expected, expected[:final_caret])
+            final_range.Select()
+            _pattern, _value, verified, _selection, verified_before, verified_after = (
+                self._uia_value_state(focus["element"])
+            )
+            if (
+                verified == expected
+                and verified_before == expected[:final_caret]
+                and verified_after == expected[final_caret:]
+            ):
+                return
+        except WindowsComputerUseError:
+            pass
+        self._restore_uia_tag(target)
+        raise WindowsComputerUseError(
+            "A0_TAG_REPLACE_FAILED",
+            "The field changed or rejected the replacement; the original tag was restored where possible.",
+        )
+
+    def _restore_uia_tag(self, target: _TagTarget) -> None:
+        if target.full_value is None:
+            return
+        with contextlib.suppress(Exception):
+            focus = self._validate_tag_focus(target)
+            text_pattern, value_pattern, _value, _selection, _before, _after = self._uia_value_state(
+                focus["element"]
+            )
+            value_pattern.SetValue(target.full_value)
+            text_pattern = _uia_text_pattern(focus["element"])
+            if text_pattern is None:
+                return
+            caret = _uia_caret_for_prefix(
+                text_pattern,
+                target.full_value,
+                target.full_value[: target.caret],
+            )
+            caret.Select()
+
     def stop_session(self, params: dict[str, Any]) -> dict[str, Any]:
         context_id = normalize_context_id(params.get("context_id"))
+        self._tag_target = None
         session = self._session
         if session is not None and session.session.context_id == context_id:
             session.session.active = False
@@ -2172,6 +3304,7 @@ class WindowsComputerUseRuntime:
         return session
 
     def close(self) -> None:
+        self._tag_target = None
         if self._session is not None and self._session.session.active:
             self.stop_session({"context_id": self._session.session.context_id})
 
@@ -2233,6 +3366,9 @@ def serve_stdio(runtime: WindowsComputerUseRuntime | None = None) -> int:
                         "start_session",
                         "status",
                         "capture",
+                        "tag_context",
+                        "tag_replace",
+                        "tag_release",
                         "list_windows",
                         "get_window_state",
                         "element_action",
@@ -2245,7 +3381,14 @@ def serve_stdio(runtime: WindowsComputerUseRuntime | None = None) -> int:
                         "type",
                         "stop_session",
                     }:
-                        if action not in {"start_session", "status", "stop_session"}:
+                        if action not in {
+                            "start_session",
+                            "status",
+                            "stop_session",
+                            "tag_context",
+                            "tag_replace",
+                            "tag_release",
+                        }:
                             request = normalize_action_payload(action, request, context_id=normalize_context_id(request.get("context_id")))
                         result = runtime.dispatch(action, request)
                         response = {

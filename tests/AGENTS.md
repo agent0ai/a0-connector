@@ -32,6 +32,8 @@
   construction, while native TGP/Sixel visual acceptance remains a separately
   recorded capable-terminal check.
 - Keep test names behavior-oriented.
+- Mark tests for platform-only modules so a full suite on another supported OS
+  skips them before importing unavailable platform internals.
 - Avoid sleeps and timing assumptions unless there is no better signal.
 - Use full suite verification for shared protocol, backend contract, or UI orchestration changes.
 - Gateway coverage must include its parser/JSONL contract, tools-only connection
@@ -44,6 +46,14 @@
   macOS A0 Tag coverage must separately prove that its private session still
   requires Accessibility but can return text-only context without Screen
   Recording, while verified native-window screenshots remain fail-closed.
+- Windows A0 Tag coverage must exercise both HWND-backed native Edit ranges and
+  HWND-less UIA TextPattern fields, protected-field ordering, exact Unicode
+  value/range/caret revalidation, normalization rollback, target lifecycle,
+  failed-context target disposal, stdio privacy, and refusal to replace failed
+  active-window crops with desktop screenshots. Windows ordinary input coverage
+  must prove that printable text,
+  including pywinauto metacharacters and Unicode surrogate pairs, remains
+  literal while explicit key chords keep their native virtual-key mapping.
 
 ## Verification
 
