@@ -27,6 +27,8 @@ CHROME_SINGLETON_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
 HOST_BROWSER_ARTIFACT_ROOT_ENV = "A0_HOST_BROWSER_ARTIFACT_ROOT"
 DEFAULT_HOST_BROWSER_ARTIFACT_ROOT = Path(tempfile.gettempdir()) / "_a0_connector" / "host_browser"
 PLAYWRIGHT_PYTHON_PACKAGE = "playwright"
+SAFARI_EXECUTABLE_PATH = Path("/Applications/Safari.app/Contents/MacOS/Safari")
+SAFARI_DRIVER_PATH = Path("/usr/bin/safaridriver")
 HOST_BROWSER_OZONE_PLATFORM_ENV = "A0_HOST_BROWSER_OZONE_PLATFORM"
 HOST_BROWSER_REMOTE_DEBUGGING_ENDPOINTS_ENV = "A0_HOST_BROWSER_REMOTE_DEBUGGING_ENDPOINTS"
 REMOTE_DEBUGGING_CONNECT_TIMEOUT_SECONDS = 60.0
@@ -39,6 +41,7 @@ _URL_SCHEME_RE = re.compile(r"^[a-z][a-z\d+\-.]*:", re.I)
 _SAFE_CONTEXT_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SUPPORTED_ACTIONS = {
     "open",
+    "open_remote_debugging",
     "list",
     "state",
     "set_active",
@@ -86,6 +89,8 @@ BROWSER_REEXPORTS = [
     "HOST_BROWSER_ARTIFACT_ROOT_ENV",
     "DEFAULT_HOST_BROWSER_ARTIFACT_ROOT",
     "PLAYWRIGHT_PYTHON_PACKAGE",
+    "SAFARI_EXECUTABLE_PATH",
+    "SAFARI_DRIVER_PATH",
     "HOST_BROWSER_OZONE_PLATFORM_ENV",
     "HOST_BROWSER_REMOTE_DEBUGGING_ENDPOINTS_ENV",
     "REMOTE_DEBUGGING_CONNECT_TIMEOUT_SECONDS",
@@ -246,6 +251,8 @@ class BrowserProfile:
 
     @property
     def profile_path_display(self) -> str:
+        if self.is_safari:
+            return self.executable_path
         return self.cdp_endpoint or str(self.profile_path)
 
     @property
@@ -255,6 +262,10 @@ class BrowserProfile:
     @property
     def is_remote_debugging(self) -> bool:
         return bool(self.cdp_endpoint)
+
+    @property
+    def is_safari(self) -> bool:
+        return self.family == "safari"
 
     @property
     def browser_id(self) -> str:
@@ -281,7 +292,9 @@ class BrowserProfile:
             "profile_label": self.profile_label,
             "display_name": self.display_name,
             "cdp_endpoint": self.cdp_endpoint,
-            "locked": False if self.is_remote_debugging else is_profile_locked(self.profile_path),
+            "locked": False
+            if self.is_remote_debugging or self.is_safari
+            else is_profile_locked(self.profile_path),
         }
 
 
@@ -361,7 +374,17 @@ def _detect_macos_candidates() -> list[BrowserCandidate]:
         for f, label, exe, profile in specs
         if exe.exists()
     ]
-    return _with_a0_managed_candidates(candidates)
+    candidates = _with_a0_managed_candidates(candidates)
+    if SAFARI_EXECUTABLE_PATH.exists():
+        candidates.append(
+            BrowserCandidate(
+                "safari",
+                "Safari",
+                str(SAFARI_EXECUTABLE_PATH),
+                Path(),
+            )
+        )
+    return candidates
 
 
 def _detect_windows_candidates() -> list[BrowserCandidate]:
@@ -481,6 +504,17 @@ def base_browser_family(family: str) -> str:
 
 
 def discover_profiles(candidate: BrowserCandidate) -> list[BrowserProfile]:
+    if candidate.family == "safari":
+        return [
+            BrowserProfile(
+                family="safari",
+                family_label=candidate.label,
+                executable_path=candidate.executable_path,
+                user_data_dir=Path(),
+                profile_directory="Default",
+                display_name="Automation window",
+            )
+        ]
     root = candidate.user_data_dir.expanduser()
     if is_a0_managed_family(candidate.family):
         return [
@@ -518,7 +552,7 @@ def discover_remote_debugging_profiles(candidates: Iterable[BrowserCandidate] | 
     seen: set[str] = set()
     candidate_list = list(candidates) if candidates is not None else detect_browser_candidates()
     for candidate in candidate_list:
-        if is_a0_managed_family(candidate.family):
+        if is_a0_managed_family(candidate.family) or candidate.family == "safari":
             continue
         endpoint = remote_debugging_endpoint_from_user_data_dir(candidate.user_data_dir)
         if not endpoint or endpoint in seen:
@@ -673,6 +707,8 @@ def profile_lock_state(profile_path: Path | str) -> ProfileLockState:
 
 
 def profile_lock_state_for_profile(profile: BrowserProfile) -> ProfileLockState:
+    if profile.is_safari:
+        return ProfileLockState(False)
     if profile.is_remote_debugging:
         return ProfileLockState(False)
     return profile_lock_state(profile.profile_path)
@@ -973,7 +1009,13 @@ def _trim_install_output(output: str) -> str:
 def format_profile_rows(profiles: Iterable[BrowserProfile]) -> list[str]:
     rows = []
     for profile in profiles:
-        lock = "allowed" if profile.is_remote_debugging else "locked" if is_profile_locked(profile.profile_path) else "ready"
+        lock = (
+            "allowed"
+            if profile.is_remote_debugging
+            else "locked"
+            if not profile.is_safari and is_profile_locked(profile.profile_path)
+            else "ready"
+        )
         rows.append(
             f"{profile.family} {profile.profile_label} - {profile.display_name} "
             f"({profile.profile_path_display}) [{lock}]"

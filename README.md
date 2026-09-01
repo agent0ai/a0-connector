@@ -191,10 +191,10 @@ notification bytes use terminal stderr and never contaminate stdout.
 | `/computer-use on` / `/computer-use off` | Advertise or disable local Computer Use from this CLI; enabling arms the platform permission flow when needed |
 | `/browser status` | Show host-browser connector status |
 | `/browser host on` / `/browser host off` | Advertise or disable host-browser control from this CLI and sync Agent Zero Browser mode when supported |
-| `/browser profile` | List detected Chromium-family profiles; pass `<family> <profile>` to select, for example `chrome-a0 Default` |
+| `/browser profile` | List detected host browsers and profiles; pass `<family> <profile>` to select, for example `safari Default` or `chrome-a0 Default` |
 | `/browser list` | List host-browser targets |
 | `/browser auto` / `/browser <number>` / `/browser <id>` / `/browser <host:port>` / `/browser ws://...` | Choose the current Agent Zero Browser host target |
-| `/browser relaunch` | Prepare the host browser now, either by attaching to allowed Chrome remote debugging or by starting the selected local profile |
+| `/browser relaunch` | Prepare the selected host browser now |
 | `/browser repair` | Install missing Python Playwright for the local-profile launch path |
 | `/browser privacy` | Show where host-browser content policy is configured |
 | `/disconnect` | Disconnect and return to the current host connection flow |
@@ -255,18 +255,24 @@ Type `$` in the composer to browse skills available to the current chat. Selecti
 
 ### Host browser mode
 
-Agent Zero can route its existing `browser` tool through A0 CLI so the CLI controls a real Chromium-family browser on the host machine while the Agent Zero server still runs in Docker or another remote runtime.
+Agent Zero can route its existing `browser` tool through A0 CLI so the CLI controls Safari on macOS or a Chromium-family browser on the host machine while the Agent Zero server still runs in Docker or another remote runtime.
 
 Happy path:
 
 1. Keep A0 CLI connected to the Agent Zero chat.
-2. If you want Agent Zero to use your already-open personal browser, visit its remote debugging page, such as `chrome://inspect/#remote-debugging` or `opera://inspect/#remote-debugging`, and click **Allow**.
+2. Choose a browser:
+
+   - Safari: open **Safari > Settings > Advanced**, enable **Show features for web developers**, then open **Developer** and enable **Allow remote automation**. Select `safari:default` in Launcher or run `/browser safari`.
+   - An already-open Chromium-family browser: visit its remote debugging page, such as `chrome://inspect/#remote-debugging` or `opera://inspect/#remote-debugging`, and click **Allow**.
+
 3. In Agent Zero Browser settings, choose `host_when_available` or `host_required`.
 4. Ask the agent to use the browser.
 
 When a subscribed CLI supports host-browser control, the first browser action can enable and prepare the local browser automatically. The CLI slash commands remain available for diagnostics and manual override.
 
-The CLI does not bundle Chromium and it does not copy credentials, cookies, or profile data out of the browser profile. If the browser's Remote debugging page has been allowed, A0 reads the local `DevToolsActivePort` file and keeps one DevTools Protocol connection open for browser actions. Status checks and profile listing do not connect to the browser, so they should not create repeated **Allow** prompts.
+The CLI does not bundle a browser and it does not copy credentials, cookies, or profile data out of a browser profile. For Safari, A0 uses Apple's bundled `/usr/bin/safaridriver` and opens a Safari automation window for one Agent Zero browser context at a time. It never enables Safari's remote-automation setting silently. Safari WebDriver provides viewport screenshots; a full-page screenshot request fails explicitly.
+
+For Chromium-family browsers, if the browser's Remote debugging page has been allowed, A0 reads the local `DevToolsActivePort` file and keeps one DevTools Protocol connection open for browser actions. Status checks and profile listing do not connect to either browser runtime, so they should not create repeated permission prompts.
 
 For a browser launched with an explicit debugging port, select its discovery
 address directly, for example `/browser localhost:9222`. A0 CLI resolves
@@ -286,7 +292,7 @@ The A0 CLI installation includes the Python Playwright client, but it does not d
 ```
 
 Platform caveats:
-- macOS: detects Chrome, Chromium, Edge, Brave, Opera, and Vivaldi apps in `/Applications` and profile data in `~/Library/Application Support`.
+- macOS: detects Safari through its system WebDriver, plus Chrome, Chromium, Edge, Brave, Opera, and Vivaldi apps in `/Applications` and profile data in `~/Library/Application Support`.
 - Windows: detects Chrome, Chromium, Edge, Brave, Opera, and Vivaldi under `%LOCALAPPDATA%`/Program Files profile conventions.
 - Linux: detects Chrome, Chromium, Edge, Brave, Opera, and Vivaldi variants on `PATH`; X11 and Wayland are both supported by the underlying system browser.
 

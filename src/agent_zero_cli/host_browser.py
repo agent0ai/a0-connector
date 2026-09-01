@@ -13,6 +13,14 @@ from agent_zero_cli.host_browser_common import (
 )
 from agent_zero_cli.host_browser_common import *
 from agent_zero_cli.host_browser_manager import HostBrowserManager
+from agent_zero_cli.host_browser_safari import (
+    SafariContext,
+    SafariDriver,
+    SafariDriverError,
+    SafariKeyboard,
+    SafariMouse,
+    SafariPage,
+)
 from agent_zero_cli.host_browser_session import (
     HostBrowserPage,
     HostBrowserSession,
@@ -28,6 +36,12 @@ __all__ = [
     "CDPMouse",
     "CDPPage",
     "HostBrowserManager",
+    "SafariContext",
+    "SafariDriver",
+    "SafariDriverError",
+    "SafariKeyboard",
+    "SafariMouse",
+    "SafariPage",
     "HostBrowserPage",
     "HostBrowserSession",
     "ProfileLockedError",

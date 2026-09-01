@@ -38,6 +38,7 @@
   offsets, while `EditableText.insert_text` receives the UTF-8 byte length of
   its string. Keep replacement and rollback calls aligned with that split.
 - Host-browser `open` must reuse an already-open tab with the same normalized URL before creating a new tab. Keep `list` and `set_active` workflows available for title-based or URL-based selection.
+- The allowlisted `open_remote_debugging` host-browser operation opens only an installed Chrome, Opera, or Edge executable at its fixed internal inspect page. It remains available while Host Browser is off so a deliberate Browser Settings action can complete setup, and it must never accept an arbitrary executable or URL.
 - Remote host-browser operations may report status while Host Browser is off, but `ensure` and every effectful action must fail closed. Local `/browser` commands and Launcher-authorized setup may still prepare the browser through the direct manager API.
 - Host-browser metadata must advertise stable browser choices, including discovered CDP browser IDs that survive `DevToolsActivePort` port/GUID changes. Incoming `browser_selection` / `host_browser_selection` values must select that browser instead of falling back to the automatic profile picker. Browser preparation may briefly wait for an existing browser's active-port file, and a failed discovered-CDP attach may retry only after that file advertises a different endpoint; explicit custom endpoints remain exact. Consent failures must tell the user to choose a Chrome profile and click Allow before retrying.
 - The packaged A0 runtime includes the Python Playwright client for local-profile
@@ -48,7 +49,16 @@
   installed.
 - Explicit host-browser endpoints may be `host:port`, HTTP(S) CDP discovery addresses, or full DevTools WebSocket URLs. Resolve discovery addresses through `/json/version` on the host, preserve WebSocket path/query case, and fail explicitly instead of selecting another browser.
 - WebSocket recovery in `connection.py` retries with the bounded `_RECOVERY_DELAYS_SECONDS` backoff and then keeps retrying on the steady `_RECOVERY_STEADY_DELAY_SECONDS` cadence indefinitely; after the initial ramp, Back and Try again remain available. A new connection, Back, or exit must cancel the prior recovery task before taking ownership. Recovery exits quietly when the active context changes and aborts when the client's `base_url` changes.
-- Host-browser discovery covers major Chromium-family browsers with CDP-compatible profiles, including Chrome, Chromium, Edge, Brave, Opera, and Vivaldi.
+- Host-browser discovery covers Safari on macOS through the system
+  `safaridriver`, plus major Chromium-family browsers with CDP-compatible
+  profiles, including Chrome, Chromium, Edge, Brave, Opera, and Vivaldi. Safari
+  runs behind the existing `HostBrowserSession` operation surface, uses one
+  exclusive automation context, never toggles remote automation itself, and
+  rejects unsupported full-page screenshots explicitly. Before each Safari
+  operation or cross-context exclusivity check, the connector checks both the
+  `safaridriver` process and the active WebDriver session; stale state is closed
+  through the existing runtime cleanup path and rebuilt under the session start
+  lock.
 - Host-browser status discovery on Windows must read native executable version
   metadata without running GUI browser binaries; opening an installed browser
   is an explicit preparation/use action, never a metadata side effect.

@@ -10,6 +10,11 @@ from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from agent_zero_cli.host_browser_cdp import CDPConnection, CDPContext, CDPPage
+from agent_zero_cli.host_browser_safari import (
+    SafariDriver,
+    SafariDriverError,
+    SafariPage,
+)
 from agent_zero_cli.host_browser_common import (
     DEFAULT_VIEWPORT,
     BrowserProfile,
@@ -41,6 +46,9 @@ class HostBrowserPage:
 
 class _RuntimeAdapter:
     close_pages_on_session_close = True
+
+    async def is_started(self, session: "HostBrowserSession") -> bool:
+        return session.context is not None
 
     async def start(self, session: "HostBrowserSession") -> None:
         raise NotImplementedError
@@ -150,6 +158,52 @@ class _CDPRuntimeAdapter(_RuntimeAdapter):
         session.last_interacted_browser_id = None
 
 
+class _SafariRuntimeAdapter(_RuntimeAdapter):
+    close_pages_on_session_close = False
+
+    async def is_started(self, session: "HostBrowserSession") -> bool:
+        process = getattr(session.browser, "process", None)
+        if session.context is None or process is None or process.returncode is not None:
+            return False
+        try:
+            await session.browser.session_request("GET", "window/handles")
+        except SafariDriverError:
+            return False
+        return True
+
+    async def start(self, session: "HostBrowserSession") -> None:
+        driver = SafariDriver()
+        session.browser = driver
+        session.context = await driver.start()
+
+    async def refresh_pages(self, session: "HostBrowserSession") -> None:
+        discovered_pages = await session.context.discover_pages()
+        visible_pages = set(discovered_pages)
+        for browser_id, browser_page in list(session.pages.items()):
+            if browser_page.page not in visible_pages:
+                session.pages.pop(browser_id, None)
+                if session.last_interacted_browser_id == browser_id:
+                    session.last_interacted_browser_id = None
+        for page in discovered_pages:
+            await session._register_page(page)
+        if session.last_interacted_browser_id not in session.pages:
+            session.last_interacted_browser_id = next(iter(sorted(session.pages)), None)
+
+    async def current_url(self, page: Any) -> str:
+        if isinstance(page, SafariPage):
+            return await page.current_url()
+        return await super().current_url(page)
+
+    async def close_runtime(self, session: "HostBrowserSession") -> None:
+        session.pages.clear()
+        if session.browser is not None:
+            with contextlib.suppress(Exception):
+                await session.browser.close()
+        session.browser = None
+        session.context = None
+        session.last_interacted_browser_id = None
+
+
 def _refreshed_remote_debugging_profile(profile: BrowserProfile) -> BrowserProfile:
     if not profile.is_remote_debugging or profile.user_data_dir == Path():
         return profile
@@ -184,6 +238,8 @@ class HostBrowserSession:
 
     @property
     def _runtime(self) -> _RuntimeAdapter:
+        if self.profile.is_safari:
+            return _SafariRuntimeAdapter()
         if self.profile.is_remote_debugging:
             return _CDPRuntimeAdapter()
         return _PlaywrightRuntimeAdapter()
@@ -409,12 +465,18 @@ class HostBrowserSession:
             raise ValueError("multi requires a non-empty calls list")
         return await self.multi(calls)
 
+    async def is_started(self) -> bool:
+        return await self._runtime.is_started(self)
+
     async def ensure_started(self) -> None:
-        if self.context is not None:
+        if await self.is_started():
             return
         async with self._start_lock:
-            if self.context is not None:
+            runtime = self._runtime
+            if await self.is_started():
                 return
+            if self.context is not None:
+                await runtime.close_runtime(self)
             await self._start()
 
     async def _start(self) -> None:
