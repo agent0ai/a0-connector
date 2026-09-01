@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -870,6 +872,28 @@ def test_chromium_launch_args_use_wayland_only_without_x_display(
     args = chromium_launch_args("Default")
 
     assert "--ozone-platform=wayland" in args
+
+
+def test_windows_browser_version_uses_file_metadata_without_launching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_browser_common.browser_major_version.cache_clear()
+    monkeypatch.setattr(host_browser_common.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        host_browser_common.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("Windows browser version lookup launched the browser"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "win32api",
+        SimpleNamespace(GetFileVersionInfo=lambda _path, _query: {"FileVersionMS": 152 << 16}),
+    )
+
+    try:
+        assert host_browser_common.browser_major_version("C:/Program Files/Browser/browser.exe") == 152
+    finally:
+        host_browser_common.browser_major_version.cache_clear()
 
 
 def test_remote_debugging_restriction_blocks_default_chrome_profile(

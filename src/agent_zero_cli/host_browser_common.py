@@ -752,6 +752,14 @@ def remote_debugging_enable_hint() -> str:
 
 @lru_cache(maxsize=32)
 def browser_major_version(executable_path: str) -> int | None:
+    if platform.system() == "Windows":
+        try:
+            import win32api
+
+            version = win32api.GetFileVersionInfo(executable_path, "\\")
+            return (int(version["FileVersionMS"]) >> 16) & 0xFFFF
+        except Exception:
+            return None
     try:
         result = subprocess.run(
             [executable_path, "--version"],
