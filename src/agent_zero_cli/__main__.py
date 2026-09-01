@@ -3,9 +3,17 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 from pathlib import Path
+import sys
 
 from agent_zero_cli import __version__
 from agent_zero_cli.client import DEFAULT_HOST
+
+
+def _configure_windows_machine_stdio() -> None:
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -324,6 +332,9 @@ def _run_acp(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if sys.platform == "win32" and args.command in {"headless", "gateway"}:
+        _configure_windows_machine_stdio()
 
     if args.version:
         print(__version__)

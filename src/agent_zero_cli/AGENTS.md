@@ -49,6 +49,9 @@
 - Explicit host-browser endpoints may be `host:port`, HTTP(S) CDP discovery addresses, or full DevTools WebSocket URLs. Resolve discovery addresses through `/json/version` on the host, preserve WebSocket path/query case, and fail explicitly instead of selecting another browser.
 - WebSocket recovery in `connection.py` retries with the bounded `_RECOVERY_DELAYS_SECONDS` backoff and then keeps retrying on the steady `_RECOVERY_STEADY_DELAY_SECONDS` cadence indefinitely; after the initial ramp, Back and Try again remain available. A new connection, Back, or exit must cancel the prior recovery task before taking ownership. Recovery exits quietly when the active context changes and aborts when the client's `base_url` changes.
 - Host-browser discovery covers major Chromium-family browsers with CDP-compatible profiles, including Chrome, Chromium, Edge, Brave, Opera, and Vivaldi.
+- Host-browser status discovery on Windows must read native executable version
+  metadata without running GUI browser binaries; opening an installed browser
+  is an explicit preparation/use action, never a metadata side effect.
 - `/browser list`, `/browser auto`, and direct `/browser <number|id|host:port|ws://...>` own CLI-side host-browser target selection for the current Agent Zero project.
 - `/goal <objective>` creates the active chat goal through the builtin `_goal` plugin and sends the objective to the agent; `/goal update <text>` stays silent for active goals but resends an edited complete or blocked goal so work resumes; `/goal delete` only mutates goal state.
 - The connected TUI command palette must merge effective `_commands` entries for the active chat with its local command registry. Local commands win name collisions; only server-confirmed extension commands may be forwarded through the chat path for Core-side resolution.
@@ -92,6 +95,9 @@
   readiness.
 - Gateway control uses JSONL stdin/stdout for status, scope replacement,
   browser preparation, Computer Use setup/rearm, error, and shutdown messages.
+  On Windows, the `a0` entrypoint configures the gateway and headless machine
+  protocol streams as UTF-8 before either mode reads or writes JSONL; the
+  interactive Textual startup path keeps its native terminal stream handling.
   Commands that expect a result carry `request_id`, and every nested manager
   failure must become a failed correlated gateway result rather than a success
   wrapper. `computer_use_setup_v1` gates the staged setup command independently

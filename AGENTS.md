@@ -33,6 +33,9 @@
 - Launcher direct-connect path is `a0 --host <local-url> --no-docker-discovery --connect`; `--host` selects the target URL, `--no-docker-discovery` skips Docker discovery, and `--connect` connects immediately instead of opening the host picker.
 - Run the plain stdin/stdout connector with `a0 headless`; use
   `a0 headless --print` for one-shot pipe-friendly runs.
+- On Windows, `a0 gateway` and `a0 headless` explicitly use UTF-8 stdin,
+  stdout, and stderr so their machine protocols do not inherit the ANSI code
+  page from Launcher-owned pipes. Interactive TUI stream handling is unchanged.
 - Launcher-owned A0 Tag requests use the capability-silent
   `a0 headless --launcher-tag --new-chat --output jsonl --print` path with an
   explicit agent profile and optional existing `/a0/usr/uploads/` attachment
@@ -62,7 +65,7 @@
 - Gateway release 2.6 adds `computer_use_setup_v1`: correlated setup commands,
   staged macOS Accessibility then Screen Recording approval, and fresh-helper
   polling bounded to 120 seconds so the initiating agent tool call can resume.
-- Supported Wayland and macOS gateways may also advertise `a0_tag_v1`. Its correlated
+- Supported Wayland, macOS, and Windows gateways may also advertise `a0_tag_v1`. Its correlated
   profile, capture, apply, and release commands reuse the authenticated gateway
   client and existing Computer Use grant. A backend may return a verified,
   bounded active-window PNG; the gateway gives each such upload a unique name

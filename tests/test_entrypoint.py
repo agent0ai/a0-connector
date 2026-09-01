@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -11,6 +13,28 @@ from agent_zero_cli import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_windows_machine_stdio_preserves_exact_unicode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = "WINDOWS_✓_café_世界"
+    stdin_bytes = io.BytesIO((json.dumps({"value": value}, ensure_ascii=False) + "\n").encode())
+    stdout_bytes = io.BytesIO()
+    stdin = io.TextIOWrapper(stdin_bytes, encoding="cp1252")
+    stdout = io.TextIOWrapper(stdout_bytes, encoding="cp1252")
+    stderr = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(__main__.sys, "stdin", stdin)
+    monkeypatch.setattr(__main__.sys, "stdout", stdout)
+    monkeypatch.setattr(__main__.sys, "stderr", stderr)
+
+    __main__._configure_windows_machine_stdio()
+
+    payload = json.loads(stdin.readline())
+    stdout.write(json.dumps(payload, ensure_ascii=False))
+    stdout.flush()
+    assert payload == {"value": value}
+    assert json.loads(stdout_bytes.getvalue().decode()) == {"value": value}
 
 
 def test_package_version_matches_cli_version() -> None:
@@ -140,6 +164,13 @@ def test_main_headless_routes_to_headless_launcher(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     launched: list[dict[str, object]] = []
+    configured: list[bool] = []
+    monkeypatch.setattr(__main__.sys, "platform", "win32")
+    monkeypatch.setattr(
+        __main__,
+        "_configure_windows_machine_stdio",
+        lambda: configured.append(True),
+    )
     monkeypatch.setattr(__main__, "_run_headless", lambda **kwargs: launched.append(dict(kwargs)) or 0)
 
     exit_code = __main__.main(
@@ -160,6 +191,7 @@ def test_main_headless_routes_to_headless_launcher(
     )
 
     assert exit_code == 0
+    assert configured == [True]
     assert launched == [
         {
             "host": "http://agent.test:32080",
