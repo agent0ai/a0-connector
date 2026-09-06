@@ -10,7 +10,8 @@
 
 - This root doc owns repo-wide behavior, safety, verification, top-level files, packaging metadata, installers, and the Child DOX Index.
 - Top-level files owned here include `README.md`, `pyproject.toml`, `requirements.txt`, `install.sh`, `install.ps1`, `test_context_patch.txt`, `.gitignore`, `LICENSE`, and any future root-level release or packaging files.
-- Child docs own the scoped rules for `src/`, `packages/`, `tests/`, `docs/`, `devtools/`, `requirements/`, and `constraints/`.
+- Repository automation under `.github/workflows/` is root-owned and must keep release trust, permissions, and platform coverage explicit.
+- Child docs own the scoped rules for `src/`, `packages/`, `tests/`, `docs/`, `devtools/`, `requirements/`, `constraints/`, and `native/browser-bridge/`.
 - Generated or local-only artifacts such as `.venv/`, `.pytest_cache/`, `tmp/`, `.tmp-tests/`, `textual.log`, `__pycache__/`, and generated snapshots are not durable DOX scopes.
 
 ## Local Contracts
@@ -60,6 +61,25 @@
   Chromium-family profile. They do not download a separate Chromium binary;
   Browser setup and `/browser repair` remain recovery paths for older or damaged
   CLI environments.
+- `a0 browser-extension` is the Textual-free lifecycle surface for the separate
+  signed Browser Bridge companion. The companion is per-user browser-host
+  software and is never installed into an Agent Zero Docker container. Keep the
+  bootstrap fail-closed until reviewed release roots, published extension IDs,
+  signed artifacts, and immutable install-state discovery land together.
+- The corrected macOS companion is published under protected immutable tag
+  `native-v2.12.0-macos-r2`; the CLI pins its exact final archive/executable and
+  catalog bytes. Native Chrome installation plus independent CLI installed-state
+  verification passed on the signing host. This does not establish live Chrome
+  pairing/control, CWS approval, Linux delivery/acceptance or Windows native
+  verification/installation. The failed r1 artifact is never a fallback.
+- Local source development is a separate, compile-time-only exception, never a
+  production bootstrap fallback. A binary built with Rust feature
+  `local-development` may install only its own executing bytes for native host
+  `io.agentzero.browser_bridge.dev` and the one compiled development extension
+  origin. It uses separate install/state/credential namespaces, remains
+  pairing-only, and must not activate fixture trust or production runtime
+  admission. The explicit source-binary command is the user's execution
+  authority; never search `PATH`, download a helper, or install into Docker.
 - Use Linux commands and paths by default. Prefer `./.venv/bin/python`, not Windows-only virtualenv paths.
 - UI preview is the primary loop for TUI work: `./.venv/bin/python devtools/serve.py` at `http://localhost:8566`.
 - The CLI talks to Agent Zero through the connector protocol `a0-connector.v1`, HTTP routes under `/api/plugins/_a0_connector/v1/`, and Socket.IO events on namespace `/ws` with `connector_*` event names.
@@ -97,6 +117,8 @@
 
 ## User Preferences
 
+- Keep verification proportional: focused checks for the changed workflow and
+  essential security regressions; avoid repeatedly running broad suites.
 - The operating shell is `bash` on Ubuntu Linux.
 - Prefer Linux paths and command examples unless a Windows or macOS-specific file requires platform-specific wording.
 - Treat plugin/backend discussion as connected to the explicitly named Dockerized Agent Zero runtime when one is in scope.
@@ -120,3 +142,4 @@
 - `devtools/AGENTS.md` - Browser preview, snapshots, and dependency lock tooling.
 - `requirements/AGENTS.md` - Human-edited dependency input files.
 - `constraints/AGENTS.md` - Generated release dependency lock files.
+- `native/browser-bridge/AGENTS.md` - Standalone Browser Bridge companion, registry data, schemas, and native tests.

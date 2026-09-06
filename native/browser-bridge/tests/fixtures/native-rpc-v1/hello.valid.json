@@ -1,0 +1,27 @@
+{
+  "jsonrpc": "2.0",
+  "id": "hello-1",
+  "method": "bridge.hello",
+  "params": {
+    "protocol": "a0.browser-bridge",
+    "contract": { "min": 1, "max": 1 },
+    "extension": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "version": "2.11.0",
+      "manifest_version": 3,
+      "install_instance_id": "install-fixture",
+      "load_generation_id": "generation-fixture"
+    },
+    "browser": { "family": "chrome", "version": "146.0.0.0" },
+    "capabilities": {
+      "actions": ["open", "click", "claim"],
+      "features": ["tab_leases_v1", "tab_groups_v1", "cursor_v1"],
+      "cdp_domains": ["Accessibility", "DOM", "Input", "Page", "Runtime"]
+    },
+    "resume": {
+      "event_cursors": [],
+      "inflight_op_ids": [],
+      "lease_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+}

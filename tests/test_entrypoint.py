@@ -56,6 +56,7 @@ def test_main_help_exits_without_launching_app(
     assert "--connect" in captured.out
     assert "AGENT_ZERO_HOST" in captured.out
     assert "update" in captured.out
+    assert "browser-extension" in captured.out
     assert "headless" in captured.out
     assert "gateway" in captured.out
     assert launched == []
@@ -134,6 +135,86 @@ def test_main_update_routes_without_launching_app(
     assert exit_code == 0
     assert updated == [True]
     assert launched == []
+
+
+def test_main_browser_extension_install_routes_without_launching_other_modes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launched: list[str] = []
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(__main__, "_run_app", lambda **kwargs: launched.append("app"))
+    monkeypatch.setattr(__main__, "_run_headless", lambda **kwargs: launched.append("headless"))
+    monkeypatch.setattr(__main__, "_run_gateway", lambda **kwargs: launched.append("gateway"))
+    monkeypatch.setattr(__main__, "_run_acp", lambda **kwargs: launched.append("acp"))
+
+    def fake_browser_extension(**kwargs: object) -> int:
+        calls.append(dict(kwargs))
+        return 6
+
+    monkeypatch.setattr(__main__, "_run_browser_extension", fake_browser_extension)
+
+    exit_code = __main__.main(
+        [
+            "--host",
+            "http://localhost:50080",
+            "browser-extension",
+            "install",
+            "--browser",
+            "chrome",
+            "--browser",
+            "edge",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 6
+    assert calls == [
+        {
+            "command": "install",
+            "host": "http://localhost:50080",
+            "browsers": ["chrome", "edge"],
+            "json_output": True,
+            "yes": False,
+            "force_local": False,
+            "keep_logs": False,
+        }
+    ]
+    assert launched == []
+
+
+def test_main_browser_extension_uninstall_routes_all_lifecycle_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        __main__,
+        "_run_browser_extension",
+        lambda **kwargs: calls.append(dict(kwargs)) or 0,
+    )
+
+    exit_code = __main__.main(
+        [
+            "browser-extension",
+            "uninstall",
+            "--yes",
+            "--force-local",
+            "--keep-logs",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "command": "uninstall",
+            "host": "",
+            "browsers": (),
+            "json_output": True,
+            "yes": True,
+            "force_local": True,
+            "keep_logs": True,
+        }
+    ]
 
 
 def test_main_headless_routes_to_headless_launcher(
@@ -241,6 +322,29 @@ def test_headless_and_gateway_launchers_do_not_import_terminal_image_renderer(
         scopes="file_read",
         browser_selection="",
     ) == 0
+    assert "textual_image" not in sys.modules
+    assert "agent_zero_cli.app" not in sys.modules
+    assert "agent_zero_cli.image_store" not in sys.modules
+    assert "agent_zero_cli.widgets.image_entry" not in sys.modules
+
+
+def test_browser_extension_launcher_does_not_import_textual_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from agent_zero_cli import browser_extension
+
+    for module_name in (
+        "textual_image",
+        "agent_zero_cli.app",
+        "agent_zero_cli.image_store",
+        "agent_zero_cli.widgets.image_entry",
+    ):
+        monkeypatch.delitem(sys.modules, module_name, raising=False)
+    monkeypatch.setattr(browser_extension, "_resolve_companion_executable", lambda: None)
+
+    assert __main__._run_browser_extension(command="status", json_output=True) == 3
+    capsys.readouterr()
     assert "textual_image" not in sys.modules
     assert "agent_zero_cli.app" not in sys.modules
     assert "agent_zero_cli.image_store" not in sys.modules

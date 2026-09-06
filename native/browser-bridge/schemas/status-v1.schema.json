@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentzero.ai/schemas/browser-bridge/status-v1.schema.json",
+  "title": "Agent Zero Browser Bridge Local Status v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "schema_version", "companion_version", "state", "reason_code", "platform", "architecture", "install_root", "release_trust", "native_host", "registered_browser_count"],
+  "properties": {
+    "contract": { "const": "a0.browser-bridge.status.v1" },
+    "schema_version": { "const": 1 },
+    "companion_version": { "type": "string", "minLength": 1 },
+    "state": { "enum": ["not_installed", "unknown", "blocked"] },
+    "reason_code": { "type": "string" },
+    "platform": { "type": "string" },
+    "architecture": { "type": "string" },
+    "install_root": { "enum": ["resolved", "unavailable"] },
+    "release_trust": { "enum": ["configured", "not_configured"] },
+    "native_host": { "enum": ["enabled", "disabled"] },
+    "registered_browser_count": { "type": "integer", "minimum": 0 }
+  }
+}

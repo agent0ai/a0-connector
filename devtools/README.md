@@ -2,6 +2,37 @@
 
 Tools for web-like development of the Textual TUI.
 
+## Local A0 wheel build (no GitHub Actions)
+
+The normal package build includes the browser-extension CLI, explicit
+development install/update commands, and the read-only stable release resolver.
+It needs only Python, `uv`, and the pinned build requirements; runtime packages
+are not bundled or installed by this command:
+
+```bash
+uv build --wheel --no-python-downloads \
+  --build-constraints constraints/a0-build.txt --require-hashes \
+  --out-dir /absolute/new/output-directory --no-create-gitignore
+```
+
+After that first build has cached the pinned backend, add `--offline` to rebuild
+without network access. Use a new output directory rather than overwriting an
+already handed-off artifact. Inspect the wheel's `METADATA`, entry points and
+`agent_zero_cli/browser_extension*.py` members before installation.
+
+Installing the wheel is a separate explicit operation. For an existing verified
+A0 environment whose runtime dependencies are already present, install the exact
+wheel with `uv pip install --offline --no-deps --reinstall --python
+/absolute/a0-environment/bin/python /absolute/a0-version-py3-none-any.whl`.
+This preserves runtime dependency versions; it does not install/update the
+separately registered native companion or modify its paired identity. Fresh
+environments still need the package's pinned runtime dependencies.
+
+An A0 wheel is not a signed native release. Its Mac bootstrap independently pins
+the signed/notarized r2 companion, while Chrome pairing still requires the
+matching Agent Zero server. The explicit-source development commands remain
+separate and never substitute for production release trust.
+
 ## Prerequisites
 
 Use the project venv. `textual-serve` is part of the workspace dependencies now.

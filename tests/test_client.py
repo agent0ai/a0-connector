@@ -655,6 +655,57 @@ async def test_fetch_capabilities_raises_plugin_missing_on_404() -> None:
         await client.fetch_capabilities()
 
 
+async def test_fetch_browser_extension_status_uses_authenticated_csrf_endpoint() -> None:
+    extension_status = {
+        "scope": "extension_bridge_foundation",
+        "status_contract": "a0.browser-bridge.status.v1",
+    }
+    client = A0Client("http://agent.test")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        return_value=FakeResponse(json_data={"extension_bridge": extension_status})
+    )
+    client._csrf_headers = AsyncMock(  # type: ignore[method-assign]
+        return_value={"Origin": "http://agent.test", "X-CSRF-Token": "csrf-1"}
+    )
+
+    assert await client.fetch_browser_extension_status() == extension_status
+    client.http.post.assert_awaited_once_with(
+        "http://agent.test/api/plugins/_browser/status",
+        json={},
+        headers={"Origin": "http://agent.test", "X-CSRF-Token": "csrf-1"},
+        follow_redirects=False,
+    )
+
+
+async def test_fetch_browser_extension_status_refreshes_stale_csrf_once() -> None:
+    client = A0Client("http://agent.test")
+    client.http = Mock()
+    client.http.post = AsyncMock(
+        side_effect=[
+            FakeResponse(status_code=403),
+            FakeResponse(json_data={"extension_bridge": {"scope": "extension_bridge_foundation"}}),
+        ]
+    )
+    client._csrf_headers = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            {"X-CSRF-Token": "csrf-old"},
+            {"X-CSRF-Token": "csrf-new"},
+        ]
+    )
+
+    assert await client.fetch_browser_extension_status() == {
+        "scope": "extension_bridge_foundation"
+    }
+    assert client._csrf_token is None
+    assert client.http.post.await_args_list[0].kwargs["headers"] == {
+        "X-CSRF-Token": "csrf-old"
+    }
+    assert client.http.post.await_args_list[1].kwargs["headers"] == {
+        "X-CSRF-Token": "csrf-new"
+    }
+
+
 async def test_default_httpx_rejects_self_signed_https_connector_fixture() -> None:
     async with self_signed_connector_server() as base_url:
         async with httpx.AsyncClient(timeout=5.0) as client:

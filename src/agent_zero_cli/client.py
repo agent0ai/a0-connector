@@ -940,6 +940,45 @@ class A0Client:
         response.raise_for_status()
         return self._json(response)
 
+    async def fetch_browser_extension_status(self) -> dict[str, Any]:
+        """Fetch only the redacted browser-extension foundation status."""
+
+        endpoint = f"{self.base_url}/api/plugins/_browser/status"
+        response = await self.http.post(
+            endpoint,
+            json={},
+            headers=await self._csrf_headers(),
+            follow_redirects=False,
+        )
+        if response.status_code == 403:
+            # This endpoint is read-only, so retrying once with a fresh CSRF
+            # token cannot duplicate a state-changing operation.
+            self._csrf_token = None
+            response = await self.http.post(
+                endpoint,
+                json={},
+                headers=await self._csrf_headers(),
+                follow_redirects=False,
+            )
+        if self._is_login_redirect(response) or response.status_code in {401, 403}:
+            raise A0ProtocolError(
+                "Browser extension status requires an authenticated Agent Zero session."
+            )
+        if response.status_code >= 400:
+            raise A0ProtocolError(
+                f"Browser extension status failed: {self._response_message(response)}"
+            )
+        try:
+            payload = self._json(response)
+        except Exception as exc:
+            raise A0ProtocolError("Browser extension status returned invalid JSON.") from exc
+        status = payload.get("extension_bridge")
+        if not isinstance(status, dict):
+            raise A0ProtocolError(
+                "Browser extension status did not include its redacted foundation result."
+            )
+        return dict(status)
+
     async def login(self, username: str, password: str) -> bool:
         """Create a browser-style authenticated session via the core /login form."""
         response = await self.http.post(

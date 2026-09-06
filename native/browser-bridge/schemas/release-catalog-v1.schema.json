@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentzero.ai/schemas/browser-bridge/release-catalog-v1.schema.json",
+  "title": "Agent Zero Browser Bridge Release Catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release",
+    "channel",
+    "published_at",
+    "protocol",
+    "trust",
+    "minimum_secure_companion",
+    "extension_origins",
+    "artifacts",
+    "release_key_id"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "release": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$" },
+    "channel": { "enum": ["stable", "development"] },
+    "published_at": { "type": "string", "format": "date-time" },
+    "protocol": { "$ref": "#/$defs/versionRange" },
+    "trust": { "$ref": "#/$defs/versionRange" },
+    "minimum_secure_companion": { "type": "string", "minLength": 1 },
+    "extension_origins": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^chrome-extension://[a-p]{32}/$"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/artifact" },
+      "allOf": [
+        { "$ref": "#/$defs/requiresMacosInstaller" },
+        { "$ref": "#/$defs/requiresMacosPayload" },
+        { "$ref": "#/$defs/requiresWindowsX64Installer" },
+        { "$ref": "#/$defs/requiresWindowsX64Payload" },
+        { "$ref": "#/$defs/requiresWindowsArm64Installer" },
+        { "$ref": "#/$defs/requiresWindowsArm64Payload" },
+        { "$ref": "#/$defs/requiresLinuxBootstrap" },
+        { "$ref": "#/$defs/requiresLinuxX64Payload" },
+        { "$ref": "#/$defs/requiresLinuxArm64Payload" }
+      ]
+    },
+    "release_key_id": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "versionRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "properties": {
+        "min": { "type": "integer", "minimum": 1 },
+        "max": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "platform", "arch", "kind", "download_url", "sha256", "size"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "platform": { "enum": ["macos", "windows", "linux"] },
+        "arch": { "enum": ["universal2", "x86_64", "arm64", "aarch64", "any"] },
+        "kind": { "enum": ["installer", "bootstrap", "payload"] },
+        "download_url": { "type": "string", "pattern": "^https://" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 1 },
+        "minimum_os": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "platform": { "const": "macos" } } },
+          "then": {
+            "properties": {
+              "arch": { "const": "universal2" },
+              "kind": { "enum": ["installer", "payload"] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "platform": { "const": "windows" } } },
+          "then": {
+            "properties": {
+              "arch": { "enum": ["x86_64", "arm64"] },
+              "kind": { "enum": ["installer", "payload"] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "platform": { "const": "linux" } } },
+          "then": {
+            "oneOf": [
+              {
+                "properties": {
+                  "arch": { "const": "any" },
+                  "kind": { "const": "bootstrap" }
+                }
+              },
+              {
+                "properties": {
+                  "arch": { "enum": ["x86_64", "aarch64"] },
+                  "kind": { "const": "payload" }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "requiresMacosInstaller": {
+      "contains": { "$ref": "#/$defs/macosInstaller" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requiresMacosPayload": {
+      "contains": { "$ref": "#/$defs/macosPayload" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requiresWindowsX64Installer": {
+      "contains": { "$ref": "#/$defs/windowsX64Installer" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requiresWindowsX64Payload": {
+      "contains": { "$ref": "#/$defs/windowsX64Payload" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requiresWindowsArm64Installer": {
+      "contains": { "$ref": "#/$defs/windowsArm64Installer" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requiresWindowsArm64Payload": {
+      "contains": { "$ref": "#/$defs/windowsArm64Payload" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requiresLinuxBootstrap": {
+      "contains": { "$ref": "#/$defs/linuxBootstrap" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requiresLinuxX64Payload": {
+      "contains": { "$ref": "#/$defs/linuxX64Payload" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requiresLinuxArm64Payload": {
+      "contains": { "$ref": "#/$defs/linuxArm64Payload" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "macosInstaller": {
+      "properties": { "platform": { "const": "macos" }, "arch": { "const": "universal2" }, "kind": { "const": "installer" } }
+    },
+    "macosPayload": {
+      "properties": { "platform": { "const": "macos" }, "arch": { "const": "universal2" }, "kind": { "const": "payload" } }
+    },
+    "windowsX64Installer": {
+      "properties": { "platform": { "const": "windows" }, "arch": { "const": "x86_64" }, "kind": { "const": "installer" } }
+    },
+    "windowsX64Payload": {
+      "properties": { "platform": { "const": "windows" }, "arch": { "const": "x86_64" }, "kind": { "const": "payload" } }
+    },
+    "windowsArm64Installer": {
+      "properties": { "platform": { "const": "windows" }, "arch": { "const": "arm64" }, "kind": { "const": "installer" } }
+    },
+    "windowsArm64Payload": {
+      "properties": { "platform": { "const": "windows" }, "arch": { "const": "arm64" }, "kind": { "const": "payload" } }
+    },
+    "linuxBootstrap": {
+      "properties": { "platform": { "const": "linux" }, "arch": { "const": "any" }, "kind": { "const": "bootstrap" } }
+    },
+    "linuxX64Payload": {
+      "properties": { "platform": { "const": "linux" }, "arch": { "const": "x86_64" }, "kind": { "const": "payload" } }
+    },
+    "linuxArm64Payload": {
+      "properties": { "platform": { "const": "linux" }, "arch": { "const": "aarch64" }, "kind": { "const": "payload" } }
+    }
+  }
+}
