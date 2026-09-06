@@ -8,6 +8,17 @@ from agent_zero_cli import __version__
 from agent_zero_cli.client import DEFAULT_HOST
 
 
+_BROWSER_EXTENSION_CHOICES = (
+    "auto",
+    "chrome",
+    "edge",
+    "brave",
+    "vivaldi",
+    "opera",
+    "chromium",
+)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="a0",
@@ -66,6 +77,103 @@ def _build_parser() -> argparse.ArgumentParser:
         "update",
         help="Update the installed a0 tool and exit.",
     )
+    browser_extension = subparsers.add_parser(
+        "browser-extension",
+        help="Install and manage the standalone Agent Zero browser companion.",
+    )
+    browser_commands = browser_extension.add_subparsers(
+        dest="browser_extension_command",
+        title="browser extension commands",
+        required=True,
+    )
+
+    def add_browser_host(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.add_argument(
+            "--host",
+            dest="browser_extension_host",
+            metavar="URL",
+            help="Agent Zero base URL. Defaults to AGENT_ZERO_HOST or the saved host.",
+        )
+
+    def add_browser_targets(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.add_argument(
+            "--browser",
+            dest="browser_extension_browsers",
+            action="append",
+            choices=_BROWSER_EXTENSION_CHOICES,
+            metavar="NAME",
+            help="Target browser; repeat for multiple explicit browsers (default: auto).",
+        )
+
+    def add_browser_json(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.add_argument(
+            "--json",
+            dest="browser_extension_json",
+            action="store_true",
+            help="Emit one schema-versioned, redacted JSON result.",
+        )
+
+    development = browser_commands.add_parser(
+        "development", help="Manage an explicitly trusted local source build, not a signed release."
+    )
+    development_commands = development.add_subparsers(dest="development_action", required=True)
+    for action in ("install", "update", "status", "uninstall"):
+        development_parser = development_commands.add_parser(action)
+        development_parser.add_argument(
+            "--source-binary", required=True, metavar="ABSOLUTE_PATH",
+            help="Explicit local development executable to run; never discovered on PATH.",
+        )
+        if action == "install":
+            add_browser_targets(development_parser)
+        if action != "status":
+            development_parser.add_argument(
+                "--yes", action="store_true",
+                help="Trust this source executable and confirm development-only changes.",
+            )
+        add_browser_json(development_parser)
+
+    browser_install = browser_commands.add_parser("install", help="Install the verified browser companion.")
+    add_browser_host(browser_install)
+    add_browser_targets(browser_install)
+    add_browser_json(browser_install)
+
+    for command_name, help_text in (
+        ("status", "Show layered browser companion status."),
+        ("doctor", "Run redacted browser companion diagnostics."),
+        ("pair", "Pair the companion with an Agent Zero instance."),
+    ):
+        command_parser = browser_commands.add_parser(command_name, help=help_text)
+        add_browser_host(command_parser)
+        add_browser_json(command_parser)
+
+    browser_repair = browser_commands.add_parser("repair", help="Repair an owned browser companion installation.")
+    add_browser_targets(browser_repair)
+    add_browser_json(browser_repair)
+
+    browser_update = browser_commands.add_parser("update", help="Update the browser companion explicitly.")
+    add_browser_json(browser_update)
+
+    browser_uninstall = browser_commands.add_parser("uninstall", help="Uninstall owned browser companion state.")
+    browser_uninstall.add_argument(
+        "--yes",
+        dest="browser_extension_yes",
+        action="store_true",
+        help="Confirm the discovered owned uninstall set.",
+    )
+    browser_uninstall.add_argument(
+        "--force-local",
+        dest="browser_extension_force_local",
+        action="store_true",
+        help="Continue local removal when a paired server cannot be reached.",
+    )
+    browser_uninstall.add_argument(
+        "--keep-logs",
+        dest="browser_extension_keep_logs",
+        action="store_true",
+        help="Retain redacted companion logs after uninstall.",
+    )
+    add_browser_json(browser_uninstall)
+
     headless = subparsers.add_parser(
         "headless",
         help="Run a plain stdin/stdout connector session without the Textual TUI.",
@@ -207,6 +315,31 @@ def _run_self_update() -> int:
     return run_self_update_handoff()
 
 
+def _run_browser_extension(
+    *,
+    command: str,
+    host: str = "",
+    browsers: Sequence[str] = (),
+    json_output: bool = False,
+    yes: bool = False,
+    force_local: bool = False,
+    keep_logs: bool = False,
+) -> int:
+    from agent_zero_cli.browser_extension import BrowserExtensionOptions, run_browser_extension
+
+    return run_browser_extension(
+        BrowserExtensionOptions(
+            command=command,
+            host=host,
+            browsers=tuple(browsers),
+            json_output=json_output,
+            yes=yes,
+            force_local=force_local,
+            keep_logs=keep_logs,
+        )
+    )
+
+
 def _run_headless(
     *,
     host: str = "",
@@ -306,6 +439,27 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "update":
         return _run_self_update()
+
+    if args.command == "browser-extension":
+        if args.browser_extension_command == "development":
+            from agent_zero_cli.browser_extension_development import run_development
+
+            return run_development(
+                action=args.development_action,
+                source_binary=args.source_binary,
+                browsers=getattr(args, "browser_extension_browsers", None) or (),
+                yes=bool(getattr(args, "yes", False)),
+                json_output=bool(getattr(args, "browser_extension_json", False)),
+            )
+        return _run_browser_extension(
+            command=args.browser_extension_command,
+            host=(getattr(args, "browser_extension_host", None) or args.host or ""),
+            browsers=(getattr(args, "browser_extension_browsers", None) or ()),
+            json_output=bool(getattr(args, "browser_extension_json", False)),
+            yes=bool(getattr(args, "browser_extension_yes", False)),
+            force_local=bool(getattr(args, "browser_extension_force_local", False)),
+            keep_logs=bool(getattr(args, "browser_extension_keep_logs", False)),
+        )
 
     if args.command == "headless":
         return _run_headless(

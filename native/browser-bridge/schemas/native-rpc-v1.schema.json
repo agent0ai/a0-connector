@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-zero.local/schemas/native-rpc-v1.schema.json",
+  "title": "Agent Zero browser bridge native JSON-RPC v1 envelope",
+  "description": "One frame contains exactly one JSON-RPC object. Directional method and method-specific params validation is enforced by src/rpc.rs.",
+  "type": "object",
+  "required": ["jsonrpc"],
+  "properties": {
+    "jsonrpc": { "const": "2.0" },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "method": {
+      "type": "string",
+      "enum": [
+        "bridge.hello",
+        "bridge.ping",
+        "pairing.status",
+        "pairing.exchange",
+        "pairing.disconnect",
+        "agent.status",
+        "context.list",
+        "context.subscribe",
+        "context.unsubscribe",
+        "context.send_message",
+        "context.snapshot",
+        "context.event",
+        "context.complete",
+        "browser.perform",
+        "browser.cancel",
+        "browser.finalize_turn",
+        "browser.resolve_challenge",
+        "browser.reconcile",
+        "browser.event",
+        "browser.ack_events",
+        "artifact.begin",
+        "artifact.input_path",
+        "artifact.chunk",
+        "artifact.end",
+        "artifact.abort"
+      ]
+    },
+    "params": { "type": "object" },
+    "result": {},
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "integer" },
+        "message": { "type": "string", "maxLength": 2048 },
+        "data": { "type": "object" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "required": ["method", "params"],
+      "not": { "anyOf": [{ "required": ["result"] }, { "required": ["error"] }] }
+    },
+    {
+      "required": ["id", "result"],
+      "not": { "anyOf": [{ "required": ["method"] }, { "required": ["params"] }, { "required": ["error"] }] }
+    },
+    {
+      "required": ["id", "error"],
+      "not": { "anyOf": [{ "required": ["method"] }, { "required": ["params"] }, { "required": ["result"] }] }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["method"],
+        "properties": { "method": { "const": "pairing.exchange" } }
+      },
+      "then": {
+        "properties": {
+          "params": { "$ref": "#/$defs/pairingExchangeParams" }
+        }
+      }
+    }
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "pairingExchangeParams": {
+      "type": "object",
+      "required": ["contract_version", "pairing_code", "server_base_origin"],
+      "properties": {
+        "contract_version": { "const": 1 },
+        "pairing_code": {
+          "type": "string",
+          "pattern": "^A0B1-[0-9A-F]{8}-[0-9A-HJKMNP-TV-Z]{32}$"
+        },
+        "server_base_origin": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "x-a0-limits": {
+    "native_frame_bytes_each_direction": 786432,
+    "non_artifact_bytes": 524288,
+    "artifact_chunk_raw_bytes": 196608,
+    "artifact_bytes": 26214400,
+    "request_timeout_ms": 120000,
+    "hello_timeout_ms": 10000
+  },
+  "x-a0-method-directions": {
+    "extension_requests": [
+      "bridge.hello",
+      "bridge.ping",
+      "pairing.status",
+      "pairing.exchange",
+      "pairing.disconnect",
+      "agent.status",
+      "context.list",
+      "context.subscribe",
+      "context.unsubscribe",
+      "context.send_message",
+      "artifact.begin",
+      "artifact.input_path",
+      "artifact.chunk",
+      "artifact.end",
+      "artifact.abort"
+    ],
+    "extension_notifications": ["browser.event"],
+    "server_requests": [
+      "bridge.ping",
+      "browser.perform",
+      "browser.cancel",
+      "browser.finalize_turn",
+      "browser.resolve_challenge",
+      "browser.reconcile",
+      "browser.ack_events",
+      "artifact.begin",
+      "artifact.chunk",
+      "artifact.end",
+      "artifact.abort"
+    ],
+    "server_notifications": ["context.snapshot", "context.event", "context.complete"]
+  }
+}

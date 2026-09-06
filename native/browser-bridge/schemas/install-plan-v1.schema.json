@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentzero.ai/schemas/browser-bridge/install-plan-v1.schema.json",
+  "title": "Agent Zero Browser Bridge Install Plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "schema_version", "companion_version", "install_contract", "operation", "state", "reason_code", "mutation_allowed", "catalog", "artifact", "platform_signature", "platform", "architecture", "install_root", "target_browsers", "registration_count", "rollback"],
+  "properties": {
+    "contract": { "const": "a0.browser-bridge.install-plan.v1" },
+    "schema_version": { "const": 1 },
+    "companion_version": { "type": "string", "minLength": 1 },
+    "install_contract": { "const": "a0.browser-bridge.install.v1" },
+    "operation": { "enum": ["install", "update"] },
+    "state": { "enum": ["blocked", "ready"] },
+    "reason_code": { "type": "string" },
+    "mutation_allowed": { "type": "boolean" },
+    "catalog": { "enum": ["not_verified", "verified"] },
+    "artifact": { "enum": ["not_verified", "verified"] },
+    "platform_signature": { "enum": ["not_verified", "verified"] },
+    "platform": { "type": "string" },
+    "architecture": { "type": "string" },
+    "install_root": { "enum": ["resolved", "unavailable"] },
+    "target_browsers": { "type": "array", "uniqueItems": true, "items": { "enum": ["auto", "chrome", "edge", "brave", "vivaldi", "opera", "chromium"] } },
+    "registration_count": { "type": "integer", "minimum": 0 },
+    "rollback": { "enum": ["not_started", "available"] }
+  }
+}

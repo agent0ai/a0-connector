@@ -52,6 +52,76 @@
   for the current profile and persists through Core's `agent_editor` API.
 - Clipboard image paste uses `wl-paste` or `xclip` on Linux and the conditionally installed Pillow native reader on macOS and Windows.
 - The CLI may remember host/context and computer-use settings, and protected web sessions may persist browser-style session cookies through the remembered-host/session flow. It may consume ephemeral `A0_USERNAME` and `A0_PASSWORD` environment variables for non-interactive login, but it must not persist usernames, passwords, connector tokens, API keys, or other secrets.
+- `a0 browser-extension install|status|doctor|pair|repair|update|uninstall` is a Textual-free orchestration surface for the standalone `a0-browser-bridge`; Python must not duplicate native registration/install logic. The command family, immutable install-state resolver and fresh-host bootstrap are wired with the reviewed corrected Mac r2 release; unprovisioned or unverified platforms remain unavailable. It never trusts a same-name PATH executable or downloads an unchecked asset. Companion stdout/stderr are read concurrently into fixed caps and the child is terminated on overflow; human stdout is forwarded only after the bounded process completes. Explicit human `pair` requires an interactive terminal, approved extension identity, authenticated/CSRF session and `browser_bridge_pairing_v1`; it creates exactly one Core trust-v1 intent and shows the code once for Chrome Options. Chrome retains profile/install authority and performs the native exchange. Never invoke an unsupported native CLI pair command or put pairing material in argv, environment, files, generic logs, URLs or JSON. JSON/redirected pairing creates no secret and returns action-required. Validate the exact bounded response, host, identity and five-minute lifetime; never retry an ambiguous creation POST or claim paired before Chrome confirms. Resolve server status independently of local companion state from explicit, saved, then default host; restore and verify the browser-style session before calling authenticated/CSRF-protected `_browser/status`, expose only an allowlisted extension-foundation projection, and label an unavailable endpoint `not_checked`. Machine output is exactly one `a0.browser-extension.cli.v1` object, accepts only exact companion v1 result contracts (including independently verified installed status), redacts private paths/secrets, and preserves exit meanings `0`, `2` through `7` from the frozen install contract.
+- `browser_extension_release.py` owns read-only stable companion discovery. Its
+  compiled `APPROVED_COMPANION_RELEASES` tuple is populated only from reviewed
+  catalog/platform/provenance/derived-executable release evidence. It currently
+  retains the reviewed 2.12.0 macOS universal2 release and adds the signed,
+  notarized 2.12.1 operation-result decoder correction and 2.12.2 bounded
+  command-backpressure correction, plus 2.12.3 bounded outbound result/event
+  backpressure with independent native EOF cancellation, using catalog key
+  `publisher-2026`, and exact production extension origin. These are installed executable hashes,
+  not compressed catalog payload hashes. No server, environment, file, PATH,
+  self-report, or runtime flag may supply approved pins. Derive the per-user
+  stable root and immutable version/platform executable path, require the exact
+  native state schema and non-lowerable security floor, then verify private
+  owned nonsymlink state/root/executable, a read-only install lock, no pending
+  transactions, exact size/hash/key identity and every registered manifest's
+  path digest, byte digest, stable host, executable path and exact origins.
+  Use no-follow retained file/directory reads and before/after identity checks.
+  Never execute a candidate just to discover its identity. Return paths only
+  internally to process launch; errors and machine output remain pathless.
+  Windows discovery remains unavailable until its native DACL/HKCU transaction
+  exists. Local-development discovery never shares this registry.
+  The independently distributed CLI may pin final companion/catalog bytes;
+  the companion itself cannot embed its own final hashes. Native installed
+  status instead verifies retained signed catalog/derivation sidecars. The
+  exact install-result schema accepts `installed` only with `INSTALL_VERIFIED`,
+  all three release gates verified, a positive registration count and explicit
+  completed/cleanup-pending transaction state; unsigned self-report still does
+  not influence executable discovery.
+- `browser_extension_bootstrap.py` owns only fresh-host release acquisition.
+  Its separately packaged compiled registry pins an immutable version-specific
+  HTTPS payload archive URL/hash/size and an approved final executable pin.
+  Select the newest compiled compatible version, not unsigned latest metadata.
+  No environment proxy/cookies/redirects, dynamic trust keys or URL overrides;
+  cap download size/time and independently check archive and executable hashes.
+  Extract only one bounded fixed-name USTAR executable into generated private
+  temporary staging; reject traversal, links, additional entries, concatenated
+  gzip streams, expansion excess and wrong final bytes. Retain a read-only
+  descriptor, private mode/ownership/identity and digest through native launch;
+  Linux uses its inherited fd path, Darwin the bound private path. Verify again
+  after launch and remove only temporary bootstrap staging. Native owns every
+  registration/installation mutation. Empty bootstrap pins perform no network
+  request. Timeouts report unknown final state, not successful rollback.
+  The newest provisioned Mac bootstrap pins the immutable
+  `native-v2.12.3-macos/v2.12.3` payload and its final archive and executable
+  digests independently. Preserve the older reviewed 2.12.0/2.12.1 r2 and 2.12.2 pins for installed
+  discovery; bootstrap always selects the newest compatible compiled version,
+  regardless of tuple order, without retrying an older release after failure.
+  The incomplete `native-v2.12.1-macos` publication is not a bootstrap source.
+  The secure floor remains 2.12.0. Mac provisioning does not provision Linux/Windows,
+  certify Chrome Web Store publication or activate a browser runtime. Actual
+  public artifact readback precedes installation acceptance. Rebuilding the
+  ordinary CLI wheel includes these source pins without additional dependencies;
+  already installed CLI copies and previously built wheels remain unchanged.
+  Final 2.12.3 local artifacts, notarization and signed metadata are verified;
+  public readback and installed/runtime acceptance remain separate evidence.
+  The older corrected r2 artifact has passed actual native Chrome installation and
+  independent source-CLI installed-state verification on the signing host.
+  These checks do not establish Chrome pairing/control or CWS approval. The
+  earlier failing r1 distribution remains immutable and is not a fallback.
+- Stable repair/uninstall accept only the exact pathless native lifecycle v1
+  receipt and its matching operation/exit/state/disposition. Local-only removal
+  remains cleanup-pending exit 6, never full server revocation or key deletion;
+  no response can promote pending cleanup to successful complete uninstall.
+  If repair cannot independently verify installed bytes/registrations, acquire
+  the separately pinned bootstrap rather than execute the damaged target.
+  Interrupted repair has an explicit recovery-required exit-6 receipt.
+  Explicit uninstall without force-local may preserve every registration/key
+  while recording a native cleanup inventory. Accept only its exact exit-6
+  `PROFILE_REVOCATION_REQUIRED`/cleanup-pending/unchanged tuple with a positive
+  registration count; inventory is never revocation or successful removal.
 - Local Docker instance discovery should prefer launcher-owned friendly names
   from the `a0.launcher.instanceName` container label over generated Docker
   container or clone image names in visible picker/login text.
@@ -109,6 +179,22 @@
   downgrade an older Launcher.
 
 ## Work Guidance
+
+- `browser_extension_development.py` owns only explicit local-source command
+  orchestration under `a0 browser-extension development`. It must never share
+  signed-release discovery or enable production trust. Require an absolute,
+  user-owned executable (no PATH search), explicit `--yes` for changes, and the
+  exact redacted development response with fixed native host/extension/channel.
+  Native code alone owns installation, transactional development updates, and
+  removal. Development `update` preserves the existing target set and pairing;
+  never turn it into uninstall/install, accept `--browser`, or share production
+  update routing. An explicit source and `--yes` remain required. Bound child time to 60
+  seconds and output with the existing capped process reader; timeout or output
+  overflow is an unknown outcome, not proof that no files changed. The chosen
+  program is trusted by the local caller, not certified by its self-report.
+  Preserve native partial-exit meanings: local registration removal does not
+  prove credential deletion, server revocation, or tab closure. Human output
+  must identify pending credential cleanup and point to Browser settings.
 
 - Query widgets with typed `query_one` calls, for example `self.query_one("#message-input", ChatInput)`.
 - Route activity state through app-level helpers such as `_set_activity(...)` and `_set_idle()` rather than reaching into `ChatInput` from scattered event handlers.

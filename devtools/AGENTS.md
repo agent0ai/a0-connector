@@ -11,6 +11,13 @@
 - `snapshot.py` owns static SVG snapshot generation.
 - `lock_dependencies.py` owns release lock regeneration and pyproject dependency pin sync.
 - `README.md` explains these tools.
+- The local wheel-build recipe in `README.md` uses the existing pinned Hatchling
+  backend through `uv build`; GitHub Actions is not needed. Build isolation may
+  fetch the already pinned build requirements once, then the same hashed
+  constraints support offline rebuilds. Building a wheel does not install A0,
+  download runtime dependencies, install a native host, or provision release
+  trust. Read back the wheel's browser-extension modules before handoff; the
+  development source commands remain distinct from stable bootstrap/pairing.
 
 ## Local Contracts
 

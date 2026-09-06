@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentzero.ai/schemas/browser-bridge/release-catalog-v2.schema.json",
+  "title": "Agent Zero Browser Bridge Platform-Scoped Release Catalog v2",
+  "$comment": "Detached signature covers the exact canonical ASCII/JCS object, including platforms. Native verification additionally enforces compiled origin equality, signature roots, version compatibility/security floor, unique names/URLs, safe HTTPS URLs and exact artifact hashes. This is catalog proof, not installation/runtime authority. v1 remains unchanged.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release", "channel", "published_at", "protocol", "trust", "minimum_secure_companion", "extension_origins", "artifacts", "release_key_id", "platforms"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "release": { "type": "string", "maxLength": 64, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "channel": { "const": "stable" },
+    "published_at": { "type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "protocol": { "$ref": "release-catalog-v1.schema.json#/$defs/versionRange" },
+    "trust": { "$ref": "release-catalog-v1.schema.json#/$defs/versionRange" },
+    "minimum_secure_companion": { "type": "string", "maxLength": 64, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "extension_origins": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^chrome-extension://[a-p]{32}/$" }
+    },
+    "release_key_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "platforms": {
+      "$comment": "Nonempty, unique known platforms in strict ASCII lexical order.",
+      "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true,
+      "items": { "enum": ["linux", "macos", "windows"] },
+      "enum": [["linux"], ["macos"], ["windows"], ["linux", "macos"], ["linux", "windows"], ["macos", "windows"], ["linux", "macos", "windows"]]
+    },
+    "artifacts": {
+      "type": "array", "minItems": 2, "maxItems": 9, "uniqueItems": true,
+      "items": {
+        "allOf": [{ "$ref": "release-catalog-v1.schema.json#/$defs/artifact" }],
+        "properties": {
+          "name": { "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$" },
+          "download_url": { "maxLength": 2048 },
+          "size": { "maximum": 536870912 },
+          "minimum_os": { "minLength": 1, "maxLength": 128 }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "platforms": { "contains": { "const": "macos" } } } },
+      "then": { "properties": { "artifacts": { "allOf": [
+        { "$ref": "release-catalog-v1.schema.json#/$defs/requiresMacosInstaller" },
+        { "$ref": "release-catalog-v1.schema.json#/$defs/requiresMacosPayload" }
+      ] } } },
+      "else": { "properties": { "artifacts": { "not": { "contains": { "properties": { "platform": { "const": "macos" } } } } } } }
+    },
+    {
+      "if": { "properties": { "platforms": { "contains": { "const": "windows" } } } },
+      "then": { "properties": { "artifacts": { "allOf": [
+        { "$ref": "release-catalog-v1.schema.json#/$defs/requiresWindowsX64Installer" },
+        { "$ref": "release-catalog-v1.schema.json#/$defs/requiresWindowsX64Payload" },
+        { "$ref": "release-catalog-v1.schema.json#/$defs/requiresWindowsArm64Installer" },
+        { "$ref": "release-catalog-v1.schema.json#/$defs/requiresWindowsArm64Payload" }
+      ] } } },
+      "else": { "properties": { "artifacts": { "not": { "contains": { "properties": { "platform": { "const": "windows" } } } } } } }
+    },
+    {
+      "if": { "properties": { "platforms": { "contains": { "const": "linux" } } } },
+      "then": { "properties": { "artifacts": { "allOf": [
+        { "$ref": "release-catalog-v1.schema.json#/$defs/requiresLinuxBootstrap" },
+        { "$ref": "release-catalog-v1.schema.json#/$defs/requiresLinuxX64Payload" },
+        { "$ref": "release-catalog-v1.schema.json#/$defs/requiresLinuxArm64Payload" }
+      ] } } },
+      "else": { "properties": { "artifacts": { "not": { "contains": { "properties": { "platform": { "const": "linux" } } } } } } }
+    }
+  ]
+}
