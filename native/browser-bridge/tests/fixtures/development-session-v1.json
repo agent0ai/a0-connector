@@ -1,0 +1,87 @@
+{
+  "description": "Synthetic public RFC 8032 test-key fixture; never production authority.",
+  "now_ms": 1700000000000,
+  "public_key": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+  "challenge_request": {
+    "contract": "a0.browser-bridge.development-session.v1",
+    "trust_version": 1,
+    "channel": "local-development",
+    "bridge_id": "bridge-dev-fixture",
+    "client_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "extension_id": "paoagmddepkmonpeboobaijlenlcokpc",
+    "install_instance_id": "install-dev-fixture",
+    "load_generation_id": "load-dev-fixture",
+    "companion_instance_id": "companion-dev-fixture"
+  },
+  "challenge_response": {
+    "contract": "a0.browser-bridge.development-session.v1",
+    "trust_version": 1,
+    "channel": "local-development",
+    "challenge_id": "challenge-dev-fixture",
+    "server_nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "server_instance_id": "server-dev-fixture",
+    "server_base_url": "http://localhost:50080",
+    "expires_at_ms": 1700000060000
+  },
+  "proof": {
+    "aud": "server-dev-fixture",
+    "bridge_id": "bridge-dev-fixture",
+    "challenge_id": "challenge-dev-fixture",
+    "client_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "companion_instance_id": "companion-dev-fixture",
+    "contract": "a0.browser-bridge.development-session.v1",
+    "channel": "local-development",
+    "extension_id": "paoagmddepkmonpeboobaijlenlcokpc",
+    "handler": "plugins/_a0_connector/ws_browser_development",
+    "install_instance_id": "install-dev-fixture",
+    "load_generation_id": "load-dev-fixture",
+    "protocol": "a0-connector.v1",
+    "server_base_url": "http://localhost:50080",
+    "server_nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "trust_version": 1
+  },
+  "canonical_proof": "{\"aud\":\"server-dev-fixture\",\"bridge_id\":\"bridge-dev-fixture\",\"challenge_id\":\"challenge-dev-fixture\",\"channel\":\"local-development\",\"client_nonce\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"companion_instance_id\":\"companion-dev-fixture\",\"contract\":\"a0.browser-bridge.development-session.v1\",\"extension_id\":\"paoagmddepkmonpeboobaijlenlcokpc\",\"handler\":\"plugins/_a0_connector/ws_browser_development\",\"install_instance_id\":\"install-dev-fixture\",\"load_generation_id\":\"load-dev-fixture\",\"protocol\":\"a0-connector.v1\",\"server_base_url\":\"http://localhost:50080\",\"server_nonce\":\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"trust_version\":1}",
+  "signature": "qoGt1rJ-AYF28n6FuD-e6_bOJESDSg6hGwqHU5iOxm9_TzNtUSPIXWElhQ8_5rQMRH4C_3nBIEwfd36CemrBAQ",
+  "hello_data": {
+    "protocol": "a0-connector.v1",
+    "features": [],
+    "development": {
+      "contract": "a0.browser-bridge.development-session.v1",
+      "channel": "local-development",
+      "mode": "pairing_only"
+    },
+    "extension": {
+      "id": "paoagmddepkmonpeboobaijlenlcokpc",
+      "version": "0.1.0",
+      "manifest_version": 3,
+      "install_instance_id": "install-dev-fixture",
+      "load_generation_id": "load-dev-fixture"
+    },
+    "companion": {
+      "instance_id": "companion-dev-fixture",
+      "version": "2.12.0",
+      "platform": "darwin",
+      "arch": "aarch64"
+    }
+  },
+  "hello_ack_data": {
+    "protocol": "a0-connector.v1",
+    "principal_type": "browser_bridge_development",
+    "features": [],
+    "connector_session_ready": false,
+    "browser_control_ready": false,
+    "reason_code": "development_runtime_not_available",
+    "development": {
+      "contract": "a0.browser-bridge.development-session.v1",
+      "channel": "local-development",
+      "mode": "pairing_only"
+    },
+    "connector_binding": {
+      "server_instance_id": "server-dev-fixture",
+      "bridge_id": "bridge-dev-fixture",
+      "connector_sid": "sid-dev-fixture",
+      "key_generation": 1,
+      "load_generation_id": "load-dev-fixture"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": "pairing:exchange-extra",
+  "method": "pairing.exchange",
+  "params": {
+    "contract_version": 1,
+    "pairing_code": "A0B1-DEADBEEF-0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+    "server_base_origin": "https://agent.example.test",
+    "credential": "must-not-be-accepted"
+  }
+}

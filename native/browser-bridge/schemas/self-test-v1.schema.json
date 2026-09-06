@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentzero.ai/schemas/browser-bridge/self-test-v1.schema.json",
+  "title": "Agent Zero Browser Bridge Offline Self Test v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "schema_version", "companion_version", "state", "framing", "registry", "path_discovery", "install_ready", "reason_code"],
+  "properties": {
+    "contract": { "const": "a0.browser-bridge.self-test.v1" },
+    "schema_version": { "const": 1 },
+    "companion_version": { "type": "string", "minLength": 1 },
+    "state": { "enum": ["passed", "failed"] },
+    "framing": { "enum": ["passed", "failed"] },
+    "registry": { "enum": ["passed", "failed"] },
+    "path_discovery": { "enum": ["passed", "unavailable"] },
+    "install_ready": { "type": "boolean" },
+    "reason_code": { "type": "string" }
+  }
+}

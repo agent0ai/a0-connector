@@ -1,0 +1,20 @@
+{
+  "jsonrpc": "2.0",
+  "id": "operation-1",
+  "method": "browser.perform",
+  "params": {
+    "contract_version": 1,
+    "op_id": "operation-1",
+    "action_id": "action-1",
+    "context_id": "context-1",
+    "browser_session_id": "browser-session-1",
+    "turn_id": "turn-1",
+    "action": "click",
+    "target": { "tab_handle": "a0t1.fixture-generation.fixture-lease" },
+    "args": { "ref": "frame0:node24", "expected_action_class": "unknown" },
+    "timeout_ms": 120000,
+    "required_capabilities": ["click", "semantic_dom_v1", "cursor_v1", "trusted_input_v1"],
+    "policy": { "origin_grant_id": "origin-grant-1", "action_grant_id": null },
+    "display": { "cursor": true, "foreground": false }
+  }
+}
