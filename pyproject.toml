@@ -112,3 +112,8 @@ packages = [
     "packages/a0-computer-use-macos/src/a0_computer_use_macos",
     "packages/a0-computer-use-windows/src/a0_computer_use_windows",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "large_payload_soak: opt-in 16-64 MiB connector transport soak",
+]

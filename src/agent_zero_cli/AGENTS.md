@@ -15,6 +15,35 @@
 
 - `A0Client` owns HTTP, login/session cookies, Socket.IO setup, connector event registration, and the `a0-connector.v1` protocol constants.
 - Keep `aiohttp.ClientWSTimeout` compatibility in `client.py` unless all supported aiohttp versions have been verified.
+- `A0Client` advertises its effective `A0_WS_MAX_PAYLOAD_BYTES` receive ceiling
+  and consumes the Core ceiling from HTTP capabilities and `connector_hello`.
+  Missing or invalid peer data must fall back to 4 MiB. Measure the complete
+  encoded Socket.IO event before every call or result emit; oversized calls fail
+  locally and oversized operation results become one structured
+  `PAYLOAD_TOO_LARGE` result without disconnecting.
+- aiohttp rejects a WebSocket frame whose projected size is greater than or
+  equal to `max_msg_size`; configure its parser bound to the advertised
+  application ceiling plus one byte so the negotiated ceiling remains inclusive.
+- `transfer_protocol=1` is the symmetric large-operation WebSocket contract.
+  Keep ordinary payloads on the direct fast path; larger eligible requests and
+  results use start, ordered 64 KiB chunks, end, and abort with declared size and
+  SHA-256. Enforce the negotiated byte ceiling, four active inbound transfers,
+  a 30-second idle timeout, and disk spooling above 1 MiB. A peer without the
+  capability gets one structured `PAYLOAD_TOO_LARGE` result, never legacy
+  fragments or a transport disconnect.
+- Associate active transfers with their existing chat context. Pause and reset
+  abort that context before returning, intentional disconnect emits abort while
+  the socket is still open, and peer abort or disconnect releases outbound and
+  inbound state plus any spool file. Computer Use capture files and host-browser
+  screenshot bytes must be rejected above 25 MiB before base64/JSON expansion.
+- `AttachmentUpload.content` is bytes for clipboard/in-memory images or a
+  `Path` for disk-backed images. Never turn a disk source back into a full-memory
+  buffer before multipart upload. Bulk HTTP requests use their own size-scaled
+  timeout and verify Core's size/SHA-256 receipt when advertised.
+- `A0Client.download_file` streams Core's existing workdir download response to
+  a same-directory `.partial-*` host file, verifies Content-Length and
+  `X-Content-SHA256`, fsyncs, and atomically replaces the requested destination.
+  A failure must preserve an existing destination and remove the partial.
 - Remote file, exec, computer-use, and browser operation handlers must emit their `connector_*_op_result` event before follow-up metadata refresh work starts.
 - Use the client after-result callbacks for browser and computer-use status refreshes so server-side pending operations resolve before any nested `connector_hello` round trip.
 - Refresh the active chat tab metadata after context completion so server-side automatic chat renames become visible in the TUI.
@@ -87,6 +116,18 @@
   launcher/WSL Engine bridge before falling back to WSL-hosted Docker commands
   through `wsl.exe`.
 - Remote workspace tools must respect their write/exec enablement flags and must not widen filesystem access accidentally.
+- Remote workspace `write` uses same-directory fsync plus atomic replacement so
+  an interruption cannot truncate an existing host file or expose partial new
+  content.
+- Remote workspace text reads must scan in fixed-size blocks, reject a
+  binary-looking first block, and return no more than 2,000 lines or 256 KiB.
+  Include explicit truncation/continuation metadata. Defensively reject write
+  and patch text over 256 KiB before touching the destination; bulk and binary
+  files belong on authenticated HTTP routes.
+- Remote execution responses expose no more than 256 KiB of terminal output.
+  Spill larger cleaned output atomically into the selected host workspace,
+  return a final-byte tail with an explicit notice plus size/hash/path metadata,
+  and bound prompt-pattern inspection before running regexes on long lines.
 - Textual compatibility guards live in `textual_compat.py`. Install them only on the interactive TUI startup path so `a0 headless` remains Textual-free.
 - `image_render.py` owns the interactive-only terminal-image adapter. It probes and captures terminal rendering capabilities before `App.run()`, while headless and gateway startup paths must not import it or `textual-image`. Automatic selection may trust a direct terminal's authoritative capability advertisement, but must reject known partial implementations such as Warp's Kitty support without the Unicode virtual placements required by `textual-image`; terminal multiplexers do not inherit that trust. If no complete TGP or Sixel path is available, automatic and unsupported forced native modes select `off`; only explicit or preview-forced half-cell mode constructs the real half-cell widget factory. Ordinary pytest launches keep their library-free half-cell renderer before native probes. Widget callers fit a `CellBox` before `create_widget()`, and native renderer failures become unavailable placeholders rather than pixelated fallback images. Visible Sixel widget trees are redrawn together after transcript viewport changes because Sixel pixels are not terminal-retained; other renderers no-op that hook. Cleanup accepts `None` and suppresses protocol release/removal failures after caller bookkeeping is cleared.
 - `image_store.py` owns streamed, authenticated same-origin image loading and memory-only display-surface caching. It uses the existing `A0Client` HTTP session, fetches only traversal-free `/a0/` paths, accepts only validated raster payloads, limits encoded data to 25 MiB and decoded dimensions to 32 million pixels, permits four concurrent fetch/load operations while serializing full-resolution Pillow decode, downsamples before EXIF transpose and RGBA/RGB composition, holds the decoder permit until a canceled worker thread completes, and maintains a 64 MiB LRU of independently-owned Pillow surfaces.

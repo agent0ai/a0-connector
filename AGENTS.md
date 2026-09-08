@@ -96,6 +96,22 @@
 - Use Linux commands and paths by default. Prefer `./.venv/bin/python`, not Windows-only virtualenv paths.
 - UI preview is the primary loop for TUI work: `./.venv/bin/python devtools/serve.py` at `http://localhost:8566`.
 - The CLI talks to Agent Zero through the connector protocol `a0-connector.v1`, HTTP routes under `/api/plugins/_a0_connector/v1/`, and Socket.IO events on namespace `/ws` with `connector_*` event names.
+- Large operation requests/results use negotiated `transfer_protocol=1` start,
+  ordered 64 KiB chunk, end, and abort events. Peers without that capability
+  receive one structured size error; they must never receive a partial legacy
+  chunk stream or be disconnected by an oversized application payload.
+- CLI and Core advertise `capabilities.ws_max_payload_bytes`; outbound Socket.IO
+  events are measured after serialization and rejected before dispatch when they
+  exceed the peer ceiling. Missing or invalid capability data uses the 4 MiB
+  legacy floor. Bulk payloads belong on authenticated HTTP transfer routes.
+- HTTP attachment uploads keep disk sources file-backed, use size-scaled
+  per-request timeouts, and verify Core's ordered size/SHA-256 receipts. Core
+  downloads stream into a same-directory host partial and become visible only
+  after Content-Length/SHA-256 verification and atomic replacement.
+- Remote text reads are a bounded control-plane preview: stream the source,
+  reject binary-looking input, return at most 2,000 lines or 256 KiB with
+  continuation metadata, and direct complete/binary content to authenticated
+  HTTP. Remote write and patch payloads are capped at 256 KiB on both peers.
 
 ### Plugin Backend
 
@@ -143,6 +159,7 @@
 - UI preview: `./.venv/bin/python devtools/serve.py`.
 - Static TUI snapshot: `./.venv/bin/python devtools/snapshot.py`.
 - Dependency lock check, when dependency files change and `uv` is available: `./.venv/bin/python devtools/lock_dependencies.py --check`.
+- Opt-in 16/32/64 MiB transport soak: `A0_RUN_LARGE_PAYLOAD_SOAK=1 ./.venv/bin/python -m pytest tests/test_client.py -m large_payload_soak -v`.
 
 ## Child DOX Index
 

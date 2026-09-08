@@ -1096,6 +1096,41 @@ async def test_capture_embeds_legacy_path_result_without_advertising_path(
     assert "container_path" not in result["result"]
 
 
+async def test_capture_rejects_oversized_file_before_reading(
+    _temp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _manager(enabled=True)
+    capture_path = tmp_path / "oversized.png"
+    capture_path.write_bytes(b"12345")
+    monkeypatch.setattr(computer_use_mod, "_CAPTURE_ARTIFACT_MAX_BYTES", 4)
+    monkeypatch.setattr(Path, "read_bytes", lambda _path: pytest.fail("oversized source was read"))
+    manager._helper_request = AsyncMock(
+        return_value={
+            "ok": True,
+            "result": {
+                "host_path": str(capture_path),
+                "width": 640,
+                "height": 480,
+                "session_id": "sess-1",
+            },
+        }
+    )
+    session = _HelperSession(context_id="ctx-1", session_id="sess-1", active=True)
+    session.process = type("FakeProcess", (), {"returncode": None})()
+    manager._sessions["ctx-1"] = session
+
+    result = await manager.handle_op(
+        {"op_id": "cap-large", "action": "capture", "context_id": "ctx-1", "session_id": "sess-1"}
+    )
+
+    assert result["ok"] is False
+    assert result["code"] == "BAD_REQUEST"
+    assert "too large" in result["error"]
+    assert capture_path.exists()
+
+
 async def test_capture_includes_base64_artifact_from_written_capture_path(
     _temp_env: Path,
 ) -> None:

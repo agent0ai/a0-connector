@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import json
 import ntpath
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from agent_zero_cli import remote_files as remote_files_module
-from agent_zero_cli.remote_files import RemoteFileUtility
+from agent_zero_cli.remote_files import (
+    REMOTE_FILE_READ_MAX_LINES,
+    REMOTE_FILE_TEXT_MAX_BYTES,
+    RemoteFileUtility,
+)
 
 
 def test_remote_file_utility_stat_returns_canonical_metadata(
@@ -78,6 +85,231 @@ def test_remote_file_utility_roundtrips_read_write_and_patch(tmp_path: Path) -> 
     assert patch_result["result"]["file"]["realpath"] == os.path.realpath(str(target))
     assert patch_result["result"]["file"]["total_lines"] == 2
     assert target.read_text(encoding="utf-8") == "line-1\nline-2-updated\n"
+
+
+def test_remote_file_write_failure_preserves_existing_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "sample.txt"
+    target.write_text("original\n", encoding="utf-8")
+    utility = RemoteFileUtility(scan_root=str(tmp_path))
+
+    def fail_replace(_source: str, _destination: str) -> None:
+        raise OSError("simulated disconnect")
+
+    monkeypatch.setattr(remote_files_module.os, "replace", fail_replace)
+    result = utility.handle_file_op(
+        {
+            "op_id": "op-write-failure",
+            "op": "write",
+            "path": str(target),
+            "content": "replacement\n",
+        }
+    )
+
+    assert result["ok"] is False
+    assert "simulated disconnect" in result["error"]
+    assert target.read_text(encoding="utf-8") == "original\n"
+    assert list(tmp_path.glob(".partial-*")) == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"text\x00binary",
+        b"\xff" * 8192,
+        (b"valid utf-8 prefix\n" * 16) + (b"\xff" * 512) + b"\nvalid suffix",
+    ],
+)
+def test_remote_file_read_rejects_binary_with_http_guidance(
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    target = tmp_path / "sample.bin"
+    target.write_bytes(payload)
+
+    result = RemoteFileUtility(scan_root=str(tmp_path)).handle_file_op(
+        {"op_id": "op-binary", "op": "read", "path": str(target)}
+    )
+
+    assert result["ok"] is False
+    assert result["code"] == "BINARY_FILE"
+    assert result["details"]["alternative"] == "http_bulk_transfer"
+
+
+def test_remote_file_read_honors_range_and_bounds_newline_heavy_output(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "many-lines.txt"
+    target.write_text("".join(f"line-{line}\n" for line in range(1, 4001)), encoding="utf-8")
+
+    result = RemoteFileUtility(scan_root=str(tmp_path)).handle_file_op(
+        {
+            "op_id": "op-many-lines",
+            "op": "read",
+            "path": str(target),
+            "line_from": 501,
+            "line_to": 3500,
+        }
+    )["result"]
+
+    assert result["total_lines"] == 4000
+    assert result["line_from"] == 501
+    assert result["line_to"] == 500 + REMOTE_FILE_READ_MAX_LINES
+    assert result["truncated"] is True
+    assert result["truncation"] == {
+        "reason": "max_lines",
+        "next_line": 501 + REMOTE_FILE_READ_MAX_LINES,
+        "alternative": "http_bulk_transfer",
+    }
+    assert " 501 | line-501" in result["content"]
+    assert "2501 | line-2501" not in result["content"]
+    assert len(result["content"].encode("utf-8")) <= REMOTE_FILE_TEXT_MAX_BYTES
+
+
+@pytest.mark.parametrize(
+    ("op", "payload_key", "target_exists"),
+    [("write", "content", False), ("patch", "patch_text", True)],
+)
+def test_remote_file_modification_rejects_oversized_text_before_writing(
+    tmp_path: Path,
+    op: str,
+    payload_key: str,
+    target_exists: bool,
+) -> None:
+    target = tmp_path / "bounded.txt"
+    if target_exists:
+        target.write_text("original\n", encoding="utf-8")
+    payload = {
+        "op_id": f"op-{op}-large",
+        "op": op,
+        "path": str(target),
+        payload_key: "x" * (REMOTE_FILE_TEXT_MAX_BYTES + 1),
+    }
+
+    result = RemoteFileUtility(scan_root=str(tmp_path)).handle_file_op(payload)
+
+    assert result["ok"] is False
+    assert result["code"] == "PAYLOAD_TOO_LARGE"
+    assert result["details"]["actual_bytes"] == REMOTE_FILE_TEXT_MAX_BYTES + 1
+    assert result["details"]["limit_bytes"] == REMOTE_FILE_TEXT_MAX_BYTES
+    if target_exists:
+        assert target.read_text(encoding="utf-8") == "original\n"
+    else:
+        assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    "size",
+    [
+        0,
+        1,
+        REMOTE_FILE_TEXT_MAX_BYTES - 1,
+        REMOTE_FILE_TEXT_MAX_BYTES,
+        REMOTE_FILE_TEXT_MAX_BYTES + 1,
+    ],
+)
+def test_remote_file_write_boundary_matrix(tmp_path: Path, size: int) -> None:
+    target = tmp_path / f"write-{size}.txt"
+    content = "x" * size
+
+    result = RemoteFileUtility(scan_root=str(tmp_path)).handle_file_op(
+        {
+            "op_id": f"write-{size}",
+            "op": "write",
+            "path": str(target),
+            "content": content,
+        }
+    )
+
+    if size <= REMOTE_FILE_TEXT_MAX_BYTES:
+        assert result["ok"] is True
+        assert target.read_text(encoding="utf-8") == content
+    else:
+        assert result["ok"] is False
+        assert result["code"] == "PAYLOAD_TOO_LARGE"
+        assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    "size",
+    [
+        0,
+        1,
+        REMOTE_FILE_TEXT_MAX_BYTES - 1,
+        REMOTE_FILE_TEXT_MAX_BYTES,
+        REMOTE_FILE_TEXT_MAX_BYTES + 1,
+    ],
+)
+def test_remote_file_read_boundary_matrix(tmp_path: Path, size: int) -> None:
+    target = tmp_path / f"read-{size}.txt"
+    target.write_bytes(b"x" * size)
+
+    result = RemoteFileUtility(scan_root=str(tmp_path)).handle_file_op(
+        {"op_id": f"read-{size}", "op": "read", "path": str(target)}
+    )
+
+    assert result["ok"] is True
+    body = result["result"]
+    assert len(body["content"].encode("utf-8")) <= REMOTE_FILE_TEXT_MAX_BYTES
+    assert body["truncated"] is (
+        size > 0 and size + len(f"{1:>4} | ") > REMOTE_FILE_TEXT_MAX_BYTES
+    )
+
+
+def test_remote_file_read_64_mib_single_line_keeps_rss_delta_below_10_mib(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "single-line.txt"
+    block = b"x" * (64 * 1024)
+    with target.open("wb") as handle:
+        for _ in range(1024):
+            handle.write(block)
+
+    project_root = Path(__file__).resolve().parents[1]
+    script = """
+import json
+import resource
+import sys
+from agent_zero_cli.remote_files import RemoteFileUtility
+
+before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+result = RemoteFileUtility(scan_root=sys.argv[2]).handle_file_op(
+    {"op_id": "rss", "op": "read", "path": sys.argv[1]}
+)["result"]
+after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+print(json.dumps({
+    "delta_kib": after - before,
+    "content_bytes": len(result["content"].encode("utf-8")),
+    "total_lines": result["total_lines"],
+    "truncated": result["truncated"],
+    "reason": result["truncation"]["reason"],
+}))
+"""
+    env = dict(os.environ)
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(project_root / "src"), existing_pythonpath) if part
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(target), str(tmp_path)],
+        cwd=project_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    measurement = json.loads(completed.stdout)
+
+    assert measurement == {
+        "delta_kib": measurement["delta_kib"],
+        "content_bytes": REMOTE_FILE_TEXT_MAX_BYTES,
+        "total_lines": 1,
+        "truncated": True,
+        "reason": "max_bytes",
+    }
+    assert measurement["delta_kib"] < 10 * 1024
 
 
 def test_remote_file_utility_blocks_absolute_read_outside_scan_root_in_read_only_mode(

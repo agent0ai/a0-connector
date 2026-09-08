@@ -64,7 +64,7 @@ class AttachmentRef:
 @dataclass(frozen=True)
 class AttachmentUpload:
     filename: str
-    content: bytes
+    content: bytes | Path
     mime_type: str
 
 
@@ -92,7 +92,7 @@ def create_image_file_upload(path: str | Path) -> AttachmentUpload:
 
     return AttachmentUpload(
         filename=_unique_upload_filename(source),
-        content=source.read_bytes(),
+        content=source,
         mime_type=mime_type,
     )
 

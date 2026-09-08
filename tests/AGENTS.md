@@ -54,10 +54,16 @@
   must prove that printable text,
   including pywinauto metacharacters and Unicode surrogate pairs, remains
   literal while explicit key chords keep their native virtual-key mapping.
+- Large-payload boundary, binary, cancellation, and reconnect regressions belong
+  in the default suite. The 16/32/64 MiB transport soak is marked
+  `large_payload_soak` and remains skipped unless
+  `A0_RUN_LARGE_PAYLOAD_SOAK=1`; this keeps ordinary CI fast while exposing one
+  deterministic nightly command.
 
 ## Verification
 
 - Full suite: `./.venv/bin/python -m pytest tests/ -v`.
 - Async fallback: `./.venv/bin/python -m pytest tests/ -v -p anyio --anyio-backends=asyncio`.
+- Large-payload soak: `A0_RUN_LARGE_PAYLOAD_SOAK=1 ./.venv/bin/python -m pytest tests/test_client.py -m large_payload_soak -v`.
 
 ## Child DOX Index
