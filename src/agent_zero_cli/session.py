@@ -734,7 +734,10 @@ class ConnectorSession:
                 "error": "Launcher host file access is paused.",
                 "code": "HOST_FILES_DISABLED",
             }
-        return await self.remote_files.handle_file_op_async(data, self.client)
+        def check_access():
+            if not self._scope_available("files"):
+                raise PermissionError("Launcher host file access is paused.")
+        return await self.remote_files.handle_file_op_async(data, self.client, check_access)
 
     async def _handle_exec_op(self, data: dict[str, Any]) -> dict[str, Any]:
         if not self._scope_available("code_execution"):

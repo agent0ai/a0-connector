@@ -223,3 +223,5 @@
 - `widgets/AGENTS.md` - Reusable Textual widgets and chat rendering surfaces.
 - `screens/AGENTS.md` - Modal and full-screen Textual screen contracts.
 - `styles/AGENTS.md` - TCSS layout and visual styling rules.
+
+- `file_browser_paths.py` anchors POSIX Files operations to directory descriptors with no-follow opens. Windows locks parent directories against replacement and checks final file handles for workspace containment. HTTP reads snapshot held source descriptors into private temporary files; writes stage privately before descriptor-relative publication. Recheck current scopes before upload/publication. Exclusive rename must not replace a racing destination. Validate platform-specific paths natively before claiming Windows/macOS race coverage.
