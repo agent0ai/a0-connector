@@ -243,6 +243,8 @@ async def test_session_connects_and_advertises_headless_metadata(tmp_path: Path)
     assert client.hello_calls[-1]["computer_use"]["enabled"] is False
     assert client.hello_calls[-1]["host_browser"]["supported"] is False
     assert client.hello_calls[-1]["remote_files"] == {
+        "file_browser": 1,
+        "root_path": str(tmp_path),
         "enabled": True,
         "write_enabled": True,
         "mode": "read_write",

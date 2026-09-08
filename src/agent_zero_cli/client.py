@@ -1788,17 +1788,22 @@ class A0Client:
         headers["X-CSRF-Token"] = await self.fetch_csrf_token()
         return headers
 
-    async def upload_attachments(self, uploads: list[AttachmentUpload]) -> list[AttachmentRef]:
+    async def upload_attachments(self, uploads: list[AttachmentUpload], *, transfer_token: str | None = None) -> list[AttachmentRef]:
         if not uploads:
             return []
 
         expected = [_attachment_size_and_sha256(upload) for upload in uploads]
         timeout = _bulk_transfer_timeout(sum(size for size, _digest in expected))
+        endpoint = "upload"
+        if transfer_token is not None:
+            if len(transfer_token) != 32 or any(c not in "0123456789abcdef" for c in transfer_token):
+                raise A0ProtocolError("Invalid file transfer token.")
+            endpoint = "plugins/_a0_connector/file_browser_transfer?transfer_token=" + transfer_token
 
         async def post_upload() -> httpx.Response:
             with _multipart_files(uploads) as files:
                 return await self.http.post(
-                    self._core_api_url("upload"),
+                    self._core_api_url(endpoint),
                     files=files,
                     headers=await self._csrf_headers(),
                     timeout=timeout,
@@ -1899,12 +1904,16 @@ class A0Client:
                         async for chunk in response.aiter_bytes(_FILE_CHUNK_BYTES):
                             if not chunk:
                                 continue
+                            if expected_size is not None and size + len(chunk) > expected_size:
+                                raise A0ProtocolError("Download exceeds the expected size.")
                             handle.write(chunk)
                             digest.update(chunk)
                             size += len(chunk)
                         handle.flush()
                         os.fsync(handle.fileno())
 
+                    if expected_size is not None and size != expected_size:
+                        raise A0ProtocolError("Download does not match the expected size.")
                     actual_digest = digest.hexdigest()
                     if actual_digest != expected_digest:
                         raise A0ProtocolError(

@@ -4747,6 +4747,8 @@ async def test_computer_use_slash_commands_refresh_hello_metadata_when_connected
             },
             "host_browser": _host_browser_metadata(False),
             "remote_files": {
+                "file_browser": 1,
+                "root_path": dummy_app._remote_files.scan_root,
                 "enabled": True,
                 "write_enabled": True,
                 "mode": "read_write",
@@ -4768,6 +4770,8 @@ async def test_computer_use_slash_commands_refresh_hello_metadata_when_connected
             },
             "host_browser": _host_browser_metadata(False),
             "remote_files": {
+                "file_browser": 1,
+                "root_path": dummy_app._remote_files.scan_root,
                 "enabled": True,
                 "write_enabled": True,
                 "mode": "read_write",
@@ -5338,6 +5342,8 @@ async def test_remote_safety_toggles_refresh_hello_metadata_when_connected(
             "computer_use": computer_use_metadata,
             "host_browser": _host_browser_metadata(False),
             "remote_files": {
+                "file_browser": 1,
+                "root_path": dummy_app._remote_files.scan_root,
                 "enabled": True,
                 "write_enabled": False,
                 "mode": "read_only",
@@ -5351,6 +5357,8 @@ async def test_remote_safety_toggles_refresh_hello_metadata_when_connected(
             "computer_use": computer_use_metadata,
             "host_browser": _host_browser_metadata(False),
             "remote_files": {
+                "file_browser": 1,
+                "root_path": dummy_app._remote_files.scan_root,
                 "enabled": True,
                 "write_enabled": False,
                 "mode": "read_only",

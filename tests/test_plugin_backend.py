@@ -1834,6 +1834,8 @@ def test_ws_connector_stores_remote_tool_metadata_from_hello() -> None:
     remote_files = ws_runtime_mod.remote_file_metadata_for_sid("sid-cli")
     remote_exec = ws_runtime_mod.remote_exec_metadata_for_sid("sid-cli")
     assert remote_files == {
+        "file_browser": False,
+        "root_path": "",
         "enabled": True,
         "write_enabled": False,
         "mode": "read_only",

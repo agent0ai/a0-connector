@@ -1550,6 +1550,31 @@ async def test_download_file_streams_hashes_and_atomically_replaces(
     assert kwargs["timeout"].read == 30.0
 
 
+@pytest.mark.parametrize("expected_size", [1, 5])
+async def test_download_expected_size_mismatch_preserves_destination(tmp_path, expected_size):
+    target = tmp_path / "existing"
+    target.write_bytes(b"original")
+    client = A0Client("http://localhost:5080")
+    client._csrf_token = "test"
+    client.http = Mock()
+    client.http.stream = Mock(return_value=FakeStreamResponse(chunks=[b"abc"], headers={
+        "X-Content-SHA256": hashlib.sha256(b"abc").hexdigest(), "Content-Length": "3"}))
+    with pytest.raises(A0ProtocolError, match="expected size"):
+        await client.download_file("/a0/work/file", target, expected_size=expected_size)
+    assert target.read_bytes() == b"original"
+    assert not list(tmp_path.glob(".partial-*"))
+
+
+async def test_host_transfer_upload_rejects_invalid_token_before_http():
+    client = A0Client("http://localhost:5080")
+    client.http = Mock()
+    client.http.post = AsyncMock()
+    with pytest.raises(A0ProtocolError, match="transfer token"):
+        await client.upload_attachments([AttachmentUpload("file", b"data", "application/octet-stream")],
+                                        transfer_token="invalid&path=/other")
+    client.http.post.assert_not_called()
+
+
 async def test_download_hash_mismatch_preserves_existing_destination(
     tmp_path: Path,
 ) -> None:

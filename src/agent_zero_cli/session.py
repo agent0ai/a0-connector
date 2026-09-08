@@ -734,7 +734,7 @@ class ConnectorSession:
                 "error": "Launcher host file access is paused.",
                 "code": "HOST_FILES_DISABLED",
             }
-        return self.remote_files.handle_file_op(data)
+        return await self.remote_files.handle_file_op_async(data, self.client)
 
     async def _handle_exec_op(self, data: dict[str, Any]) -> dict[str, Any]:
         if not self._scope_available("code_execution"):
@@ -975,6 +975,8 @@ class ConnectorSession:
     def _remote_file_metadata(self) -> dict[str, Any]:
         enabled = self._scope_available("files")
         return {
+            "file_browser": 1,
+            "root_path": self.remote_files.scan_root,
             "enabled": enabled,
             "write_enabled": enabled and self.remote_file_write_enabled,
             "mode": "read_write" if enabled and self.remote_file_write_enabled else "read_only",

@@ -1797,8 +1797,8 @@ class AgentZeroCLI(App):
             name="settings-updated",
         )
 
-    def _handle_file_op(self, data: dict[str, Any]) -> dict[str, Any]:
-        return event_handlers.handle_file_op(self, data)
+    async def _handle_file_op(self, data: dict[str, Any]) -> dict[str, Any]:
+        return await self._remote_files.handle_file_op_async(data, self.client)
 
     async def _handle_exec_op(self, data: dict[str, Any]) -> dict[str, Any]:
         return await event_handlers.handle_exec_op(self, data)
@@ -1817,6 +1817,8 @@ class AgentZeroCLI(App):
 
     def _remote_file_metadata(self) -> dict[str, Any]:
         return {
+            "file_browser": 1,
+            "root_path": self._remote_files.scan_root,
             "enabled": True,
             "write_enabled": self._remote_file_write_enabled,
             "mode": "read_write" if self._remote_file_write_enabled else "read_only",

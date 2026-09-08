@@ -126,12 +126,25 @@ class RemoteFileUtility:
             for entry in entries
         ]
 
+    async def handle_file_op_async(self, data: dict[str, Any], client) -> dict[str, Any]:
+        if data.get("op") not in ("files_write_http", "files_read_http"):
+            return self.handle_file_op(data)
+        from agent_zero_cli.file_browser import write_http, read_http
+        try:
+            return {"op_id": data.get("op_id", ""), "ok": True,
+                    "result": await (write_http(self, data, client) if data["op"] == "files_write_http" else read_http(self, data, client))}
+        except Exception as error:
+            return {"op_id": data.get("op_id", ""), "ok": False, "error": str(error)}
+
     def handle_file_op(self, data: dict[str, Any]) -> dict[str, Any]:
         op_id = data.get("op_id", "")
         op = str(data.get("op", "")).strip().lower()
         path = str(data.get("path", "")).strip()
 
         try:
+            if op.startswith("files_"):
+                from agent_zero_cli.file_browser import handle
+                return {"op_id": op_id, "ok": True, "result": handle(self, data)}
             if op == "stat":
                 return self._file_op_stat(op_id, path)
             if op == "read":
