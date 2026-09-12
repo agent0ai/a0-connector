@@ -2137,6 +2137,76 @@ def test_select_remote_exec_target_sid_requires_write_enabled_for_mutating_runti
     )
 
 
+@pytest.mark.parametrize("mode", ["disconnected", "disabled", "read_only", "allowed"])
+@pytest.mark.parametrize("keyboard", ["yes  \n", ""])
+def test_input_remote_uses_execution_gates_and_terminal_transport(mode: str, keyboard: str) -> None:
+    manager, ws_runtime, tool_mod = _load_code_execution_remote_tool(
+        exec_handler=lambda payload: {"op_id": payload["op_id"], "ok": True, "result": {"output": "replied"}}
+    )
+    input_mod = _reload("plugins._a0_connector.tools.input_remote")
+    agent = _FakeRemoteAgent()
+    if mode != "disconnected":
+        ws_runtime.register_sid("sid-cli")
+        ws_runtime.subscribe_sid_to_context("sid-cli", agent.context.id)
+        ws_runtime.store_sid_remote_exec_metadata("sid-cli", {"enabled": mode != "disabled"})
+        ws_runtime.store_sid_remote_file_metadata("sid-cli", {"enabled": True, "write_enabled": mode == "allowed"})
+    result = asyncio.run(input_mod.InputRemote(agent=agent, args={"session": 3}).execute(keyboard=keyboard))
+    if mode == "allowed":
+        assert result.message == "replied"
+        payload = manager.calls[0]["payload"]
+        assert (payload["runtime"], payload["code"], payload["session"], payload["allow_running"]) == ("terminal", keyboard.rstrip(), 3, True)
+        assert "keyboard" not in payload
+    else:
+        assert manager.calls == []
+        assert {"disconnected": "no CLI client", "disabled": "press F4", "read_only": "Press F3"}[mode] in result.message
+
+
+@pytest.mark.skipif(os.name == "nt", reason="uses POSIX shell quoting")
+def test_input_remote_reaches_real_program_through_execution_transport(tmp_path: Path, monkeypatch) -> None:
+    import shlex
+    from agent_zero_cli.remote_exec import RemoteExecManager
+
+    async def check():
+        remote = RemoteExecManager(cwd=str(tmp_path), poll_interval=0.01)
+        _, ws_runtime, tool_mod = _load_code_execution_remote_tool(exec_handler=remote.handle_exec_op)
+        input_mod = _reload("plugins._a0_connector.tools.input_remote")
+        agent = _FakeRemoteAgent()
+        ws_runtime.register_sid("sid-cli")
+        ws_runtime.subscribe_sid_to_context("sid-cli", agent.context.id)
+        ws_runtime.store_sid_remote_exec_metadata("sid-cli", {"enabled": True})
+        ws_runtime.store_sid_remote_file_metadata("sid-cli", {"enabled": True, "write_enabled": True})
+        timeouts = {"first_output_timeout": 1, "between_output_timeout": 1, "max_exec_timeout": 5, "dialog_timeout": 0}
+        monkeypatch.setattr(tool_mod, "build_exec_config", lambda **_: {"code_exec_timeouts": timeouts})
+        code = 'print("REPLY=" + input("Continue? "), flush=True)'
+        try:
+            started = await _create_code_execution_remote(
+                tool_mod, agent, runtime="terminal", code=f"{shlex.quote(sys.executable)} -u -c {shlex.quote(code)}"
+            ).execute()
+            assert "Continue?" in started.message
+            result = await input_mod.InputRemote(agent=agent, args={"session": 0}).execute(keyboard="yes  \n")
+            assert "REPLY=yes" in result.message
+        finally:
+            await remote.close()
+
+    asyncio.run(check())
+
+
+def test_code_execution_remote_rejects_removed_input_and_ignores_model_allow_running() -> None:
+    manager, ws_runtime, tool_mod = _load_code_execution_remote_tool(
+        exec_handler=lambda payload: {"op_id": payload["op_id"], "ok": True, "result": {"output": "ok"}}
+    )
+    agent = _FakeRemoteAgent()
+    rejected = asyncio.run(_create_code_execution_remote(tool_mod, agent, runtime="input", keyboard="yes").execute())
+    assert "runtime is required" in rejected.message
+    assert manager.calls == []
+    ws_runtime.register_sid("sid-cli")
+    ws_runtime.subscribe_sid_to_context("sid-cli", agent.context.id)
+    ws_runtime.store_sid_remote_exec_metadata("sid-cli", {"enabled": True})
+    ws_runtime.store_sid_remote_file_metadata("sid-cli", {"enabled": True, "write_enabled": True})
+    asyncio.run(_create_code_execution_remote(tool_mod, agent, runtime="terminal", code="pwd", allow_running=True).execute())
+    assert "allow_running" not in manager.calls[0]["payload"]
+
+
 def test_code_execution_remote_rejects_mutating_runtime_when_only_read_only_cli_is_subscribed() -> None:
     _install_fake_helpers()
     ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")

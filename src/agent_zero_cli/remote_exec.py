@@ -34,7 +34,7 @@ _TIMEOUT_KEYS = (
     "max_exec_timeout",
     "dialog_timeout",
 )
-_SUPPORTED_RUNTIMES = ("terminal", "python", "nodejs", "output", "reset", "input")
+_SUPPORTED_RUNTIMES = ("terminal", "python", "nodejs", "output", "reset")
 
 _DEFAULT_CODE_EXEC_TIMEOUTS = {
     "first_output_timeout": 30,
@@ -504,10 +504,12 @@ class LocalShellSession:
             )
             return marker_pattern, wrapped
 
+        # Parse the entire group before execution so child stdin cannot consume bookkeeping.
         wrapped = (
-            f"{body}\n"
+            f"{{\n{body}\n"
             "__a0_exit=$?\n"
             f"printf '\\n{marker}:%s\\n' \"$__a0_exit\"\n"
+            "}\n"
         )
         return marker_pattern, wrapped
 
@@ -570,7 +572,7 @@ class RemoteExecManager:
         self.allow_writes = enabled
 
     def _runtime_requires_write_access(self, runtime: str) -> bool:
-        return runtime in {"terminal", "python", "nodejs", "input"}
+        return runtime in {"terminal", "python", "nodejs"}
 
     def set_exec_config(self, payload: dict[str, Any] | None) -> None:
         self._exec_config = _normalize_exec_config(payload)
@@ -602,10 +604,7 @@ class RemoteExecManager:
             return {
                 "op_id": op_id,
                 "ok": False,
-                "error": (
-                    "runtime must be one of: terminal, python, nodejs, output, reset, "
-                    "input (deprecated alias)"
-                ),
+                "error": "runtime must be one of: terminal, python, nodejs, output, reset",
             }
 
         if self._runtime_requires_write_access(runtime) and not self.allow_writes:
@@ -620,16 +619,18 @@ class RemoteExecManager:
                 "error": "session must be an integer",
             }
         reset_requested = _coerce_bool(data.get("reset"))
+        allow_running = _coerce_bool(data.get("allow_running"))
 
         try:
             if runtime == "terminal":
                 code = data.get("code")
-                if code is None or not str(code).strip():
+                if code is None or (not allow_running and not str(code).strip()):
                     raise ValueError("code is required for runtime=terminal")
                 result = await self.execute_terminal(
                     session=session,
                     command=str(code),
                     reset=reset_requested,
+                    allow_running=allow_running,
                     timeouts=self._timeouts_for_runtime(runtime, data),
                 )
             elif runtime == "python":
@@ -650,17 +651,6 @@ class RemoteExecManager:
                     session=session,
                     code=str(code),
                     reset=reset_requested,
-                    timeouts=self._timeouts_for_runtime(runtime, data),
-                )
-            elif runtime == "input":
-                keyboard = data.get("keyboard")
-                if keyboard is None:
-                    keyboard = data.get("code")
-                if keyboard is None:
-                    raise ValueError("keyboard is required for runtime=input")
-                result = await self.send_input(
-                    session=session,
-                    keyboard=str(keyboard),
                     timeouts=self._timeouts_for_runtime(runtime, data),
                 )
             elif runtime == "output":
@@ -734,6 +724,7 @@ class RemoteExecManager:
         session: int,
         command: str,
         reset: bool = False,
+        allow_running: bool = False,
         timeouts: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         return await self._run_shell_command(
@@ -741,6 +732,7 @@ class RemoteExecManager:
             command=command,
             timeouts=timeouts or self._exec_config.code_exec_timeouts,
             reset=reset,
+            allow_running=allow_running,
         )
 
     async def execute_python(
@@ -771,29 +763,6 @@ class RemoteExecManager:
             command=_build_node_command(code),
             timeouts=timeouts or self._exec_config.code_exec_timeouts,
             reset=reset,
-        )
-
-    async def send_input(
-        self,
-        *,
-        session: int,
-        keyboard: str,
-        timeouts: dict[str, int] | None = None,
-    ) -> dict[str, Any]:
-        if session not in self._sessions or not self._sessions[session].running:
-            raise ValueError(
-                f"Session {session} is not awaiting input. runtime=input is a deprecated "
-                "compatibility alias for sending a line into a running shell session."
-            )
-
-        state = self._sessions[session]
-        await state.shell.reset_output()
-        await state.shell.send_input(keyboard.rstrip("\n"))
-        state.running = True
-        return await self._get_terminal_output(
-            session=session,
-            timeouts=timeouts or self._exec_config.code_exec_timeouts,
-            reset_full_output=False,
         )
 
     async def collect_output(
@@ -829,12 +798,21 @@ class RemoteExecManager:
         command: str,
         timeouts: dict[str, int],
         reset: bool = False,
+        allow_running: bool = False,
     ) -> dict[str, Any]:
         state = await self._ensure_session(session, reset=reset)
-        if response := await self._handle_running_session(session=session):
-            return response
+        if not allow_running:
+            if response := await self._handle_running_session(session=session):
+                return response
 
-        await state.shell.send_command(command)
+        if allow_running and state.running:
+            if "\n" in command:
+                opener = ". {" if os.name == "nt" else "{"
+                command = f"{opener}\n{command.rstrip()}\n}}"
+            await state.shell.reset_output()
+            await state.shell.send_input(command)
+        else:
+            await state.shell.send_command(command)
         state.running = True
         return await self._get_terminal_output(
             session=session,

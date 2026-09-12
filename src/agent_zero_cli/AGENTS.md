@@ -128,6 +128,14 @@
   Spill larger cleaned output atomically into the selected host workspace,
   return a final-byte tail with an explicit notice plus size/hash/path metadata,
   and bound prompt-pattern inspection before running regexes on long lines.
+- Remote execution supports terminal/python/nodejs/output/reset, matching local
+  code execution. Core's `input_remote` forwards terminal code with the internal
+  `allow_running` flag; running sessions receive input, idle/missing sessions run
+  it as a command, matching local input. Write-access and enablement gates still
+  apply. The removed input runtime has no compatibility alias.
+- POSIX shell commands and completion bookkeeping form one parsed brace group,
+  so child stdin receives only subsequent input, while cwd and shell variables
+  remain available to the next command in the same session.
 - `file_browser.py` supplies binary-safe `files_*` operations for CLI and Launcher sessions. Advertise `file_browser: 1` and `root_path`; require the same root on each request. Host uploads use authenticated streamed HTTP with Core-supplied sizes and no independent ceiling, with size/hash checks and a same-directory staging file. Recheck connection identity, workspace and write permission before atomic publication; refuse overwrites and stale Editor revisions. Core enforces its configurable Editor text limit (10 MiB by default). No execution capability is required.
 - Host downloads use the same multipart streaming/integrity helper with an opaque `transfer_token`, targeting the protected File Browser receipt API instead of creating chat attachments. Both CLI and Launcher dispatch HTTP operations asynchronously through RemoteFileUtility; ordinary text-tool operations retain their own bounded protocol.
 - Textual compatibility guards live in `textual_compat.py`. Install them only on the interactive TUI startup path so `a0 headless` remains Textual-free.
