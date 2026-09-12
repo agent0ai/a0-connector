@@ -2503,12 +2503,19 @@ class MacOSComputerUseRuntime:
         requested_window_id = str(params.get("window_id") or "").strip()
         requested_pid = params.get("pid")
         parsed_pid, parsed_bundle, parsed_path = self._parse_ax_window_id(requested_window_id)
+        if requested_window_id and (
+            parsed_path is None
+            or (requested_window_id.startswith("ax-pid:") and parsed_pid is None)
+            or (requested_window_id.startswith("ax-bundle:") and not parsed_bundle)
+        ):
+            raise MacOSComputerUseError("COMPUTER_USE_WINDOW_NOT_FOUND", "Invalid macOS window_id.")
         if requested_pid is None and parsed_pid is not None:
             requested_pid = parsed_pid
 
         candidates = self._ax_window_roots(accessibility)
         for app_info, app_root, window, path in candidates:
             pid_matches = requested_pid is None or str(app_info.get("pid") or "") == str(requested_pid)
+            pid_matches = pid_matches and (parsed_pid is None or str(app_info.get("pid") or "") == str(parsed_pid))
             bundle_matches = not parsed_bundle or str(app_info.get("bundle_id") or "") == parsed_bundle
             path_matches = parsed_path is None or path == parsed_path
             if pid_matches and bundle_matches and path_matches:
@@ -2632,20 +2639,60 @@ class MacOSComputerUseRuntime:
     def _resolve_ax_target(self, accessibility: Any, params: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         target_value = params.get("target")
         target = dict(target_value) if isinstance(target_value, dict) else {}
-        path = _normalize_ax_path(params.get("path", target.get("path")))
-        _app_info, root = self._frontmost_ax_root(accessibility)
+        path = _normalize_ax_path(params.get("path", target.pop("path", None)))
         screen_size = (0, 0)
         if self._session is not None:
             screen_size = (self._session.session.width, self._session.session.height)
 
+        scope = {
+            key: str(value).strip().casefold()
+            for key, value in {
+                "pid": params.get("pid"),
+                "name": target.pop("app_name", None),
+                "bundle_id": target.pop("bundle_id", None),
+            }.items()
+            if value is not None and str(value).strip()
+        }
+        window_id = str(params.get("window_id") or "").strip()
+        prefix: list[int] = []
+        if window_id:
+            app_info, root, prefix, _ = self._resolve_ax_window_root(
+                accessibility, params, screen_size=screen_size
+            )
+            candidates = [(app_info, root)]
+        elif scope:
+            candidates = self._ax_application_roots(accessibility)
+        else:
+            candidates = [self._frontmost_ax_root(accessibility)]
+        candidates = [
+            (info, root) for info, root in candidates
+            if all(str(info.get(key, "")).strip().casefold() == value for key, value in scope.items())
+        ]
+        if len(candidates) != 1:
+            raise MacOSComputerUseError(
+                "COMPUTER_USE_AX_TARGET_AMBIGUOUS" if candidates else "COMPUTER_USE_AX_TARGET_NOT_FOUND",
+                "App scope must match exactly one running application; use pid or window_id from list_windows.",
+            )
+        _app_info, root = candidates[0]
+
         if path:
-            element = self._ax_element_for_path(accessibility, root, path)
+            if path[:len(prefix)] != prefix:
+                raise MacOSComputerUseError(
+                    "COMPUTER_USE_ELEMENT_WINDOW_MISMATCH", "Element path is outside the requested window."
+                )
+            element = self._ax_element_for_path(accessibility, root, path[len(prefix):])
             if element is not None:
                 summary = self._ax_target_summary(accessibility, element, path=path, screen_size=screen_size)
                 if self._ax_summary_matches(summary, target, allow_empty=True):
                     return element, summary
 
-        matches = self._find_ax_matches(accessibility, root, target=target, screen_size=screen_size)
+        if params.get("element_index") is not None:
+            raise MacOSComputerUseError(
+                "COMPUTER_USE_AX_TARGET_NOT_FOUND", "Cached element no longer matches; refresh get_window_state."
+            )
+        matches = self._find_ax_matches(
+            accessibility, root, target=target, screen_size=screen_size, path_prefix=prefix
+        )
         if not matches:
             raise MacOSComputerUseError(
                 "COMPUTER_USE_AX_TARGET_NOT_FOUND",
@@ -2671,37 +2718,6 @@ class MacOSComputerUseRuntime:
             element = children[index]
         return element
 
-    def _ax_app_root_for_window_id(self, accessibility: Any, window_id: str) -> tuple[dict[str, Any], Any]:
-        parsed_pid, parsed_bundle, _parsed_path = self._parse_ax_window_id(window_id)
-        candidates = self._ax_application_roots(accessibility)
-        for app_info, app_root in candidates:
-            pid_matches = parsed_pid is None or str(app_info.get("pid") or "") == str(parsed_pid)
-            bundle_matches = not parsed_bundle or str(app_info.get("bundle_id") or "") == parsed_bundle
-            if pid_matches and bundle_matches:
-                return app_info, app_root
-        if not window_id and candidates:
-            return candidates[0][0], candidates[0][1]
-        raise MacOSComputerUseError(
-            "COMPUTER_USE_WINDOW_NOT_FOUND",
-            "No matching macOS Accessibility app/window root was found.",
-        )
-
-    def _ax_element_for_window_path(
-        self,
-        accessibility: Any,
-        *,
-        window_id: str,
-        path: list[int],
-    ) -> tuple[Any, dict[str, Any]]:
-        app_info, app_root = self._ax_app_root_for_window_id(accessibility, window_id)
-        element = self._ax_element_for_path(accessibility, app_root, path)
-        if element is None:
-            raise MacOSComputerUseError(
-                "COMPUTER_USE_AX_TARGET_NOT_FOUND",
-                "No matching macOS Accessibility element was found for the cached path.",
-            )
-        return element, app_info
-
     def _cache_element_indices(self, tree: dict[str, Any], *, window_id: str) -> None:
         self._element_index_cache.clear()
         next_index = 0
@@ -2726,9 +2742,6 @@ class MacOSComputerUseRuntime:
             visit(tree)
 
     def _resolve_element_action_target(self, accessibility: Any, params: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
-        screen_size = (0, 0)
-        if self._session is not None:
-            screen_size = (self._session.session.width, self._session.session.height)
         element_index = params.get("element_index")
         if element_index is not None:
             try:
@@ -2752,28 +2765,12 @@ class MacOSComputerUseRuntime:
                     "element_index belongs to a different cached window_id.",
                 )
             path = _normalize_ax_path(cached.get("path"))
-            element, _app_info = self._ax_element_for_window_path(
-                accessibility,
-                window_id=cached_window_id,
-                path=path,
+            element, summary = self._resolve_ax_target(
+                accessibility, {**params, "window_id": cached_window_id, "path": path}
             )
-            summary = self._ax_target_summary(accessibility, element, path=path, screen_size=screen_size)
             summary["element_index"] = index
             return element, summary
 
-        target_value = params.get("target")
-        target = dict(target_value) if isinstance(target_value, dict) else {}
-        path = _normalize_ax_path(params.get("path", target.get("path")))
-        window_id = str(params.get("window_id") or "").strip()
-        if window_id and path:
-            element, _app_info = self._ax_element_for_window_path(
-                accessibility,
-                window_id=window_id,
-                path=path,
-            )
-            summary = self._ax_target_summary(accessibility, element, path=path, screen_size=screen_size)
-            if self._ax_summary_matches(summary, target, allow_empty=True):
-                return element, summary
         return self._resolve_ax_target(accessibility, params)
 
     def _find_ax_matches(
@@ -2783,6 +2780,7 @@ class MacOSComputerUseRuntime:
         *,
         target: dict[str, Any],
         screen_size: tuple[int, int],
+        path_prefix: list[int] | None = None,
     ) -> list[tuple[int, Any, dict[str, Any]]]:
         if not any(str(target.get(key) or "").strip() for key in ("role", "title", "description", "value", "identifier", "subrole")):
             raise MacOSComputerUseError(
@@ -2790,7 +2788,7 @@ class MacOSComputerUseRuntime:
                 "ax_action requires path or a semantic target.",
             )
         matches: list[tuple[int, Any, dict[str, Any]]] = []
-        queue: list[tuple[Any, list[int], int]] = [(root, [], 0)]
+        queue: list[tuple[Any, list[int], int]] = [(root, path_prefix or [], 0)]
         visited = 0
         while queue and visited < _AX_HARD_MAX_NODES:
             element, path, depth = queue.pop(0)

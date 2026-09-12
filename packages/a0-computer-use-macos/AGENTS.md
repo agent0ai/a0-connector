@@ -15,6 +15,13 @@
 - Trust modes and shared feature constants live in `shared.py`; keep backend metadata, runtime metadata, and tests aligned.
 - Runtime responses must include contract version and capabilities derived from the shared feature list.
 - Debug logging must stay opt-in through environment flags and must not leak secrets.
+- `element_action` semantic and path targets honor top-level `pid`/`window_id` and optional
+  `target.app_name`/`target.bundle_id` scope. App identifiers match exactly
+  (case-insensitive); ambiguous or missing scopes fail without falling back to
+  the frontmost app. Unscoped actions retain frontmost-app behavior.
+- Window-scoped results preserve application-relative paths from snapshots;
+  paths outside the selected window and conflicting scopes fail before action.
+  Indexed actions reuse the same scoped resolver and keep the stale-index guard.
 - The runtime exposes non-prompting `permission_status`, explicit
   `request_accessibility`, and explicit `request_screen_recording` internal
   operations. Screen status/request uses Core Graphics preflight/request APIs;

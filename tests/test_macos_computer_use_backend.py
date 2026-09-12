@@ -1118,6 +1118,76 @@ def test_macos_runtime_ax_action_presses_semantic_target(
     assert fake_accessibility.performed == [(button, "AXPress")]
 
 
+@pytest.mark.parametrize(
+    "scope, target, expected",
+    [
+        ({}, {}, "frontmost"),
+        ({"pid": 456}, {}, "other"),
+        ({}, {"app_name": "other app"}, "other"),
+        ({}, {"bundle_id": "com.example.other"}, "other"),
+        ({"window_id": "ax-pid:456:path:1"}, {}, "other"),
+        ({"window_id": "ax-pid:456:path:1", "path": [1, 0]}, {}, "other"),
+        ({"window_id": "ax-pid:456:path:1"}, {"path": [1, 0]}, "other"),
+        ({"window_id": "ax-pid:456:path:1", "element_index": 1}, {}, "other"),
+        ({"window_id": "ax-pid:456:path:1", "element_index": 0}, {}, "COMPUTER_USE_AX_TARGET_NOT_FOUND"),
+        ({"pid": 999}, {}, "COMPUTER_USE_AX_TARGET_NOT_FOUND"),
+        ({}, {"app_name": "Missing"}, "COMPUTER_USE_AX_TARGET_NOT_FOUND"),
+        ({}, {"app_name": "Other App", "bundle_id": "wrong"}, "COMPUTER_USE_AX_TARGET_NOT_FOUND"),
+        ({"window_id": "ax-pid:456:path:1"}, {"bundle_id": "wrong"}, "COMPUTER_USE_AX_TARGET_NOT_FOUND"),
+        ({"window_id": "ax-pid:456:path:1", "pid": 123}, {}, "COMPUTER_USE_WINDOW_NOT_FOUND"),
+        ({"window_id": "invalid"}, {}, "COMPUTER_USE_WINDOW_NOT_FOUND"),
+        ({"window_id": "ax-pid:bad:path:1"}, {}, "COMPUTER_USE_WINDOW_NOT_FOUND"),
+        ({"window_id": "ax-pid:456:path:0"}, {}, "COMPUTER_USE_AX_TARGET_NOT_FOUND"),
+        ({"window_id": "ax-pid:456:path:1", "path": [0, 0]}, {}, "COMPUTER_USE_ELEMENT_WINDOW_MISMATCH"),
+    ],
+)
+def test_macos_semantic_actions_respect_app_and_window_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    scope: dict, target: dict, expected: str,
+) -> None:
+    runtime = _runtime(tmp_path)
+    accessibility, window, button, _ = _install_fake_ax_tree(monkeypatch)
+    app_info, app_root = runtime._frontmost_ax_root(accessibility)
+    other_button = _FakeAXElement(dict(button.attrs), actions=["AXPress"])
+    other_window = _FakeAXElement(dict(window.attrs), children=[other_button])
+    other_root = _FakeAXElement(
+        {"AXRole": "AXApplication"},
+        windows=[_FakeAXElement({"AXRole": "AXWindow"}), other_window],
+    )
+    monkeypatch.setattr(runtime, "_ax_application_roots", lambda _: [
+        (app_info, app_root),
+        ({"pid": 456, "name": "Other App", "bundle_id": "com.example.other"}, other_root),
+    ])
+    runtime.start_session({"context_id": "ctx-1", "trust_mode": "persistent"})
+    if "element_index" in scope:
+        runtime.get_window_state({"context_id": "ctx-1", "window_id": scope["window_id"]})
+    params = {
+        "context_id": "ctx-1", "operation": "press", "dispatch": "background",
+        "target": {"role": "AXButton", "title": "Save", **target}, **scope,
+    }
+    if expected.startswith("COMPUTER_USE_"):
+        with pytest.raises(MacOSComputerUseError) as exc:
+            runtime.element_action(params)
+        assert exc.value.code == expected
+        assert accessibility.performed == []
+    else:
+        result = runtime.element_action(params)
+        assert accessibility.performed == [(other_button if expected == "other" else button, "AXPress")]
+        assert result["actual_dispatch"] == "background"
+        assert result["target"]["path"] == ([1, 0] if expected == "other" else [0, 0])
+
+
+def test_macos_app_scope_rejects_ambiguous_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = _runtime(tmp_path)
+    accessibility, _, _, _ = _install_fake_ax_tree(monkeypatch)
+    info, root = runtime._frontmost_ax_root(accessibility)
+    monkeypatch.setattr(runtime, "_ax_application_roots", lambda _: [(info, root), ({**info, "pid": 456}, root)])
+    with pytest.raises(MacOSComputerUseError) as exc:
+        runtime._resolve_ax_target(accessibility, {"target": {"app_name": info["name"], "title": "Save"}})
+    assert exc.value.code == "COMPUTER_USE_AX_TARGET_AMBIGUOUS"
+    assert accessibility.performed == []
+
+
 def test_macos_runtime_window_state_indexes_elements_for_background_actions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
