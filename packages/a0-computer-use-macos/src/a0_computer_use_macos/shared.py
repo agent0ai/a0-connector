@@ -22,6 +22,7 @@ MACOS_BACKEND_FEATURES = (
     "keyboard-targets-frontmost-app",
     "accessibility-tree-snapshot",
     "accessibility-structural-targeting",
+    "app-scoped-semantic-targeting",
     "accessibility-element-click",
     "native-window-list",
     "window-state",

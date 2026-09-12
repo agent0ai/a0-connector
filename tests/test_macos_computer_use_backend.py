@@ -355,6 +355,7 @@ def test_macos_backend_spec_exports_expected_metadata() -> None:
     spec = MACOS_BACKEND_SPEC
 
     assert spec.backend_id == "macos"
+    assert "app-scoped-semantic-targeting" in spec.features
     assert spec.backend_family == "macos"
     assert spec.interpreter_strategy == "current_python"
     assert Path(spec.helper_target).name == "runtime.py"

@@ -19,6 +19,8 @@
   `target.app_name`/`target.bundle_id` scope. App identifiers match exactly
   (case-insensitive); ambiguous or missing scopes fail without falling back to
   the frontmost app. Unscoped actions retain frontmost-app behavior.
+- Advertise `app-scoped-semantic-targeting` so Core can distinguish this resolver
+  from older clients that ignore app scope during semantic matching.
 - Window-scoped results preserve application-relative paths from snapshots;
   paths outside the selected window and conflicting scopes fail before action.
   Indexed actions reuse the same scoped resolver and keep the stale-index guard.
