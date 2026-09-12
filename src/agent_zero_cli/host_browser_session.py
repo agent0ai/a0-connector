@@ -321,7 +321,7 @@ class HostBrowserSession:
         if action == "detail":
             return await self.detail(browser_id, require_ref(payload.get("ref"), "detail"))
         if action == "evaluate":
-            return await self.evaluate(browser_id, str(payload.get("script") or ""))
+            return await self.evaluate(browser_id, payload.get("script") or "")
         if action == "click":
             return await self.click(
                 browser_id,
@@ -651,10 +651,12 @@ class HostBrowserSession:
         return result or {}
 
     async def evaluate(self, browser_id: int | str | None, script: str) -> dict[str, Any]:
+        if not isinstance(script, str) or not script.strip():
+            raise ValueError("evaluate requires a non-empty 'script' string")
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
         page = self._page(resolved_id)
-        result = await page.evaluate(str(script or "undefined"))
+        result = await page.evaluate(script)
         self._maybe_promote(resolved_id)
         return {"result": result, "state": await self._state(resolved_id)}
 
