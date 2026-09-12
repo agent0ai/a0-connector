@@ -1189,6 +1189,20 @@ def test_macos_app_scope_rejects_ambiguous_names(tmp_path: Path, monkeypatch: py
     assert accessibility.performed == []
 
 
+def test_macos_app_root_index_keeps_empty_snapshot_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = _runtime(tmp_path)
+    accessibility, _, _, _ = _install_fake_ax_tree(monkeypatch)
+    _, root = runtime._frontmost_ax_root(accessibility)
+    root.windows.clear()
+    runtime.start_session({"context_id": "ctx-1", "trust_mode": "persistent"})
+    state = runtime.get_window_state({"context_id": "ctx-1"})
+    element, summary = runtime._resolve_element_action_target(
+        accessibility, {"element_index": state["tree"]["element_index"]}
+    )
+    assert element is root
+    assert summary["path"] == []
+
+
 def test_macos_runtime_window_state_indexes_elements_for_background_actions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

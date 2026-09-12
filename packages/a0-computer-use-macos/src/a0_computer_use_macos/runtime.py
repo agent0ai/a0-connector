@@ -2675,7 +2675,7 @@ class MacOSComputerUseRuntime:
             )
         _app_info, root = candidates[0]
 
-        if path:
+        if path or params.get("element_index") is not None:
             if path[:len(prefix)] != prefix:
                 raise MacOSComputerUseError(
                     "COMPUTER_USE_ELEMENT_WINDOW_MISMATCH", "Element path is outside the requested window."
