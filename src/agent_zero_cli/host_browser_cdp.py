@@ -67,20 +67,24 @@ class CDPConnection:
     ) -> dict[str, Any]:
         if self._ws is None:
             raise CDPError("Chrome DevTools connection is not open.")
-        async with self._send_lock:
-            msg_id = self._next_id
-            self._next_id += 1
-            future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-            self._pending[msg_id] = future
-            payload: dict[str, Any] = {"id": msg_id, "method": method}
-            if params:
-                payload["params"] = params
-            if session_id:
-                payload["sessionId"] = session_id
-            await self._ws.send_json(payload)
+        msg_id = None
+        future = None
         try:
+            async with self._send_lock:
+                msg_id = self._next_id
+                self._next_id += 1
+                future = asyncio.get_running_loop().create_future()
+                self._pending[msg_id] = future
+                payload: dict[str, Any] = {"id": msg_id, "method": method}
+                if params:
+                    payload["params"] = params
+                if session_id:
+                    payload["sessionId"] = session_id
+                await self._ws.send_json(payload)
             response = await asyncio.wait_for(future, timeout=timeout)
         finally:
+            if future is not None and not future.done():
+                future.cancel()
             self._pending.pop(msg_id, None)
         if "error" in response:
             error = response.get("error") or {}
@@ -210,6 +214,7 @@ class CDPPage:
         self.keyboard = CDPKeyboard(self)
         self.viewport_size = dict(DEFAULT_VIEWPORT)
         self._handlers: dict[str, Any] = {}
+        self._closed = False
 
     def on(self, event: str, callback: Any) -> None:
         self._handlers[event] = callback
@@ -227,8 +232,13 @@ class CDPPage:
     async def go_forward(self, **_: object) -> None:
         await self.evaluate("() => history.forward()")
 
-    async def reload(self, **_: object) -> None:
+    async def reload(self, **kwargs: object) -> None:
+        previous = await self.send("Page.getFrameTree") if kwargs.get("wait_until") == "commit" else None
         await self.send("Page.reload", {})
+        if previous is not None:
+            loader = previous["frameTree"]["frame"]["loaderId"]
+            while (await self.send("Page.getFrameTree"))["frameTree"]["frame"]["loaderId"] == loader:
+                await asyncio.sleep(0.05)
 
     async def wait_for_load_state(self, *_: object, **__: object) -> None:
         await asyncio.sleep(0.15)
@@ -240,7 +250,7 @@ class CDPPage:
         result = await self.evaluate("() => document.title")
         return str(result or "")
 
-    async def evaluate(self, script: str, arg: object = None) -> object:
+    async def evaluate(self, script: str, arg: object = None, *, timeout: float = 30.0) -> object:
         result = await self.send(
             "Runtime.evaluate",
             {
@@ -248,6 +258,7 @@ class CDPPage:
                 "awaitPromise": True,
                 "returnByValue": True,
             },
+            timeout=timeout,
         )
         if result.get("exceptionDetails"):
             raise CDPError(str(result["exceptionDetails"]))
@@ -273,7 +284,13 @@ class CDPPage:
         return data
 
     async def close(self) -> None:
-        await self.connection.command("Target.closeTarget", {"targetId": self.target_id})
+        result = await self.connection.command("Target.closeTarget", {"targetId": self.target_id})
+        if result.get("success") is not True:
+            raise CDPError("Chrome did not confirm that the affected tab closed")
+        self._closed = True
+
+    def is_closed(self) -> bool:
+        return self._closed
 
     async def set_viewport_size(self, viewport: dict[str, int]) -> None:
         self.viewport_size = dict(viewport)

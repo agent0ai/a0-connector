@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import sys
@@ -57,7 +58,12 @@ async def test_evaluate_rejects_missing_or_invalid_script(monkeypatch, args):
 @pytest.mark.parametrize("value", [None, False, 0, {"answer": 42}])
 async def test_evaluate_preserves_javascript_results(monkeypatch, value):
     session = HostBrowserSession(context_id="ctx-evaluate", profile=None)
-    page = SimpleNamespace(evaluate=AsyncMock(return_value=value))
+    cdp = SimpleNamespace(send=AsyncMock(), detach=AsyncMock())
+    page = SimpleNamespace(
+        evaluate=AsyncMock(return_value=value), is_closed=lambda: False,
+        context=SimpleNamespace(new_cdp_session=AsyncMock(return_value=cdp)),
+    )
+    session.pages[3] = host_browser_session_module.HostBrowserPage(3, page)
     monkeypatch.setattr(session, "ensure_started", AsyncMock())
     monkeypatch.setattr(session, "_resolve_browser_id", lambda _: 3)
     monkeypatch.setattr(session, "_page", lambda _: page)
@@ -1733,7 +1739,7 @@ async def test_remote_debugging_session_opens_lists_and_reads_content(
                 target_id = str(params.get("targetId") or "")
                 self.closed_targets.append(target_id)
                 self.targets.pop(target_id, None)
-                return {}
+                return {"success": True}
             if method in {"Page.enable", "Runtime.enable", "Page.addScriptToEvaluateOnNewDocument"}:
                 return {}
             if method == "Page.navigate":

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import math
 from dataclasses import dataclass, field, replace
 import platform
 from pathlib import Path
@@ -39,12 +40,26 @@ from agent_zero_cli.host_browser_common import (
 )
 
 _SCREENSHOT_ARTIFACT_MAX_BYTES = 25 * 1024 * 1024
+DEFAULT_EVALUATE_TIMEOUT_SECONDS = 30.0
+EVALUATE_RECOVERY_TIMEOUT_SECONDS = 5.0
+EVALUATE_TERMINATION_GRACE_SECONDS = 0.25
+
+
+def normalize_evaluate_timeout(value: Any) -> float:
+    try:
+        timeout = float(value) if not isinstance(value, bool) else 0.0
+    except (TypeError, ValueError, OverflowError):
+        timeout = 0.0
+    if not math.isfinite(timeout) or not 0.1 <= timeout <= 60:
+        raise ValueError("evaluate_timeout_seconds must be between 0.1 and 60 seconds")
+    return timeout
 
 
 @dataclass
 class HostBrowserPage:
     id: int
     page: Any
+    evaluate_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
 
 class _RuntimeAdapter:
@@ -321,7 +336,10 @@ class HostBrowserSession:
         if action == "detail":
             return await self.detail(browser_id, require_ref(payload.get("ref"), "detail"))
         if action == "evaluate":
-            return await self.evaluate(browser_id, payload.get("script") or "")
+            return await self.evaluate(
+                browser_id, payload.get("script"),
+                timeout=payload.get("evaluate_timeout_seconds", DEFAULT_EVALUATE_TIMEOUT_SECONDS),
+            )
         if action == "click":
             return await self.click(
                 browser_id,
@@ -466,7 +484,11 @@ class HostBrowserSession:
         calls = payload.get("calls")
         if not isinstance(calls, list) or not calls:
             raise ValueError("multi requires a non-empty calls list")
-        return await self.multi(calls)
+        return await self.multi([
+            {**call, "evaluate_timeout_seconds": payload.get(
+                "evaluate_timeout_seconds", DEFAULT_EVALUATE_TIMEOUT_SECONDS
+            )} if isinstance(call, dict) else call for call in calls
+        ])
 
     async def is_started(self) -> bool:
         return await self._runtime.is_started(self)
@@ -650,15 +672,119 @@ class HostBrowserSession:
         self._maybe_promote(resolved_id)
         return result or {}
 
-    async def evaluate(self, browser_id: int | str | None, script: str) -> dict[str, Any]:
+    async def evaluate(
+        self, browser_id: int | str | None, script: str,
+        *, timeout: float = DEFAULT_EVALUATE_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
         if not isinstance(script, str) or not script.strip():
             raise ValueError("evaluate requires a non-empty 'script' string")
+        timeout = normalize_evaluate_timeout(timeout)
+        if self.profile and self.profile.is_safari:
+            raise RuntimeError(
+                "evaluate is unavailable for Safari: this backend cannot forcibly interrupt JavaScript. "
+                "Use a Chromium host browser or the Internal Docker browser."
+            )
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
-        page = self._page(resolved_id)
-        result = await page.evaluate(script)
-        self._maybe_promote(resolved_id)
-        return {"result": result, "state": await self._state(resolved_id)}
+        browser_page = self.pages[resolved_id]
+        async with browser_page.evaluate_lock:
+            return await self._evaluate_page(browser_page, script, timeout)
+
+    async def _evaluate_page(
+        self, browser_page: HostBrowserPage, script: str, timeout: float
+    ) -> dict[str, Any]:
+        page = browser_page.page
+        session = page if isinstance(page, CDPPage) else await asyncio.wait_for(
+            page.context.new_cdp_session(page), EVALUATE_RECOVERY_TIMEOUT_SECONDS
+        )
+
+        async def run():
+            kwargs = {"timeout": timeout + 15} if isinstance(page, CDPPage) else {}
+            result = await page.evaluate(script, **kwargs)
+            self._maybe_promote(browser_page.id)
+            return {"result": result, "state": await self._state(browser_page.id)}
+
+        operation = asyncio.create_task(run())
+        aborted = timed_out = False
+        timeout_error = f"evaluate timed out after {timeout:g} seconds"
+        try:
+            return await asyncio.wait_for(asyncio.shield(operation), timeout)
+        except asyncio.TimeoutError:
+            aborted = timed_out = True
+            raise TimeoutError(timeout_error) from None
+        except asyncio.CancelledError:
+            aborted = True
+            raise
+        finally:
+            cleanup = asyncio.create_task(
+                self._finish_evaluate(browser_page, session, operation, aborted)
+            )
+            cancelled = False
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    cancelled = True
+                except Exception:
+                    break
+            try:
+                recovery_notice = cleanup.result()
+            except Exception as exc:
+                if timed_out:
+                    raise TimeoutError(f"{timeout_error}; {exc}") from None
+                raise
+            if timed_out and recovery_notice:
+                raise TimeoutError(f"{timeout_error}; {recovery_notice}") from None
+            if cancelled:
+                raise asyncio.CancelledError
+
+    async def _finish_evaluate(
+        self, browser_page: HostBrowserPage, session: Any, operation: asyncio.Task, aborted: bool
+    ) -> str:
+        page = browser_page.page
+        recovery_notice = ""
+
+        async def recover():
+            if operation.done() and not operation.cancelled() and operation.exception() is None:
+                return ""
+            await session.send("Runtime.terminateExecution")
+            done, _ = await asyncio.wait({operation}, timeout=EVALUATE_TERMINATION_GRACE_SECONDS)
+            if done and not operation.cancelled() and not isinstance(
+                operation.exception(), (TimeoutError, asyncio.TimeoutError)
+            ):
+                return ""
+            # An awaited Promise may survive termination; keep the document when
+            # interruption has already settled the original protocol request.
+            await page.reload(wait_until="commit", timeout=EVALUATE_RECOVERY_TIMEOUT_SECONDS * 1000)
+            await asyncio.gather(asyncio.shield(operation), return_exceptions=True)
+            return "affected tab reloaded to cancel pending JavaScript"
+
+        try:
+            if aborted and not page.is_closed():
+                try:
+                    recovery_notice = await asyncio.wait_for(recover(), EVALUATE_RECOVERY_TIMEOUT_SECONDS)
+                except Exception:
+                    if not page.is_closed():
+                        try:
+                            kwargs = {} if isinstance(page, CDPPage) else {"run_before_unload": False}
+                            await asyncio.wait_for(page.close(**kwargs), EVALUATE_RECOVERY_TIMEOUT_SECONDS)
+                        except Exception:
+                            raise RuntimeError(
+                                "Browser evaluate recovery failed; the affected tab could not be closed"
+                            ) from None
+                    await self._unregister_page_async(browser_page.id)
+                    recovery_notice = "affected tab closed after unsuccessful recovery"
+        finally:
+            if not operation.done():
+                operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+            if session is not page:
+                try:
+                    await asyncio.wait_for(session.detach(), EVALUATE_RECOVERY_TIMEOUT_SECONDS)
+                except Exception:
+                    if not page.is_closed():
+                        raise RuntimeError("Browser evaluate protocol session cleanup failed") from None
+        return recovery_notice
 
     async def click(
         self,

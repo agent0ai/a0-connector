@@ -98,6 +98,7 @@ class HostBrowserManager:
         self._playwright_starter = playwright_starter
         self._playwright_installer = playwright_installer or _run_install_command
         self._sessions: dict[str, HostBrowserSession] = {}
+        self._evaluate_ops: dict[str, tuple[str, asyncio.Task]] = {}
         self._dom_helper_source: str | None = None
         self._dom_helper_sha256 = ""
         self._content_helper_source: str | None = None
@@ -151,6 +152,7 @@ class HostBrowserManager:
                 "background_tabs",
                 "content_helper_rpc",
                 "dom_helper_rpc",
+                "evaluate_timeout_v1",
                 "local_upload_paths",
                 *sorted(_SUPPORTED_ACTIONS),
             ],
@@ -547,6 +549,11 @@ class HostBrowserManager:
         )
 
     async def close(self) -> None:
+        operations = [task for _, task in self._evaluate_ops.values()]
+        for task in operations:
+            task.cancel()
+        await asyncio.gather(*operations, return_exceptions=True)
+        self._evaluate_ops.clear()
         sessions = list(self._sessions.values())
         self._sessions.clear()
         for session in sessions:
@@ -557,6 +564,43 @@ class HostBrowserManager:
         await self.close()
 
     async def handle_op(self, payload: dict[str, Any]) -> dict[str, Any]:
+        op_id = str(payload.get("op_id") or "").strip()
+        context_id = str(payload.get("context_id") or "").strip() or "default"
+        if normalize_action(payload.get("action")) == "cancel_evaluate":
+            target = self._evaluate_ops.get(str(payload.get("target_op_id") or ""))
+            if not op_id or target is None or target[0] != context_id:
+                return self._error(op_id, "EVALUATE_CANCEL_UNCONFIRMED", "No matching active evaluate operation")
+            task = target[1]
+            task.cancel()
+            try:
+                response = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if not task.cancelled():
+                    raise
+                return self._success(op_id, {"cancelled": True})
+            if not response.get("ok"):
+                return self._error(op_id, "EVALUATE_CANCEL_FAILED", response.get("error", "Evaluate recovery failed"))
+            return self._success(op_id, {"completed": True})
+        if not op_id or not self._has_evaluate(payload):
+            return await self._handle_op(payload)
+        if op_id in self._evaluate_ops:
+            return self._error(op_id, "DUPLICATE_OP_ID", "Browser operation is already running")
+        task = asyncio.create_task(self._handle_op(payload))
+        self._evaluate_ops[op_id] = (context_id, task)
+        try:
+            return await task
+        finally:
+            self._evaluate_ops.pop(op_id, None)
+
+    @classmethod
+    def _has_evaluate(cls, payload: dict[str, Any]) -> bool:
+        calls = payload.get("calls")
+        return normalize_action(payload.get("action")) == "evaluate" or any(
+            cls._has_evaluate(call) for call in (calls if isinstance(calls, list) else [])
+            if isinstance(call, dict)
+        )
+
+    async def _handle_op(self, payload: dict[str, Any]) -> dict[str, Any]:
         op_id = str(payload.get("op_id", "") or "").strip()
         action = normalize_action(payload.get("action"))
         context_id = str(payload.get("context_id", "") or "").strip() or "default"

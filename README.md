@@ -272,6 +272,8 @@ When a subscribed CLI supports host-browser control, the first browser action ca
 
 The CLI does not bundle a browser and it does not copy credentials, cookies, or profile data out of a browser profile. For Safari, A0 uses Apple's bundled `/usr/bin/safaridriver` and opens a Safari automation window for one Agent Zero browser context at a time. It never enables Safari's remote-automation setting silently. Safari WebDriver provides viewport screenshots; a full-page screenshot request fails explicitly.
 
+Browser settings limit JavaScript `evaluate` to 30 seconds by default (0.1–60 seconds). A timeout first interrupts execution in place, preserving the page and unsaved edits. Only unresolved async execution requires reloading the affected tab; that fallback preserves cookies and tab storage but loses unsaved page edits. The error reports any reload or fallback closure. Safari rejects `evaluate` because its backend cannot forcibly interrupt JavaScript. Updated Core requires a connector that advertises timeout support before sending a host evaluate script.
+
 For Chromium-family browsers, if the browser's Remote debugging page has been allowed, A0 reads the local `DevToolsActivePort` file and keeps one DevTools Protocol connection open for browser actions. Status checks and profile listing do not connect to either browser runtime, so they should not create repeated permission prompts.
 
 For a browser launched with an explicit debugging port, select its discovery

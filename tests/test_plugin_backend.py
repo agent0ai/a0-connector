@@ -1117,6 +1117,7 @@ def test_browser_runtime_endpoint_updates_browser_plugin_config() -> None:
                 "autofocus_active_page": False,
                 "browser_tab_scope": "per_context",
                 "max_open_tabs": 32,
+                "evaluate_timeout_seconds": 30.0,
                 "runtime_backend": "host_required",
                 "host_browser_privacy_policy": "warn",
                 "host_browser_profile_mode": "existing",
