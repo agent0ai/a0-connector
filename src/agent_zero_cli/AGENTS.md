@@ -121,7 +121,9 @@
 - Remote workspace tools must respect their write/exec enablement flags and must not widen filesystem access accidentally.
 - Remote workspace `write` uses same-directory fsync plus atomic replacement so
   an interruption cannot truncate an existing host file or expose partial new
-  content.
+  content. Preserve an existing file's mode and, when running as root, UID/GID
+  before publication; metadata errors leave the original intact. New files
+  retain private temporary-file permissions and the executing user's ownership.
 - Remote workspace text reads must scan in fixed-size blocks, reject a
   binary-looking first block, and return no more than 2,000 lines or 256 KiB.
   Include explicit truncation/continuation metadata. Defensively reject write

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,12 +29,20 @@ _MAX_DECODE_ERROR_RATIO = 0.01
 
 
 def _atomic_write_text(path: str, content: str) -> None:
+    try:
+        original = os.stat(path)
+    except FileNotFoundError:
+        original = None
     directory = os.path.dirname(path) or "."
     fd, temp_path = tempfile.mkstemp(prefix=".partial-", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
             handle.flush()
+            if original is not None:
+                if hasattr(os, "geteuid") and os.geteuid() == 0:
+                    os.chown(temp_path, original.st_uid, original.st_gid)
+                os.chmod(temp_path, stat.S_IMODE(original.st_mode))
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
         try:

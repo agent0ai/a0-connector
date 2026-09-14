@@ -87,18 +87,58 @@ def test_remote_file_utility_roundtrips_read_write_and_patch(tmp_path: Path) -> 
     assert target.read_text(encoding="utf-8") == "line-1\nline-2-updated\n"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file permissions")
+@pytest.mark.parametrize("mode", [0o600, 0o640, 0o644, 0o755])
+def test_remote_file_write_preserves_existing_access(tmp_path: Path, mode: int) -> None:
+    target = tmp_path / "sample.txt"
+    target.write_text("original\n", encoding="utf-8")
+    if os.geteuid() == 0:
+        os.chown(target, 12345, 23456)
+    target.chmod(mode)
+    before = target.stat()
+
+    result = RemoteFileUtility(scan_root=str(tmp_path)).handle_file_op(
+        {"op": "write", "path": str(target), "content": "replacement\n"}
+    )
+
+    assert result["ok"] is True
+    after = target.stat()
+    assert (after.st_mode, after.st_uid, after.st_gid) == (
+        before.st_mode, before.st_uid, before.st_gid
+    )
+    assert target.read_text(encoding="utf-8") == "replacement\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file permissions")
+def test_remote_file_write_new_file_stays_private(tmp_path: Path) -> None:
+    target = tmp_path / "new.txt"
+    result = RemoteFileUtility(scan_root=str(tmp_path)).handle_file_op(
+        {"op": "write", "path": str(target), "content": "new\n"}
+    )
+
+    assert result["ok"] is True
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert target.stat().st_uid == os.geteuid()
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+@pytest.mark.parametrize("operation", ["replace", "chmod", "chown"])
 def test_remote_file_write_failure_preserves_existing_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    operation: str,
 ) -> None:
+    if operation == "chown" and (not hasattr(os, "geteuid") or os.geteuid() != 0):
+        pytest.skip("Changing file ownership requires root")
     target = tmp_path / "sample.txt"
     target.write_text("original\n", encoding="utf-8")
+    before = target.stat()
     utility = RemoteFileUtility(scan_root=str(tmp_path))
 
-    def fail_replace(_source: str, _destination: str) -> None:
+    def fail_operation(*args, **kwargs) -> None:
         raise OSError("simulated disconnect")
 
-    monkeypatch.setattr(remote_files_module.os, "replace", fail_replace)
+    monkeypatch.setattr(remote_files_module.os, operation, fail_operation)
     result = utility.handle_file_op(
         {
             "op_id": "op-write-failure",
@@ -110,6 +150,10 @@ def test_remote_file_write_failure_preserves_existing_file(
 
     assert result["ok"] is False
     assert "simulated disconnect" in result["error"]
+    after = target.stat()
+    assert (after.st_ino, after.st_mode, after.st_uid, after.st_gid) == (
+        before.st_ino, before.st_mode, before.st_uid, before.st_gid
+    )
     assert target.read_text(encoding="utf-8") == "original\n"
     assert list(tmp_path.glob(".partial-*")) == []
 
