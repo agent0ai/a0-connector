@@ -102,7 +102,18 @@ function Add-LocalUvToPath {
 }
 
 function Install-Uv {
-    irm $UvInstallUrl | iex
+    $installerDir = Join-Path ([IO.Path]::GetTempPath()) ("a0-uv-install-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $installerDir | Out-Null
+    try {
+        $installerPath = Join-Path $installerDir "install.ps1"
+        Invoke-WebRequest -UseBasicParsing -Uri $UvInstallUrl -OutFile $installerPath
+        & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File $installerPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "uv installer exited with code $LASTEXITCODE."
+        }
+    } finally {
+        Remove-Item -LiteralPath $installerDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Add-LocalUvToPath
 
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {

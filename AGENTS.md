@@ -29,6 +29,10 @@
 ### Product Contracts
 
 - Tech stack: Python 3.10+, Textual 8+, `httpx`, `aiohttp`, `python-socketio` / Engine.IO.
+- Windows installer bootstrapping downloads the uv installer to a unique temporary
+  `.ps1` file and runs it with PowerShell `-File` and `RemoteSigned`, checking the
+  exit code and cleaning up afterward. Do not use inline download-and-execute
+  pipelines or `ExecutionPolicy Bypass` in this path.
 - Run the TUI with `a0` or `./.venv/bin/python -m agent_zero_cli`.
 - Launcher direct-connect path is `a0 --host <local-url> --no-docker-discovery --connect`; `--host` selects the target URL, `--no-docker-discovery` skips Docker discovery, and `--connect` connects immediately instead of opening the host picker.
 - Run the plain stdin/stdout connector with `a0 headless`; use

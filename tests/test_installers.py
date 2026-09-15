@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+import sys
 import tomllib
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +73,49 @@ def test_windows_installer_pins_managed_python() -> None:
     assert "Close all A0 CLI terminal windows" in installer
     assert "does not support --build-constraints" in installer
     assert 'if ($LASTEXITCODE -ne 0)' in installer
+    assert "| iex" not in installer
+    assert "-ExecutionPolicy RemoteSigned -File $installerPath" in installer
+    assert "Invoke-WebRequest -UseBasicParsing -Uri $UvInstallUrl -OutFile $installerPath" in installer
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell installer")
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_windows_uv_bootstrap_runs_file_and_cleans_up(tmp_path: Path, exit_code: int) -> None:
+    harness = tmp_path / "bootstrap-test.ps1"
+    download_path = tmp_path / "download-path.txt"
+    harness.write_text(
+        r"""param($Installer, $ExitCode, $DownloadPath)
+$ErrorActionPreference = 'Stop'
+$UvInstallUrl = 'https://astral.sh/uv/install.ps1'
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Installer, [ref]$null, [ref]$null)
+$definition = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Install-Uv'
+}, $true)
+. ([scriptblock]::Create($definition.Extent.Text))
+function Invoke-WebRequest {
+    param([switch]$UseBasicParsing, $Uri, $OutFile)
+    if ($Uri -ne $UvInstallUrl) { throw 'Unexpected download URL' }
+    $script:Downloaded = $OutFile
+    Set-Content -LiteralPath $OutFile -Value "Write-Output 'bootstrap executed'; exit $ExitCode"
+}
+function Add-LocalUvToPath {}
+function Get-Command { return @{ Name = 'uv' } }
+try { Install-Uv } finally { Set-Content -LiteralPath $DownloadPath -Value $script:Downloaded }
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned",
+            "-File", str(harness), str(ROOT / "install.ps1"), str(exit_code), str(download_path),
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    assert "bootstrap executed" in result.stdout
+    assert (result.returncode == 0) == (exit_code == 0), result.stderr
+    if exit_code:
+        assert "uv installer exited with code 7" in result.stderr
+    assert not Path(download_path.read_text().strip()).parent.exists()
 
 
 def test_release_dependency_locks_are_checked_in() -> None:
