@@ -16,6 +16,7 @@ _DEFAULT_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 
 from agent_zero_cli.model_config import coerce_model_config, format_model_label, format_provider_label
+from agent_zero_cli.text_utils import strip_text
 
 
 @dataclass(frozen=True)
@@ -24,16 +25,6 @@ class ModelRuntimeResult:
     utility_model: dict[str, str]
     main_changed: bool = True
     utility_changed: bool = True
-
-
-def _clean_text(value: Any) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def _model_label(value: Mapping[str, Any] | None) -> str:
-    return format_model_label(value)
 
 
 class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
@@ -57,8 +48,8 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
         self._main_model = coerce_model_config(main_model)
         self._utility_model = coerce_model_config(utility_model)
         self._focus_target = "utility" if focus_target == "utility" else "main"
-        self._main_label = _model_label(main_model)
-        self._utility_label = _model_label(utility_model)
+        self._main_label = format_model_label(main_model)
+        self._utility_label = format_model_label(utility_model)
         self._provider_options = self._normalize_provider_options(
             provider_options,
             main_model=self._main_model,
@@ -75,13 +66,13 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
         seen: set[str] = set()
 
         def _add(provider: Any, label: Any = "") -> None:
-            value = _clean_text(provider).lower()
+            value = strip_text(provider).lower()
             if not value:
                 return
             if value in seen:
                 return
             seen.add(value)
-            label_text = _clean_text(label) or format_provider_label(value)
+            label_text = strip_text(label) or format_provider_label(value)
             ordered.append((label_text, value))
 
         for entry in options or ():
@@ -97,7 +88,7 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
         return tuple(ordered)
 
     def _provider_field_value(self, values: Mapping[str, Any]) -> str | object:
-        provider = _clean_text(values.get("provider"))
+        provider = strip_text(values.get("provider"))
         return provider if provider else Select.NULL
 
     def compose(self) -> ComposeResult:
@@ -144,13 +135,13 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
             )
             yield Static("Model", classes="model-runtime-label")
             yield Input(
-                value=_clean_text(values.get("name")),
+                value=strip_text(values.get("name")),
                 placeholder="Example: claude-sonnet-4 or gpt-4o",
                 id=f"model-runtime-{key}-name",
             )
             yield Static("Base URL", classes="model-runtime-label")
             yield Input(
-                value=_clean_text(values.get("api_base")),
+                value=strip_text(values.get("api_base")),
                 placeholder="Optional: custom provider base URL",
                 id=f"model-runtime-{key}-base-url",
             )
@@ -177,9 +168,9 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
 
     def _collect_model(self, key: str) -> dict[str, str]:
         provider_value = self.query_one(f"#model-runtime-{key}-provider", Select).value
-        provider = _clean_text(provider_value) if isinstance(provider_value, str) else ""
-        name = _clean_text(self.query_one(f"#model-runtime-{key}-name", Input).value)
-        base_url = _clean_text(self.query_one(f"#model-runtime-{key}-base-url", Input).value)
+        provider = strip_text(provider_value) if isinstance(provider_value, str) else ""
+        name = strip_text(self.query_one(f"#model-runtime-{key}-name", Input).value)
+        base_url = strip_text(self.query_one(f"#model-runtime-{key}-base-url", Input).value)
         payload: dict[str, str] = {}
         if provider:
             payload["provider"] = provider
@@ -200,21 +191,21 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
 
         if main_model:
             if not main_model.get("provider"):
-                provider = _clean_text(self._main_model.get("provider"))
+                provider = strip_text(self._main_model.get("provider"))
                 if provider:
                     main_model["provider"] = provider
             if not main_model.get("name"):
-                name = _clean_text(self._main_model.get("name"))
+                name = strip_text(self._main_model.get("name"))
                 if name:
                     main_model["name"] = name
 
         if utility_model:
             if not utility_model.get("provider"):
-                provider = _clean_text(self._utility_model.get("provider"))
+                provider = strip_text(self._utility_model.get("provider"))
                 if provider:
                     utility_model["provider"] = provider
             if not utility_model.get("name"):
-                name = _clean_text(self._utility_model.get("name"))
+                name = strip_text(self._utility_model.get("name"))
                 if name:
                     utility_model["name"] = name
 

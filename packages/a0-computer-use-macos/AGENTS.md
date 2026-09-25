@@ -13,6 +13,7 @@
 
 - `MACOS_BACKEND_SPEC` uses backend ID `macos`, family `macos`, `interpreter_strategy="current_python"`, and helper target `runtime.py`.
 - Trust modes and shared feature constants live in `shared.py`; keep backend metadata, runtime metadata, and tests aligned.
+- Boolean payload coercion imports `agent_zero_cli.text_utils.coerce_bool`; keep no local copy in `shared.py`.
 - Runtime responses must include contract version and capabilities derived from the shared feature list.
 - Debug logging must stay opt-in through environment flags and must not leak secrets.
 - `element_action` semantic and path targets honor top-level `pid`/`window_id` and optional `target.app_name`/`target.bundle_id` scope. App identifiers match exactly (case-insensitive); ambiguous or missing scopes fail without falling back to the frontmost app. Unscoped actions retain frontmost-app behavior.
@@ -34,3 +35,5 @@
 - `./.venv/bin/python -m pytest tests/test_macos_backend_package.py tests/test_macos_computer_use_backend.py tests/test_computer_use_contract.py -v`
 
 ## Child DOX Index
+
+No child DOX files.

@@ -13,6 +13,7 @@
 
 - `WINDOWS_BACKEND_SPEC` uses backend ID `windows`, family `windows`, `interpreter_strategy="current_python"`, and helper target `runtime.py`.
 - Trust modes and shared feature constants live in `shared.py`; keep backend metadata, runtime metadata, and tests aligned.
+- Boolean payload coercion imports `agent_zero_cli.text_utils.coerce_bool`; keep no local copy in `shared.py`.
 - Runtime responses must include contract version and capabilities derived from the shared feature list.
 - Session persistence must remain scoped by normalized context IDs and restore tokens.
 - Capture debug output must stay opt-in and must not leak sensitive screen content unless explicitly requested for debugging.
@@ -32,3 +33,5 @@
 - `./.venv/bin/python -m pytest tests/test_windows_computer_use_backend.py tests/test_computer_use_contract.py -v`
 
 ## Child DOX Index
+
+No child DOX files.

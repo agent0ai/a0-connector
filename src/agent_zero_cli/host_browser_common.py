@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
+from agent_zero_cli.text_utils import coerce_bool
+
 # Legacy location kept as a public constant for compatibility. The helper source is
 # owned by Agent Zero's Browser plugin and is delivered over the connector protocol.
 CONTENT_HELPER_PATH = Path(__file__).resolve().parent / "assets" / "browser-page-content.js"
@@ -852,21 +854,6 @@ def default_user_data_dirs(family: str) -> list[Path]:
 
 def _resolve_path(path: Path | str) -> Path:
     return Path(path).expanduser().resolve(strict=False)
-
-
-def coerce_bool(value: object, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    normalized = str(value).strip().lower()
-    if normalized in {"1", "true", "yes", "on", "enabled"}:
-        return True
-    if normalized in {"0", "false", "no", "off", "disabled", ""}:
-        return False
-    return default
 
 
 def coerce_int(value: object, *, default: int = 0) -> int:

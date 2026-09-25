@@ -29,10 +29,6 @@ class ModelPresetsResult:
     preset_name: str | None
 
 
-def _model_label(value: object) -> str:
-    return format_model_label(value)
-
-
 def _coerce_model_preset(value: object) -> ModelPresetChoice:
     if isinstance(value, ModelPresetChoice):
         return value
@@ -61,9 +57,9 @@ def _coerce_model_preset(value: object) -> ModelPresetChoice:
             name=raw_name,
             label=raw_label or raw_name or "Unnamed preset",
             description=raw_description,
-            main_model=_model_label(raw_main_model),
-            utility_model=_model_label(raw_utility_model),
-            embedding_model=_model_label(raw_embedding_model),
+            main_model=format_model_label(raw_main_model),
+            utility_model=format_model_label(raw_utility_model),
+            embedding_model=format_model_label(raw_embedding_model),
         )
     clean = str(value).strip()
     return ModelPresetChoice(

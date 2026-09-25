@@ -3,18 +3,14 @@ from __future__ import annotations
 import re
 from typing import Mapping
 
-
-def _string(value: object) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
+from agent_zero_cli.text_utils import strip_text
 
 
 _HEX_COLOR_RE = re.compile(r"^#(?P<rgb>[0-9a-fA-F]{6})(?P<alpha>[0-9a-fA-F]{2})?$")
 
 
 def _normalize_color(value: object) -> str:
-    color = _string(value)
+    color = strip_text(value)
     if not color:
         return ""
 
@@ -29,14 +25,14 @@ def normalize_project_summary(value: object) -> dict[str, str] | None:
     if not isinstance(value, Mapping):
         return None
 
-    name = _string(value.get("name"))
+    name = strip_text(value.get("name"))
     if not name:
         return None
 
     return {
         "name": name,
-        "title": _string(value.get("title")),
-        "description": _string(value.get("description")),
+        "title": strip_text(value.get("title")),
+        "description": strip_text(value.get("description")),
         "color": _normalize_color(value.get("color")),
     }
 
@@ -56,13 +52,13 @@ def normalize_project_list(value: object) -> list[dict[str, str]]:
 def project_name(project: Mapping[str, object] | None) -> str:
     if not isinstance(project, Mapping):
         return ""
-    return _string(project.get("name"))
+    return strip_text(project.get("name"))
 
 
 def project_title(project: Mapping[str, object] | None) -> str:
     if not isinstance(project, Mapping):
         return ""
-    return _string(project.get("title"))
+    return strip_text(project.get("title"))
 
 
 def display_project_title(project: Mapping[str, object] | None, *, default: str = "No project") -> str:
@@ -74,4 +70,4 @@ def display_project_title(project: Mapping[str, object] | None, *, default: str 
 def project_color(project: Mapping[str, object] | None) -> str:
     if not isinstance(project, Mapping):
         return ""
-    return _string(project.get("color"))
+    return strip_text(project.get("color"))

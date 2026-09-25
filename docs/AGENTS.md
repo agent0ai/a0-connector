@@ -28,3 +28,5 @@
 - Confirm every file linked from `docs/README.md` exists and matches the root `README.md` claims.
 
 ## Child DOX Index
+
+No child DOX files.

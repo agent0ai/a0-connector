@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent_zero_cli.text_utils import coerce_bool
+
 _ENV_DIR = Path.home() / ".agent-zero"
 _ENV_FILE = _ENV_DIR / ".env"
 _SESSION_FILE = _ENV_DIR / "session_cookies.json"
@@ -103,17 +105,6 @@ def delete_env(key: str) -> None:
         lines.append(line)
 
     _ENV_FILE.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-
-
-def _parse_bool(value: object, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    normalized = str(value or "").strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 def _normalize_saved_host(host: str) -> str:
@@ -379,7 +370,7 @@ def load_config() -> CLIConfig:
         or dotenv.get(_DEFAULT_CHAT_KEY, "")
         or dotenv.get("default_chat", "")
     ).strip()
-    remote_exec_enabled = _parse_bool(
+    remote_exec_enabled = coerce_bool(
         os.environ.get(
             _REMOTE_EXEC_ENABLED_KEY,
             os.environ.get(
@@ -392,11 +383,11 @@ def load_config() -> CLIConfig:
         ),
         default=False,
     )
-    remember_host = _parse_bool(
+    remember_host = coerce_bool(
         os.environ.get(_REMEMBER_HOST_KEY, dotenv.get(_REMEMBER_HOST_KEY, "0")),
         default=False,
     )
-    computer_use_enabled = _parse_bool(
+    computer_use_enabled = coerce_bool(
         os.environ.get(_COMPUTER_USE_ENABLED_KEY, dotenv.get(_COMPUTER_USE_ENABLED_KEY, "0")),
         default=False,
     )
@@ -407,7 +398,7 @@ def load_config() -> CLIConfig:
         os.environ.get(_COMPUTER_USE_RESTORE_TOKEN_KEY)
         or dotenv.get(_COMPUTER_USE_RESTORE_TOKEN_KEY, "")
     ).strip()
-    host_browser_enabled = _parse_bool(
+    host_browser_enabled = coerce_bool(
         os.environ.get(_HOST_BROWSER_ENABLED_KEY, dotenv.get(_HOST_BROWSER_ENABLED_KEY, "0")),
         default=False,
     )

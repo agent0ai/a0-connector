@@ -27,6 +27,7 @@ from agent_zero_cli.config import (
     save_computer_use_restore_token,
     save_computer_use_trust_mode,
 )
+from agent_zero_cli.text_utils import coerce_bool
 
 HELPER_PYTHON = "/usr/bin/python3"
 _HOST_ARTIFACT_ROOT_ENV = "A0_COMPUTER_USE_HOST_ARTIFACT_ROOT"
@@ -268,7 +269,7 @@ def _helper_response_timeout_seconds(payload: dict[str, Any]) -> float:
 def _helper_timeout_response(payload: dict[str, Any], *, request_id: str, timeout: float) -> dict[str, Any]:
     action = str(payload.get("action", "") or "").strip().lower()
     if action == "start_session":
-        if _coerce_bool(payload.get("allow_prompt")):
+        if coerce_bool(payload.get("allow_prompt")):
             message = (
                 "Timed out while waiting for the platform permission prompt. "
                 "Run /computer-use on and approve the prompt if shown."
@@ -367,21 +368,6 @@ def _coerce_float(value: object, *, name: str, default: float | None = None) -> 
         return float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} must be a number") from exc
-
-
-def _coerce_bool(value: object, *, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    normalized = str(value).strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off", ""}:
-        return False
-    return default
 
 
 def _normalize_dispatch(value: object, *, default: str = "background") -> str:
@@ -1158,7 +1144,7 @@ class ComputerUseManager:
             request["session_id"] = session_id
 
         if action == "capture":
-            if _coerce_bool(payload.get("fresh")):
+            if coerce_bool(payload.get("fresh")):
                 request["fresh"] = True
             if payload.get("fresh_after") is not None:
                 request["fresh_after"] = _coerce_float(payload.get("fresh_after"), name="fresh_after")
@@ -1171,9 +1157,9 @@ class ComputerUseManager:
 
         if action == "list_windows":
             if payload.get("include_hidden") is not None:
-                request["include_hidden"] = _coerce_bool(payload.get("include_hidden"))
+                request["include_hidden"] = coerce_bool(payload.get("include_hidden"))
             if payload.get("include_offscreen") is not None:
-                request["include_offscreen"] = _coerce_bool(payload.get("include_offscreen"))
+                request["include_offscreen"] = coerce_bool(payload.get("include_offscreen"))
             if payload.get("max_windows") is not None:
                 max_windows = _coerce_int(payload.get("max_windows"), name="max_windows")
                 if max_windows < 1:
@@ -1218,7 +1204,7 @@ class ComputerUseManager:
                 request["value"] = payload.get("value")
             if payload.get("text") is not None:
                 request["text"] = str(payload.get("text") or "")
-            if _coerce_bool(payload.get("submit")):
+            if coerce_bool(payload.get("submit")):
                 request["submit"] = True
             if (
                 "element_index" not in request
@@ -1286,7 +1272,7 @@ class ComputerUseManager:
                 request["value"] = payload.get("value")
             if payload.get("text") is not None:
                 request["text"] = str(payload.get("text") or "")
-            if _coerce_bool(payload.get("submit")):
+            if coerce_bool(payload.get("submit")):
                 request["submit"] = True
             return request
 
@@ -1334,7 +1320,7 @@ class ComputerUseManager:
             request["text"] = text
             if payload.get("window_id") is not None:
                 request["window_id"] = str(payload.get("window_id") or "").strip()
-            if _coerce_bool(payload.get("submit")):
+            if coerce_bool(payload.get("submit")):
                 request["submit"] = True
             return request
 
@@ -1602,7 +1588,7 @@ class ComputerUseManager:
             self._prune_capture_artifacts()
             capture_host_path, capture_container_path = self._next_capture_paths(session.context_id)
             helper_request["capture_path"] = capture_host_path
-            if _coerce_bool(helper_request.get("fresh")):
+            if coerce_bool(helper_request.get("fresh")):
                 if session.last_action_completed_at > 0:
                     helper_request.setdefault("fresh_after", session.last_action_completed_at)
                 helper_request.setdefault(
@@ -1643,7 +1629,7 @@ class ComputerUseManager:
                     result_dict.pop("host_path", None)
                     result_dict.pop("container_path", None)
                     self._prune_capture_artifacts()
-            if action_name == "capture" and _coerce_bool(helper_request.get("fresh")):
+            if action_name == "capture" and coerce_bool(helper_request.get("fresh")):
                 result_dict.setdefault("fresh", True)
                 fresh_after = helper_request.get("fresh_after")
                 if fresh_after is not None:
@@ -1733,7 +1719,7 @@ class ComputerUseManager:
             request["allow_prompt"] = True
             request["request_timeout_seconds"] = 180.0
 
-        self._set_status(self._starting_status(allow_prompt=_coerce_bool(request.get("allow_prompt"))))
+        self._set_status(self._starting_status(allow_prompt=coerce_bool(request.get("allow_prompt"))))
         response = await self._helper_request(session, request)
         return self._normalize_helper_response(op_id, session, response, action="start_session")
 

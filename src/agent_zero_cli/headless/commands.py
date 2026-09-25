@@ -5,7 +5,9 @@ from datetime import datetime
 import shlex
 from typing import Any, Mapping
 
-from agent_zero_cli.session import ConnectorSession
+from agent_zero_cli.protocol import context_display_name, context_identifier
+from agent_zero_cli.session import ConnectorSession, queue_selector_to_item_id
+from agent_zero_cli.text_utils import parse_timestamp
 
 _TUI_ONLY_COMMANDS = {
     "/attach",
@@ -117,13 +119,13 @@ async def _cmd_chats(session: ConnectorSession) -> HeadlessCommandResult:
         key=lambda context: _context_timestamp(context) or 0.0,
         reverse=True,
     )
-    id_width = min(36, max(2, *(len(_context_id(row)) for row in rows)))
+    id_width = min(36, max(2, *(len(context_identifier(row)) for row in rows)))
     lines = [f"{'id'.ljust(id_width)}  updated              name"]
     for context in rows:
-        context_id = _context_id(context)
+        context_id = context_identifier(context)
         marker = "*" if context_id == session.context_id else " "
         updated = _context_updated_label(context)
-        name = _context_name(context)
+        name = context_display_name(context)
         lines.append(f"{marker}{context_id[:id_width].ljust(id_width)}  {updated.ljust(19)}  {name}")
     return HeadlessCommandResult(lines)
 
@@ -327,7 +329,7 @@ async def _cmd_queue_remove(session: ConnectorSession, selector: str) -> Headles
     if not session.context_id:
         return HeadlessCommandResult(["Open or create a chat context first."], error=True)
 
-    item_id = _queue_selector_to_item_id(session, selector)
+    item_id = queue_selector_to_item_id(session.message_queue, selector)
     if not item_id:
         return HeadlessCommandResult([f"No queued message matches '{selector}'."], error=True)
     try:
@@ -353,18 +355,6 @@ def _queue_summary_lines(session: ConnectorSession) -> list[str]:
         suffix = f" [{attachment_count} files]" if attachment_count else ""
         lines.append(f"{index}. {text}{suffix}")
     return lines
-
-
-def _queue_selector_to_item_id(session: ConnectorSession, selector: str) -> str:
-    value = selector.strip()
-    if not value:
-        return ""
-    if value.isdigit():
-        index = int(value) - 1
-        if 0 <= index < len(session.message_queue):
-            return str(session.message_queue[index].get("id", "") or "")
-        return ""
-    return value
 
 
 def _status_lines(session: ConnectorSession) -> list[str]:
@@ -397,40 +387,11 @@ def _help_lines() -> list[str]:
     ]
 
 
-def _context_id(context: Mapping[str, Any]) -> str:
-    return str(context.get("id") or context.get("context_id") or context.get("ctxid") or "").strip()
-
-
-def _context_name(context: Mapping[str, Any]) -> str:
-    name = str(context.get("name") or "").strip()
-    if name:
-        return name
-    try:
-        number = int(context.get("no", 0) or 0)
-    except (TypeError, ValueError):
-        number = 0
-    if number > 0:
-        return f"Chat #{number}"
-    return _context_id(context)
-
-
 def _context_timestamp(context: Mapping[str, Any]) -> float | None:
     for key in ("updated_at", "updated", "created_at"):
-        value = context.get(key)
-        if isinstance(value, (int, float)):
-            return float(value)
-        raw = str(value or "").strip()
-        if not raw:
-            continue
-        try:
-            return float(raw)
-        except ValueError:
-            pass
-        try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        return parsed.timestamp()
+        timestamp = parse_timestamp(context.get(key))
+        if timestamp is not None:
+            return timestamp
     return None
 
 

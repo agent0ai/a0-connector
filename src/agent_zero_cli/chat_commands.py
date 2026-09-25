@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 import shlex
 from typing import TYPE_CHECKING, Any, Mapping
 
 from agent_zero_cli.attachments import AttachmentError, create_image_file_upload
 from agent_zero_cli.project_utils import project_name, project_title
+from agent_zero_cli.protocol import context_display_name
+from agent_zero_cli.session import queue_selector_to_item_id
+from agent_zero_cli.text_utils import parse_timestamp
 
 from agent_zero_cli.screens.chat_list import ChatListScreen
 from agent_zero_cli.widgets import ChatInput
@@ -16,53 +18,17 @@ if TYPE_CHECKING:
     from agent_zero_cli.app import AgentZeroCLI
 
 
-def _parse_timestamp(value: object) -> float | None:
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-
-    try:
-        return float(raw)
-    except ValueError:
-        pass
-
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-    if parsed.tzinfo is None:
-        return parsed.timestamp()
-    return parsed.timestamp()
-
-
-def _context_name(context: Mapping[str, object]) -> str:
-    name = str(context.get("name", "") or "").strip()
-    if name:
-        return name
-    try:
-        chat_no = int(context.get("no", 0) or 0)
-    except (TypeError, ValueError):
-        chat_no = 0
-    if chat_no > 0:
-        return f"Chat #{chat_no}"
-    return str(context.get("id", "") or "")
-
-
 def _context_updated_at(context: Mapping[str, object]) -> float:
     return (
-        _parse_timestamp(context.get("updated_at"))
-        or _parse_timestamp(context.get("updated"))
-        or _parse_timestamp(context.get("created_at"))
+        parse_timestamp(context.get("updated_at"))
+        or parse_timestamp(context.get("updated"))
+        or parse_timestamp(context.get("created_at"))
         or 0.0
     )
 
 
 def _context_created_at(context: Mapping[str, object]) -> float:
-    return _parse_timestamp(context.get("created_at")) or 0.0
+    return parse_timestamp(context.get("created_at")) or 0.0
 
 
 def _normalize_project_name(value: object) -> str:
@@ -160,19 +126,19 @@ def _sort_contexts(
     if sort_by == "name":
         return sorted(
             contexts,
-            key=lambda context: (_context_name(context).casefold(), _context_created_at(context)),
+            key=lambda context: (context_display_name(context).casefold(), _context_created_at(context)),
         )
 
     if sort_by == "created":
         return sorted(
             contexts,
-            key=lambda context: (_context_created_at(context), _context_name(context).casefold()),
+            key=lambda context: (_context_created_at(context), context_display_name(context).casefold()),
             reverse=True,
         )
 
     return sorted(
         contexts,
-        key=lambda context: (_context_updated_at(context), _context_name(context).casefold()),
+        key=lambda context: (_context_updated_at(context), context_display_name(context).casefold()),
         reverse=True,
     )
 
@@ -489,7 +455,7 @@ async def cmd_queue_remove(app: AgentZeroCLI, selector: str) -> None:
         app._show_notice("Open or create a chat context first.", error=True)
         return
 
-    item_id = _queue_selector_to_item_id(app, selector)
+    item_id = queue_selector_to_item_id(app.message_queue, selector)
     if not item_id:
         app._show_notice(f"No queued message matches '{selector}'.", error=True)
         return
@@ -522,18 +488,6 @@ def _show_queue_summary(app: AgentZeroCLI) -> None:
         suffix = f" [{attachment_count} files]" if attachment_count else ""
         lines.append(f"{index}. {text}{suffix}")
     app._show_notice("\n".join(lines))
-
-
-def _queue_selector_to_item_id(app: AgentZeroCLI, selector: str) -> str:
-    value = selector.strip()
-    if not value:
-        return ""
-    if value.isdigit():
-        index = int(value) - 1
-        if 0 <= index < len(app.message_queue):
-            return str(app.message_queue[index].get("id", "") or "")
-        return ""
-    return value
 
 
 async def cmd_attach(app: AgentZeroCLI, *, query: str = "") -> None:

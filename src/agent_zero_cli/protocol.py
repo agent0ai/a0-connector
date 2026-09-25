@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from agent_zero_cli import __version__
 from agent_zero_cli.client import PROTOCOL_VERSION, WS_HANDLER, WS_NAMESPACE
@@ -36,6 +36,28 @@ def validate_capabilities(
         raise ValueError("Connector capabilities features payload is invalid")
     if "connector_login" in features:
         raise ValueError("Connector capabilities still advertise the removed connector_login feature")
+
+
+def context_identifier(context: Mapping[str, Any]) -> str:
+    return str(context.get("id") or context.get("context_id") or context.get("ctxid") or "").strip()
+
+
+def context_has_messages(context: Mapping[str, Any]) -> bool:
+    return bool(context.get("last_message") or context.get("log_entries"))
+
+
+def context_display_name(context: Mapping[str, Any]) -> str:
+    """Prefer the chat name, then the indexed label, then the raw id."""
+    name = str(context.get("name") or "").strip()
+    if name:
+        return name
+    try:
+        number = int(context.get("no", 0) or 0)
+    except (TypeError, ValueError):
+        number = 0
+    if number > 0:
+        return f"Chat #{number}"
+    return context_identifier(context)
 
 
 def _numeric_version(value: object) -> tuple[int, ...] | None:

@@ -12,8 +12,8 @@ from textual.message import Message
 from textual.widgets import Static
 
 from agent_zero_cli.project_utils import normalize_project_summary, project_color
+from agent_zero_cli.text_utils import collapse_whitespace
 
-_WHITESPACE_RE = re.compile(r"\s+")
 _ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 _ABSOLUTE_MIN_LABEL_CELLS = 3
 _PREFERRED_MIN_LABEL_CELLS = 8
@@ -38,10 +38,6 @@ class ContextTab:
     label: str
     has_messages: bool = False
     project_color: str = ""
-
-
-def _normalize_text(value: object) -> str:
-    return _WHITESPACE_RE.sub(" ", str(value or "")).strip()
 
 
 def _trim_to_cells(value: str, max_cells: int) -> str:
@@ -70,7 +66,7 @@ def _fallback_label(context_id: str, index: int) -> str:
 
 
 def _format_webui_label(metadata: Mapping[str, object], context_id: str, index: int) -> str:
-    raw_name = _normalize_text(metadata.get("name"))
+    raw_name = collapse_whitespace(metadata.get("name"))
     if raw_name and raw_name != context_id:
         return raw_name
 
@@ -93,7 +89,7 @@ def _project_color_from_metadata(metadata: Mapping[str, object]) -> str:
                 return color
 
     for key in ("project_color", "project_colour", "color"):
-        color = _normalize_text(metadata.get(key))
+        color = collapse_whitespace(metadata.get(key))
         if color:
             return color
     return ""
@@ -107,10 +103,10 @@ def _positive_int(value: object) -> int:
 
 
 def _last_message_has_content(metadata: Mapping[str, object]) -> bool:
-    last_message = _normalize_text(metadata.get("last_message"))
+    last_message = collapse_whitespace(metadata.get("last_message"))
     if not last_message:
         return False
-    if last_message == _normalize_text(metadata.get("created_at")):
+    if last_message == collapse_whitespace(metadata.get("created_at")):
         return False
     return _ISO_TIMESTAMP_RE.match(last_message) is None
 
@@ -134,7 +130,7 @@ def context_tab_from_metadata(
     has_messages_hint: bool = False,
 ) -> ContextTab:
     metadata = context or {}
-    normalized_context_id = _normalize_text(
+    normalized_context_id = collapse_whitespace(
         context_id
         or metadata.get("id")
         or metadata.get("context_id")
