@@ -1,5 +1,0 @@
-# Patch Text Test
-inserted-after-title
-alpha
-beta
-gamma-updated

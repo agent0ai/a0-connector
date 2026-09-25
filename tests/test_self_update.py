@@ -15,9 +15,6 @@ import pytest
 from agent_zero_cli import self_update
 
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
 class _FakeDistribution:
     def __init__(self, direct_url_text: str | None) -> None:
         self._direct_url_text = direct_url_text
@@ -43,9 +40,7 @@ class _FakeReleaseResponse:
 
 @contextmanager
 def _workspace_temp_dir() -> Path:
-    base_dir = ROOT / ".tmp-tests"
-    base_dir.mkdir(exist_ok=True)
-    temp_dir = Path(tempfile.mkdtemp(dir=base_dir))
+    temp_dir = Path(tempfile.mkdtemp())
     try:
         yield temp_dir
     finally:

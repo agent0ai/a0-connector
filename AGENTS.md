@@ -9,9 +9,9 @@
 ## Ownership
 
 - This root doc owns repo-wide behavior, safety, verification, top-level files, packaging metadata, installers, and the Child DOX Index.
-- Top-level files owned here include `README.md`, `pyproject.toml`, `requirements.txt`, `install.sh`, `install.ps1`, `test_context_patch.txt`, `.gitignore`, `LICENSE`, and any future root-level release or packaging files.
+- Top-level files owned here include `README.md`, `pyproject.toml`, `install.sh`, `install.ps1`, `.gitignore`, `LICENSE`, and any future root-level release or packaging files.
 - Child docs own the scoped rules for `src/`, `packages/`, `tests/`, `docs/`, `devtools/`, `requirements/`, and `constraints/`.
-- Generated or local-only artifacts such as `.venv/`, `.pytest_cache/`, `tmp/`, `.tmp-tests/`, `textual.log`, `__pycache__/`, and generated snapshots are not durable DOX scopes.
+- Generated or local-only artifacts such as `.venv/`, `.pytest_cache/`, `tmp/`, `textual.log`, `__pycache__/`, and generated snapshots are not durable DOX scopes.
 
 ## Local Contracts
 
@@ -29,93 +29,28 @@
 ### Product Contracts
 
 - Tech stack: Python 3.10+, Textual 8+, `httpx`, `aiohttp`, `python-socketio` / Engine.IO.
-- Windows installer bootstrapping downloads the uv installer to a unique temporary
-  `.ps1` file and runs it with PowerShell `-File` and `RemoteSigned`, checking the
-  exit code and cleaning up afterward. Do not use inline download-and-execute
-  pipelines or `ExecutionPolicy Bypass` in this path.
+- Windows installer bootstrapping downloads the uv installer to a unique temporary `.ps1` file and runs it with PowerShell `-File` and `RemoteSigned`, checking the exit code and cleaning up afterward. Do not use inline download-and-execute pipelines or `ExecutionPolicy Bypass` in this path.
 - Run the TUI with `a0` or `./.venv/bin/python -m agent_zero_cli`.
 - Launcher direct-connect path is `a0 --host <local-url> --no-docker-discovery --connect`; `--host` selects the target URL, `--no-docker-discovery` skips Docker discovery, and `--connect` connects immediately instead of opening the host picker.
-- Run the plain stdin/stdout connector with `a0 headless`; use
-  `a0 headless --print` for one-shot pipe-friendly runs.
-- On Windows, `a0 gateway` and `a0 headless` explicitly use UTF-8 stdin,
-  stdout, and stderr so their machine protocols do not inherit the ANSI code
-  page from Launcher-owned pipes. Interactive TUI stream handling is unchanged.
-- Launcher-owned A0 Tag requests use the capability-silent
-  `a0 headless --launcher-tag --new-chat --output jsonl --print` path with an
-  explicit agent profile and optional existing `/a0/usr/uploads/` attachment
-  references. The prompt remains on stdin, the tagged client advertises no host
-  tools of its own, and its final replace/action marker becomes one normalized
-  `tag_result` JSONL record before `complete`.
-- Active TUI and headless terminal sessions emit one ready-for-input notification
-  per completed run by default. `A0_TERMINAL_NOTIFY=0` disables it; headless
-  writes notification bytes only to terminal stderr so stdout stays pipe-safe.
-- Run the Launcher-owned tools-only connector with `a0 gateway`. It is a
-  Textual-free, newline-delimited JSON stdin/stdout contract and must not create,
-  select, or subscribe to a chat.
-- Interactive transcript images use `A0_CLI_IMAGE_MODE=auto|tgp|sixel|halfcell|off`.
-  Automatic selection combines reliable terminal capability advertisements,
-  live protocol probes, and compatibility exclusions to select TGP or Sixel;
-  without a complete native protocol it preserves the pre-image transcript and
-  performs no image loading. This is terminal-capability based regardless of
-  whether the shell is Bash, Zsh, or PowerShell. A false-positive native probe
-  must fail locally without falling back to pixelated half-cell output.
-  Images open in their expanded complete-aspect view and may be collapsed with
-  click, Enter, or Space.
-  Only explicit `halfcell`, browser preview, and SVG snapshot paths use a real
-  half-cell widget without native protocol probes; pytest's ordinary TUI path
-  remains library-free. Preview output is layout evidence and does not establish
-  native TGP/Sixel acceptance. Keep automated CLI, Core deployment, and
-  capable-terminal visual evidence as separate surfaces.
-- Gateway release 2.6 adds `computer_use_setup_v1`: correlated setup commands,
-  staged macOS Accessibility then Screen Recording approval, and fresh-helper
-  polling bounded to 120 seconds so the initiating agent tool call can resume.
-- Supported Wayland, macOS, and Windows gateways may also advertise `a0_tag_v1`. Its correlated
-  profile, capture, apply, and release commands reuse the authenticated gateway
-  client and existing Computer Use grant. A backend may return a verified,
-  bounded active-window PNG; the gateway gives each such upload a unique name
-  and never returns base64 through Launcher JSONL. The current Wayland helper
-  reports text/accessibility-only context because GNOME does not expose
-  trustworthy native-window screen bounds to AT-SPI callers. Release and failed
-  capture stop the private tag session, including its Wayland portal resources,
-  while the outbound gateway lease remains connected.
-- The same `a0_tag_v1` gateway accepts explicitly user-selected absolute file
-  or folder paths through its correlated upload command, reads no implicit
-  location, expands folders to bounded regular files, and uploads them through
-  the existing authenticated client. Launcher receives only Agent Zero upload
-  references; host paths and file bytes never enter the palette renderer.
-- Release installs include the Python Playwright client needed to launch a host
-  Chromium-family profile. They do not download a separate Chromium binary;
-  Browser setup and `/browser repair` remain recovery paths for older or damaged
-  CLI environments.
-- On macOS, host Browser choices also include Safari through Apple's bundled
-  `/usr/bin/safaridriver` W3C WebDriver. Safari uses a dedicated automation
-  window, permits one Agent Zero browser context at a time, and never enables
-  Safari's remote-automation setting silently. Its WebDriver screenshot path is
-  viewport-only and must reject full-page requests explicitly. If the driver
-  exits or Safari invalidates its WebDriver session, the next browser operation
-  must replace the stale runtime instead of reusing it.
-- Browser Settings may ask the connected CLI to open the fixed remote-debugging
-  setup page in an installed Chrome, Opera, or Edge browser. Keep this action
-  strictly allowlisted and available before Host Browser itself is enabled.
+- Run the plain stdin/stdout connector with `a0 headless`; use `a0 headless --print` for one-shot pipe-friendly runs.
+- On Windows, `a0 gateway` and `a0 headless` explicitly use UTF-8 stdin, stdout, and stderr so their machine protocols do not inherit the ANSI code page from Launcher-owned pipes. Interactive TUI stream handling is unchanged.
+- Launcher-owned A0 Tag requests use the capability-silent `a0 headless --launcher-tag --new-chat --output jsonl --print` path with an explicit agent profile and optional existing `/a0/usr/uploads/` attachment references. The prompt remains on stdin, the tagged client advertises no host tools of its own, and its final replace/action marker becomes one normalized `tag_result` JSONL record before `complete`.
+- Active TUI and headless terminal sessions emit one ready-for-input notification per completed run by default. `A0_TERMINAL_NOTIFY=0` disables it; headless writes notification bytes only to terminal stderr so stdout stays pipe-safe.
+- Run the Launcher-owned tools-only connector with `a0 gateway`. It is a Textual-free, newline-delimited JSON stdin/stdout contract and must not create, select, or subscribe to a chat.
+- Interactive transcript images use `A0_CLI_IMAGE_MODE=auto|tgp|sixel|halfcell|off`. Automatic selection combines reliable terminal capability advertisements, live protocol probes, and compatibility exclusions to select TGP or Sixel; without a complete native protocol it preserves the pre-image transcript and performs no image loading. This is terminal-capability based regardless of whether the shell is Bash, Zsh, or PowerShell. A false-positive native probe must fail locally without falling back to pixelated half-cell output. Images open in their expanded complete-aspect view and may be collapsed with click, Enter, or Space. Only explicit `halfcell`, browser preview, and SVG snapshot paths use a real half-cell widget without native protocol probes; pytest's ordinary TUI path remains library-free. Preview output is layout evidence and does not establish native TGP/Sixel acceptance. Keep automated CLI, Core deployment, and capable-terminal visual evidence as separate surfaces.
+- Gateway release 2.6 adds `computer_use_setup_v1`: correlated setup commands, staged macOS Accessibility then Screen Recording approval, and fresh-helper polling bounded to 120 seconds so the initiating agent tool call can resume.
+- Supported Wayland, macOS, and Windows gateways may also advertise `a0_tag_v1`. Its correlated profile, capture, apply, and release commands reuse the authenticated gateway client and existing Computer Use grant. A backend may return a verified, bounded active-window PNG; the gateway gives each such upload a unique name and never returns base64 through Launcher JSONL. The current Wayland helper reports text/accessibility-only context because GNOME does not expose trustworthy native-window screen bounds to AT-SPI callers. Release and failed capture stop the private tag session, including its Wayland portal resources, while the outbound gateway lease remains connected.
+- The same `a0_tag_v1` gateway accepts explicitly user-selected absolute file or folder paths through its correlated upload command, reads no implicit location, expands folders to bounded regular files, and uploads them through the existing authenticated client. Launcher receives only Agent Zero upload references; host paths and file bytes never enter the palette renderer.
+- Release installs include the Python Playwright client needed to launch a host Chromium-family profile. They do not download a separate Chromium binary; Browser setup and `/browser repair` remain recovery paths for older or damaged CLI environments.
+- On macOS, host Browser choices also include Safari through Apple's bundled `/usr/bin/safaridriver` W3C WebDriver. Safari uses a dedicated automation window, permits one Agent Zero browser context at a time, and never enables Safari's remote-automation setting silently. Its WebDriver screenshot path is viewport-only and must reject full-page requests explicitly. If the driver exits or Safari invalidates its WebDriver session, the next browser operation must replace the stale runtime instead of reusing it.
+- Browser Settings may ask the connected CLI to open the fixed remote-debugging setup page in an installed Chrome, Opera, or Edge browser. Keep this action strictly allowlisted and available before Host Browser itself is enabled.
 - Use Linux commands and paths by default. Prefer `./.venv/bin/python`, not Windows-only virtualenv paths.
 - UI preview is the primary loop for TUI work: `./.venv/bin/python devtools/serve.py` at `http://localhost:8566`.
 - The CLI talks to Agent Zero through the connector protocol `a0-connector.v1`, HTTP routes under `/api/plugins/_a0_connector/v1/`, and Socket.IO events on namespace `/ws` with `connector_*` event names.
-- Large operation requests/results use negotiated `transfer_protocol=1` start,
-  ordered 64 KiB chunk, end, and abort events. Peers without that capability
-  receive one structured size error; they must never receive a partial legacy
-  chunk stream or be disconnected by an oversized application payload.
-- CLI and Core advertise `capabilities.ws_max_payload_bytes`; outbound Socket.IO
-  events are measured after serialization and rejected before dispatch when they
-  exceed the peer ceiling. Missing or invalid capability data uses the 4 MiB
-  legacy floor. Bulk payloads belong on authenticated HTTP transfer routes.
-- HTTP attachment uploads keep disk sources file-backed, use size-scaled
-  per-request timeouts, and verify Core's ordered size/SHA-256 receipts. Core
-  downloads stream into a same-directory host partial and become visible only
-  after Content-Length/SHA-256 verification and atomic replacement.
-- Remote text reads are a bounded control-plane preview: stream the source,
-  reject binary-looking input, return at most 2,000 lines or 256 KiB with
-  continuation metadata, and direct complete/binary content to authenticated
-  HTTP. Remote write and patch payloads are capped at 256 KiB on both peers.
+- Large operation requests/results use negotiated `transfer_protocol=1` start, ordered 64 KiB chunk, end, and abort events. Peers without that capability receive one structured size error; they must never receive a partial legacy chunk stream or be disconnected by an oversized application payload.
+- CLI and Core advertise `capabilities.ws_max_payload_bytes`; outbound Socket.IO events are measured after serialization and rejected before dispatch when they exceed the peer ceiling. Missing or invalid capability data uses the 4 MiB legacy floor. Bulk payloads belong on authenticated HTTP transfer routes.
+- HTTP attachment uploads keep disk sources file-backed, use size-scaled per-request timeouts, and verify Core's ordered size/SHA-256 receipts. Core downloads stream into a same-directory host partial and become visible only after Content-Length/SHA-256 verification and atomic replacement.
+- Remote text reads are a bounded control-plane preview: stream the source, reject binary-looking input, return at most 2,000 lines or 256 KiB with continuation metadata, and direct complete/binary content to authenticated HTTP. Remote write and patch payloads are capped at 256 KiB on both peers.
 
 ### Plugin Backend
 
@@ -132,9 +67,7 @@
 - Allowed without asking: read files, edit repo source/docs/tests/devtools/requirements/constraints/AGENTS docs, run devtools scripts, and run pytest.
 - Ask before installing new dependencies, editing external Agent Zero plugin/backend files, deleting files outside normal generated outputs, or making git commits/pushes.
 - Never hardcode API keys, tokens, passwords, cookies, or connector secrets.
-- Do not persist usernames, passwords, connector tokens, or API keys. Protected
-  Agent Zero web sessions may persist browser-style session cookies only through
-  the existing remembered-host/session flow.
+- Do not persist usernames, passwords, connector tokens, or API keys. Protected Agent Zero web sessions may persist browser-style session cookies only through the existing remembered-host/session flow.
 - Never use destructive git commands such as `git reset --hard` or `git checkout --` unless the user explicitly asks.
 - Preserve user work. If the worktree contains unrelated changes, leave them alone.
 

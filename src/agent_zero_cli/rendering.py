@@ -284,7 +284,7 @@ def render_connector_event(
     prepend: bool = False,
 ) -> bool:
     """Render a connector event to the chat log.
-    
+
     Returns:
         bool: True if a static block was rendered, False otherwise.
     """

@@ -15,57 +15,25 @@
 
 - `A0Client` owns HTTP, login/session cookies, Socket.IO setup, connector event registration, and the `a0-connector.v1` protocol constants.
 - Keep `aiohttp.ClientWSTimeout` compatibility in `client.py` unless all supported aiohttp versions have been verified.
-- `A0Client` advertises its effective `A0_WS_MAX_PAYLOAD_BYTES` receive ceiling
-  and consumes the Core ceiling from HTTP capabilities and `connector_hello`.
-  Missing or invalid peer data must fall back to 4 MiB. Measure the complete
-  encoded Socket.IO event before every call or result emit; oversized calls fail
-  locally and oversized operation results become one structured
-  `PAYLOAD_TOO_LARGE` result without disconnecting.
-- aiohttp rejects a WebSocket frame whose projected size is greater than or
-  equal to `max_msg_size`; configure its parser bound to the advertised
-  application ceiling plus one byte so the negotiated ceiling remains inclusive.
-- `transfer_protocol=1` is the symmetric large-operation WebSocket contract.
-  Keep ordinary payloads on the direct fast path; larger eligible requests and
-  results use start, ordered 64 KiB chunks, end, and abort with declared size and
-  SHA-256. Enforce the negotiated byte ceiling, four active inbound transfers,
-  a 30-second idle timeout, and disk spooling above 1 MiB. A peer without the
-  capability gets one structured `PAYLOAD_TOO_LARGE` result, never legacy
-  fragments or a transport disconnect.
-- Associate active transfers with their existing chat context. Pause and reset
-  abort that context before returning, intentional disconnect emits abort while
-  the socket is still open, and peer abort or disconnect releases outbound and
-  inbound state plus any spool file. Computer Use capture files and host-browser
-  screenshot bytes must be rejected above 25 MiB before base64/JSON expansion.
-- `AttachmentUpload.content` is bytes for clipboard/in-memory images or a
-  `Path` for disk-backed images. Never turn a disk source back into a full-memory
-  buffer before multipart upload. Bulk HTTP requests use their own size-scaled
-  timeout and verify Core's size/SHA-256 receipt when advertised.
-- `A0Client.download_file` streams Core's existing workdir download response to
-  a same-directory `.partial-*` host file, verifies Content-Length and
-  `X-Content-SHA256`, fsyncs, and atomically replaces the requested destination.
-  A failure must preserve an existing destination and remove the partial.
+- `A0Client` advertises its effective `A0_WS_MAX_PAYLOAD_BYTES` receive ceiling and consumes the Core ceiling from HTTP capabilities and `connector_hello`. Missing or invalid peer data must fall back to 4 MiB. Measure the complete encoded Socket.IO event before every call or result emit; oversized calls fail locally and oversized operation results become one structured `PAYLOAD_TOO_LARGE` result without disconnecting.
+- aiohttp rejects a WebSocket frame whose projected size is greater than or equal to `max_msg_size`; configure its parser bound to the advertised application ceiling plus one byte so the negotiated ceiling remains inclusive.
+- `transfer_protocol=1` is the symmetric large-operation WebSocket contract. Keep ordinary payloads on the direct fast path; larger eligible requests and results use start, ordered 64 KiB chunks, end, and abort with declared size and SHA-256. Enforce the negotiated byte ceiling, four active inbound transfers, a 30-second idle timeout, and disk spooling above 1 MiB. A peer without the capability gets one structured `PAYLOAD_TOO_LARGE` result, never legacy fragments or a transport disconnect.
+- Associate active transfers with their existing chat context. Pause and reset abort that context before returning, intentional disconnect emits abort while the socket is still open, and peer abort or disconnect releases outbound and inbound state plus any spool file. Computer Use capture files and host-browser screenshot bytes must be rejected above 25 MiB before base64/JSON expansion.
+- `AttachmentUpload.content` is bytes for clipboard/in-memory images or a `Path` for disk-backed images. Never turn a disk source back into a full-memory buffer before multipart upload. Bulk HTTP requests use their own size-scaled timeout and verify Core's size/SHA-256 receipt when advertised.
+- `A0Client.download_file` streams Core's existing workdir download response to a same-directory `.partial-*` host file, verifies Content-Length and `X-Content-SHA256`, fsyncs, and atomically replaces the requested destination. A failure must preserve an existing destination and remove the partial.
 - Remote file, exec, computer-use, and browser operation handlers must emit their `connector_*_op_result` event before follow-up metadata refresh work starts.
 - Use the client after-result callbacks for browser and computer-use status refreshes so server-side pending operations resolve before any nested `connector_hello` round trip.
 - Refresh the active chat tab metadata after context completion so server-side automatic chat renames become visible in the TUI.
 - Completed TUI runs show a muted elapsed-time line immediately above the final response; the goal bar uses the same hour-aware duration format.
 - Active TUI and headless runs emit one terminal-native ready-for-input notification by default. `A0_TERMINAL_NOTIFY=0` disables it; non-TTY and browser output stay silent, headless writes only to terminal stderr after final output settles, and ACP/gateway stdout contracts remain untouched.
-- Launcher-tag headless mode is a strict one-shot/new-chat/JSONL contract. It
-  creates the requested agent profile, accepts only bounded validated existing
-  Agent Zero upload references, does not remember the chat, emits no raw context
-  events, suppresses terminal notifications, and advertises local file, exec,
-  Browser, and Computer Use capabilities as disabled so the existing Launcher
-  gateway remains the only Host access provider. Its first-line
-  `<!--a0-tag:v1;mode=replace|action-->` marker is stripped into one bounded
-  `tag_result`; malformed or empty results use overlay-safe invalid metadata.
+- Launcher-tag headless mode is a strict one-shot/new-chat/JSONL contract. It creates the requested agent profile, accepts only bounded validated existing Agent Zero upload references, does not remember the chat, emits no raw context events, suppresses terminal notifications, and advertises local file, exec, Browser, and Computer Use capabilities as disabled so the existing Launcher gateway remains the only Host access provider. Its first-line `<!--a0-tag:v1;mode=replace|action-->` marker is stripped into one bounded `tag_result`; malformed or empty results use overlay-safe invalid metadata.
 - `/clear` and F5 clear the visible conversation without resetting the current context; keep the initial Core greeting and Agent Zero banner visible.
 - Model switcher state must use the backend's effective preset for display and identify the configured settings preset when clearing a chat override. The runtime editor updates the global `Default` preset, preserves untouched Utility and Embedding selections, and clears the active chat override after saving.
 - `/computer-use on` is a human approval command. It must force `ComputerUseManager.rearm()` immediately instead of silently validating a saved restore token first.
 - Computer Use must preserve explicit `window_id` targets through snapshot and type operations, and accept `window_id` as the top-level target for an explicit focus operation. Backends that advertise target-verified keyboard input fail closed unless the named window is active or focused.
 - Wayland top-level focus may fall back from AT-SPI to an unambiguous `wmctrl` PID/title activation for XWayland windows, but success still requires AT-SPI active/focused verification.
 - Keep the Wayland helper compatibility copy behavior-aligned with the packaged `a0-computer-use-wayland` helper; package-only bootstrap imports are the intentional difference.
-- Wayland AT-SPI text offsets and integrity checks use Unicode character
-  offsets, while `EditableText.insert_text` receives the UTF-8 byte length of
-  its string. Keep replacement and rollback calls aligned with that split.
+- Wayland AT-SPI text offsets and integrity checks use Unicode character offsets, while `EditableText.insert_text` receives the UTF-8 byte length of its string. Keep replacement and rollback calls aligned with that split.
 - Host-browser `open` must reuse an already-open tab with the same normalized URL before creating a new tab. Keep `list` and `set_active` workflows available for title-based or URL-based selection.
 - Host-browser `evaluate` requires a non-empty `script` string for single and multi calls, matching Core. Reject missing input before page execution; preserve legitimate JavaScript null/undefined results.
 - `evaluate_timeout_v1` advertises a host-enforced `evaluate_timeout_seconds` deadline (default 30; finite 0.1–60 seconds only) supplied by Core Browser settings. Playwright and direct CDP evaluate serialize per page and terminate execution in place. Keep the document when the original request settles within a 250 ms response grace; only unresolved execution (such as awaited promises) needs reload to commit. Report any reload or fallback closure in the timeout error. Preserve tab identity, cookies and storage; close only the affected page if recovery fails. Recovery, fallback closure and protocol detachment each have a 5-second bound. Safari evaluate fails before execution because its WebDriver backend cannot forcibly interrupt arbitrary JavaScript.
@@ -73,74 +41,28 @@
 - The allowlisted `open_remote_debugging` host-browser operation opens only an installed Chrome, Opera, or Edge executable at its fixed internal inspect page. It remains available while Host Browser is off so a deliberate Browser Settings action can complete setup, and it must never accept an arbitrary executable or URL.
 - Remote host-browser operations may report status while Host Browser is off, but `ensure` and every effectful action must fail closed. Local `/browser` commands and Launcher-authorized setup may still prepare the browser through the direct manager API.
 - Host-browser metadata must advertise stable browser choices, including discovered CDP browser IDs that survive `DevToolsActivePort` port/GUID changes. Incoming `browser_selection` / `host_browser_selection` values must select that browser instead of falling back to the automatic profile picker. Browser preparation may briefly wait for an existing browser's active-port file, and a failed discovered-CDP attach may retry only after that file advertises a different endpoint; explicit custom endpoints remain exact. Consent failures must tell the user to choose a Chrome profile and click Allow before retrying.
-- The packaged A0 runtime includes the Python Playwright client for local-profile
-  launch without bundling Chromium. Keep automatic preparation and `/browser
-  repair` able to restore it in older or damaged CLI environments. Browser
-  metadata must advertise dependency repair separately from profile preparation,
-  and a repair attempt must run before reporting that no supported browser is
-  installed.
+- The packaged A0 runtime includes the Python Playwright client for local-profile launch without bundling Chromium. Keep automatic preparation and `/browser repair` able to restore it in older or damaged CLI environments. Browser metadata must advertise dependency repair separately from profile preparation, and a repair attempt must run before reporting that no supported browser is installed.
 - Explicit host-browser endpoints may be `host:port`, HTTP(S) CDP discovery addresses, or full DevTools WebSocket URLs. Resolve discovery addresses through `/json/version` on the host, preserve WebSocket path/query case, and fail explicitly instead of selecting another browser.
 - WebSocket recovery in `connection.py` retries with the bounded `_RECOVERY_DELAYS_SECONDS` backoff and then keeps retrying on the steady `_RECOVERY_STEADY_DELAY_SECONDS` cadence indefinitely; after the initial ramp, Back and Try again remain available. A new connection, Back, or exit must cancel the prior recovery task before taking ownership. Recovery exits quietly when the active context changes and aborts when the client's `base_url` changes.
-- Host-browser discovery covers Safari on macOS through the system
-  `safaridriver`, plus major Chromium-family browsers with CDP-compatible
-  profiles, including Chrome, Chromium, Edge, Brave, Opera, and Vivaldi. Safari
-  runs behind the existing `HostBrowserSession` operation surface, uses one
-  exclusive automation context, never toggles remote automation itself, and
-  rejects unsupported full-page screenshots explicitly. Before each Safari
-  operation or cross-context exclusivity check, the connector checks both the
-  `safaridriver` process and the active WebDriver session; stale state is closed
-  through the existing runtime cleanup path and rebuilt under the session start
-  lock.
-- Host-browser status discovery on Windows must read native executable version
-  metadata without running GUI browser binaries; opening an installed browser
-  is an explicit preparation/use action, never a metadata side effect.
+- Host-browser discovery covers Safari on macOS through the system `safaridriver`, plus major Chromium-family browsers with CDP-compatible profiles, including Chrome, Chromium, Edge, Brave, Opera, and Vivaldi. Safari runs behind the existing `HostBrowserSession` operation surface, uses one exclusive automation context, never toggles remote automation itself, and rejects unsupported full-page screenshots explicitly. Before each Safari operation or cross-context exclusivity check, the connector checks both the `safaridriver` process and the active WebDriver session; stale state is closed through the existing runtime cleanup path and rebuilt under the session start lock.
+- Host-browser status discovery on Windows must read native executable version metadata without running GUI browser binaries; opening an installed browser is an explicit preparation/use action, never a metadata side effect.
 - `/browser list`, `/browser auto`, and direct `/browser <number|id|host:port|ws://...>` own CLI-side host-browser target selection for the current Agent Zero project.
 - `/goal <objective>` creates the active chat goal through the builtin `_goal` plugin and sends the objective to the agent; `/goal update <text>` stays silent for active goals but resends an edited complete or blocked goal so work resumes; `/goal delete` only mutates goal state.
 - The connected TUI command palette must merge effective `_commands` entries for the active chat with its local command registry. Local commands win name collisions; only server-confirmed extension commands may be forwarded through the chat path for Core-side resolution.
 - Composer `@` completion reuses the Textual command palette and inserts plain references only. `@./` lists the bounded local workspace while `@/` lists only the active chat's container workspace; profile, skill, and MCP rows come from the scoped Agent Editor/tool-policy state.
-- `/profile` keeps direct profile selection, adds quoted name plus instructions
-  for quick creation, and uses the connector `agent_editor` capability for its
-  create/edit screen rather than writing Agent Zero profile files locally. The
-  exact `default` utility profile is not selectable or editable; an existing
-  chat may still report it as current, and Create remains available when it is
-  the only profile returned by older Core versions.
-- `/permissions` opens a Connector-native Tools, MCPs, and Skills policy editor
-  for the current profile and persists through Core's `agent_editor` API.
+- `/profile` keeps direct profile selection, adds quoted name plus instructions for quick creation, and uses the connector `agent_editor` capability for its create/edit screen rather than writing Agent Zero profile files locally. The exact `default` utility profile is not selectable or editable; an existing chat may still report it as current, and Create remains available when it is the only profile returned by older Core versions.
+- `/permissions` opens a Connector-native Tools, MCPs, and Skills policy editor for the current profile and persists through Core's `agent_editor` API.
 - Clipboard image paste uses `wl-paste` or `xclip` on Linux and the conditionally installed Pillow native reader on macOS and Windows.
 - The CLI may remember host/context and computer-use settings, and protected web sessions may persist browser-style session cookies through the remembered-host/session flow. It may consume ephemeral `A0_USERNAME` and `A0_PASSWORD` environment variables for non-interactive login, but it must not persist usernames, passwords, connector tokens, API keys, or other secrets.
-- Local Docker instance discovery should prefer launcher-owned friendly names
-  from the `a0.launcher.instanceName` container label over generated Docker
-  container or clone image names in visible picker/login text.
-- Local Docker instance discovery should try reachable Unix-socket Docker API
-  endpoints from `DOCKER_HOST`, Docker contexts, and known local runtimes such as
-  Colima profiles before declaring the runtime unavailable.
-- On Windows, local Docker instance discovery must not require `docker.exe` on
-  the host PATH. Try reachable local Docker API endpoints such as the
-  launcher/WSL Engine bridge before falling back to WSL-hosted Docker commands
-  through `wsl.exe`.
+- Local Docker instance discovery should prefer launcher-owned friendly names from the `a0.launcher.instanceName` container label over generated Docker container or clone image names in visible picker/login text.
+- Local Docker instance discovery should try reachable Unix-socket Docker API endpoints from `DOCKER_HOST`, Docker contexts, and known local runtimes such as Colima profiles before declaring the runtime unavailable.
+- On Windows, local Docker instance discovery must not require `docker.exe` on the host PATH. Try reachable local Docker API endpoints such as the launcher/WSL Engine bridge before falling back to WSL-hosted Docker commands through `wsl.exe`.
 - Remote workspace tools must respect their write/exec enablement flags and must not widen filesystem access accidentally.
-- Remote workspace `write` uses same-directory fsync plus atomic replacement so
-  an interruption cannot truncate an existing host file or expose partial new
-  content. Preserve an existing file's mode and, when running as root, UID/GID
-  before publication; metadata errors leave the original intact. New files
-  retain private temporary-file permissions and the executing user's ownership.
-- Remote workspace text reads must scan in fixed-size blocks, reject a
-  binary-looking first block, and return no more than 2,000 lines or 256 KiB.
-  Include explicit truncation/continuation metadata. Defensively reject write
-  and patch text over 256 KiB before touching the destination; bulk and binary
-  files belong on authenticated HTTP routes.
-- Remote execution responses expose no more than 256 KiB of terminal output.
-  Spill larger cleaned output atomically into the selected host workspace,
-  return a final-byte tail with an explicit notice plus size/hash/path metadata,
-  and bound prompt-pattern inspection before running regexes on long lines.
-- Remote execution supports terminal/python/nodejs/output/reset, matching local
-  code execution. Core's `input_remote` forwards terminal code with the internal
-  `allow_running` flag; running sessions receive input, idle/missing sessions run
-  it as a command, matching local input. Write-access and enablement gates still
-  apply. The removed input runtime has no compatibility alias.
-- POSIX shell commands and completion bookkeeping form one parsed brace group,
-  so child stdin receives only subsequent input, while cwd and shell variables
-  remain available to the next command in the same session.
+- Remote workspace `write` uses same-directory fsync plus atomic replacement so an interruption cannot truncate an existing host file or expose partial new content. Preserve an existing file's mode and, when running as root, UID/GID before publication; metadata errors leave the original intact. New files retain private temporary-file permissions and the executing user's ownership.
+- Remote workspace text reads must scan in fixed-size blocks, reject a binary-looking first block, and return no more than 2,000 lines or 256 KiB. Include explicit truncation/continuation metadata. Defensively reject write and patch text over 256 KiB before touching the destination; bulk and binary files belong on authenticated HTTP routes.
+- Remote execution responses expose no more than 256 KiB of terminal output. Spill larger cleaned output atomically into the selected host workspace, return a final-byte tail with an explicit notice plus size/hash/path metadata, and bound prompt-pattern inspection before running regexes on long lines.
+- Remote execution supports terminal/python/nodejs/output/reset, matching local code execution. Core's `input_remote` forwards terminal code with the internal `allow_running` flag; running sessions receive input, idle/missing sessions run it as a command, matching local input. Write-access and enablement gates still apply. The removed input runtime has no compatibility alias.
+- POSIX shell commands and completion bookkeeping form one parsed brace group, so child stdin receives only subsequent input, while cwd and shell variables remain available to the next command in the same session.
 - `file_browser.py` supplies binary-safe `files_*` operations for CLI and Launcher sessions. Advertise `file_browser: 1` and `root_path`; require the same root on each request. Host uploads use authenticated streamed HTTP with Core-supplied sizes and no independent ceiling, with size/hash checks and a same-directory staging file. Recheck connection identity, workspace and write permission before atomic publication; refuse overwrites and stale Editor revisions. Core enforces its configurable Editor text limit (10 MiB by default). No execution capability is required.
 - Host downloads use the same multipart streaming/integrity helper with an opaque `transfer_token`, targeting the protected File Browser receipt API instead of creating chat attachments. Both CLI and Launcher dispatch HTTP operations asynchronously through RemoteFileUtility; ordinary text-tool operations retain their own bounded protocol.
 - Textual compatibility guards live in `textual_compat.py`. Install them only on the interactive TUI startup path so `a0 headless` remains Textual-free.
@@ -150,70 +72,14 @@
 - `media_refs.py` owns immutable image-reference extraction. It only normalizes supported connector metadata, attachments, Markdown, bounded data URIs, and same-origin `/api/image_get` references; it performs no I/O and never accepts arbitrary external origins or paths. Browser media is limited to browser-marked `tool_start`/`tool_output` events, recognizing persisted Core `_tool_name` metadata and the existing `tool_name` compatibility shape while rejecting tool thoughts and other tools.
 - `event_handlers.py` attaches normalized image references only after each event has rendered its primary/status entry. `AgentZeroCLI` owns `ImageEntry` load workers, applying an asset only while the entry generation remains mounted in its source context; stale assets are closed. Workers capture context, client, store, host, and lifecycle epoch before scheduling and revalidate before both fetch and apply.
 - Clear and context switches advance the image-load epoch and cancel pending image loads while retaining the same-host cache. A host change, disconnect (including login disconnect before its first await), and exit advance it before cleanup; host change clears the store before replacing `client.base_url`, while disconnect and exit clear the chat log before clearing the store. Headless and gateway launch paths remain renderer-free.
-- Transcript image ownership is browser tool metadata for browser screenshots,
-  user messages for attachments, and assistant messages for assistant metadata
-  or Markdown. Keep the connector event schema unchanged and do not create a
-  duplicate browser screenshot event.
-- `a0 gateway` is also Textual-free. Its `ConnectorSession` branch authenticates
-  and publishes `connector_hello` without a chat context, handles reconnects
-  without creating chats, and serves file, exec, browser, and Computer Use
-  operations. It requires both Launcher gateway capabilities before announcing
-  readiness.
-- Gateway control uses JSONL stdin/stdout for status, scope replacement,
-  browser preparation, Computer Use setup/rearm, error, and shutdown messages.
-  On Windows, the `a0` entrypoint configures the gateway and headless machine
-  protocol streams as UTF-8 before either mode reads or writes JSONL; the
-  interactive Textual startup path keeps its native terminal stream handling.
-  Commands that expect a result carry `request_id`, and every nested manager
-  failure must become a failed correlated gateway result rather than a success
-  wrapper. `computer_use_setup_v1` gates the staged setup command independently
-  from the base Launcher gateway contract. Saved
-  web sessions are preferred, then ephemeral `A0_USERNAME`/`A0_PASSWORD` login;
-  secrets must never appear in arguments or JSONL output. Gateway scope state
-  must not overwrite interactive CLI preferences. A Launcher gateway maps the
-  copied Computer Use `allow` mode to `persistent` so a natural desktop action
-  may keep the platform approval prompt open without changing the interactive
-  CLI's saved mode. On macOS, permission checks and polling must use fresh helper
-  processes, prompt Accessibility before Screen Recording at most once per
-  attempt, and finish within 120 seconds so the original Agent Zero operation
-  can continue under its existing timeout. Preserve an HTTP(S) host's
-  reverse-proxy base path while rejecting embedded URL credentials.
-- Gateway shutdown owns complete cleanup of remote process groups, host-browser
-  sessions, Computer Use sessions, and the Socket.IO connection. Emergency
-  disconnect ends the current lease and exits cleanly rather than reconnecting.
-- Disabling the gateway master switch or an individual long-lived capability
-  closes its active execution, browser, or Computer Use sessions before the
-  control acknowledgement is returned.
-- Launcher gateway scopes expose file reading and writing separately. File
-  writing requires file reading, and Code execution requires file writing;
-  older gateway payloads with only `files` retain their previous read/write
-  meaning. The command-line contract uses `file_read` for the new read-only
-  selection and keeps legacy `files` read/write so a CLI update cannot silently
-  downgrade an older Launcher.
-- `a0_tag_v1` is an independently advertised feature for supported Wayland and
-  macOS Computer Use backends. Its
-  correlated commands list profiles, capture one explicit foreground tag,
-  upload a uniquely named screenshot only when the backend supplies a verified
-  bounded active-window artifact, apply a revalidated reply, and release the
-  opaque target. Current Wayland capture is explicitly text/accessibility-only;
-  do not turn an unverified monitor crop into an attachment. Capture/apply
-  require the existing Computer Use scope; release remains best-effort during
-  teardown and stops the private tag portal session without ending the gateway
-  lease. These private manager calls must not enter the agent-visible Computer
-  Use action set.
-  Wayland tag focus resolution is scoped to the active top-level window before
-  choosing a readable focused descendant so stale inactive AT-SPI focus cannot
-  capture or revalidate the wrong application.
-  The private macOS `launcher-tag` session requires Accessibility but must not
-  require Screen Recording: without the latter it returns bounded text/AX
-  context and an explicit unavailable screenshot reason. Ordinary Computer Use
-  sessions retain staged Accessibility and Screen Recording setup.
-- `a0_tag_upload` is a correlated, Computer-Use-gated gateway command for paths
-  selected explicitly by Launcher's native chooser. Accept only bounded
-  absolute paths, expand directories without following nested symlinks, cap
-  file count and bytes, reuse `A0Client.upload_attachments`, and return only
-  `/a0/usr/uploads/` references. It is not an agent-visible file-read action and
-  must never scan a workspace or user directory implicitly.
+- Transcript image ownership is browser tool metadata for browser screenshots, user messages for attachments, and assistant messages for assistant metadata or Markdown. Keep the connector event schema unchanged and do not create a duplicate browser screenshot event.
+- `a0 gateway` is also Textual-free. Its `ConnectorSession` branch authenticates and publishes `connector_hello` without a chat context, handles reconnects without creating chats, and serves file, exec, browser, and Computer Use operations. It requires both Launcher gateway capabilities before announcing readiness.
+- Gateway control uses JSONL stdin/stdout for status, scope replacement, browser preparation, Computer Use setup/rearm, error, and shutdown messages. On Windows, the `a0` entrypoint configures the gateway and headless machine protocol streams as UTF-8 before either mode reads or writes JSONL; the interactive Textual startup path keeps its native terminal stream handling. Commands that expect a result carry `request_id`, and every nested manager failure must become a failed correlated gateway result rather than a success wrapper. `computer_use_setup_v1` gates the staged setup command independently from the base Launcher gateway contract. Saved web sessions are preferred, then ephemeral `A0_USERNAME`/`A0_PASSWORD` login; secrets must never appear in arguments or JSONL output. Gateway scope state must not overwrite interactive CLI preferences. A Launcher gateway maps the copied Computer Use `allow` mode to `persistent` so a natural desktop action may keep the platform approval prompt open without changing the interactive CLI's saved mode. On macOS, permission checks and polling must use fresh helper processes, prompt Accessibility before Screen Recording at most once per attempt, and finish within 120 seconds so the original Agent Zero operation can continue under its existing timeout. Preserve an HTTP(S) host's reverse-proxy base path while rejecting embedded URL credentials.
+- Gateway shutdown owns complete cleanup of remote process groups, host-browser sessions, Computer Use sessions, and the Socket.IO connection. Emergency disconnect ends the current lease and exits cleanly rather than reconnecting.
+- Disabling the gateway master switch or an individual long-lived capability closes its active execution, browser, or Computer Use sessions before the control acknowledgement is returned.
+- Launcher gateway scopes expose file reading and writing separately. File writing requires file reading, and Code execution requires file writing; older gateway payloads with only `files` retain their previous read/write meaning. The command-line contract uses `file_read` for the new read-only selection and keeps legacy `files` read/write so a CLI update cannot silently downgrade an older Launcher.
+- `a0_tag_v1` is an independently advertised feature for supported Wayland and macOS Computer Use backends. Its correlated commands list profiles, capture one explicit foreground tag, upload a uniquely named screenshot only when the backend supplies a verified bounded active-window artifact, apply a revalidated reply, and release the opaque target. Current Wayland capture is explicitly text/accessibility-only; do not turn an unverified monitor crop into an attachment. Capture/apply require the existing Computer Use scope; release remains best-effort during teardown and stops the private tag portal session without ending the gateway lease. These private manager calls must not enter the agent-visible Computer Use action set. Wayland tag focus resolution is scoped to the active top-level window before choosing a readable focused descendant so stale inactive AT-SPI focus cannot capture or revalidate the wrong application. The private macOS `launcher-tag` session requires Accessibility but must not require Screen Recording: without the latter it returns bounded text/AX context and an explicit unavailable screenshot reason. Ordinary Computer Use sessions retain staged Accessibility and Screen Recording setup.
+- `a0_tag_upload` is a correlated, Computer-Use-gated gateway command for paths selected explicitly by Launcher's native chooser. Accept only bounded absolute paths, expand directories without following nested symlinks, cap file count and bytes, reuse `A0Client.upload_attachments`, and return only `/a0/usr/uploads/` references. It is not an agent-visible file-read action and must never scan a workspace or user directory implicitly.
 
 ## Work Guidance
 

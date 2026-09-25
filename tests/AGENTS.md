@@ -14,13 +14,9 @@
 - Async tests use pytest/anyio with asyncio-compatible fixtures; many files set `pytestmark = pytest.mark.anyio`.
 - Prefer `tmp_path`, `monkeypatch`, and local fake classes over real user config or live services.
 - `tests/test_app.py` fake widgets mirror the widget API used by `AgentZeroCLI`. When app code calls a new widget method, update the fake.
-- Image-rendering tests use `ImageRenderer.for_test()` or a fake renderer; they
-  must not probe a developer terminal, import native terminal backends for
-  headless/gateway tests, or require a live Agent Zero image endpoint.
+- Image-rendering tests use `ImageRenderer.for_test()` or a fake renderer; they must not probe a developer terminal, import native terminal backends for headless/gateway tests, or require a live Agent Zero image endpoint.
 - Connector/plugin tests should not require a live Agent Zero server unless a test is explicitly designed as live/integration coverage.
-- Instance-discovery scenarios must stub every competing runtime path they do
-  not exercise, including Docker CLI, local sockets, HTTP APIs, and WSL, so a
-  developer's running containers cannot change expected results.
+- Instance-discovery scenarios must stub every competing runtime path they do not exercise, including Docker CLI, local sockets, HTTP APIs, and WSL, so a developer's running containers cannot change expected results.
 - `tests/test_plugin_backend.py` may resolve a plugin root from `A0_CONNECTOR_PLUGIN_ROOT`, a local `plugin/`, or a sibling Agent Zero checkout. Keep fake Agent Zero helper modules isolated and reset between tests.
 - Certificate fixtures are test assets only; do not replace them with real secrets.
 - Transcript image widget tests use fake renderers backed by ordinary Textual widgets; focused tests must not instantiate native terminal-image controls or emit terminal graphics sequences.
@@ -28,37 +24,14 @@
 ## Work Guidance
 
 - Add focused regression tests near the behavior changed.
-- Preview tests must assert forced half-cell mode and usable explicit widget
-  construction, while native TGP/Sixel visual acceptance remains a separately
-  recorded capable-terminal check.
+- Preview tests must assert forced half-cell mode and usable explicit widget construction, while native TGP/Sixel visual acceptance remains a separately recorded capable-terminal check.
 - Keep test names behavior-oriented.
-- Mark tests for platform-only modules so a full suite on another supported OS
-  skips them before importing unavailable platform internals.
+- Mark tests for platform-only modules so a full suite on another supported OS skips them before importing unavailable platform internals.
 - Avoid sleeps and timing assumptions unless there is no better signal.
 - Use full suite verification for shared protocol, backend contract, or UI orchestration changes.
-- Gateway coverage must include its parser/JSONL contract, tools-only connection
-  without chat creation, authentication and capability failures, no-context
-  reconnect, all four tool families, five permission scopes, scope dependencies,
-  result-before-metadata ordering, correlated command success/failure, and
-  complete shutdown cleanup. macOS Computer Use coverage must assert staged
-  Accessibility then Screen Recording setup, one prompt per service, fresh
-  helper polling, bounded timeout, and resumption of the original start request.
-  macOS A0 Tag coverage must separately prove that its private session still
-  requires Accessibility but can return text-only context without Screen
-  Recording, while verified native-window screenshots remain fail-closed.
-- Windows A0 Tag coverage must exercise both HWND-backed native Edit ranges and
-  HWND-less UIA TextPattern fields, protected-field ordering, exact Unicode
-  value/range/caret revalidation, normalization rollback, target lifecycle,
-  failed-context target disposal, stdio privacy, and refusal to replace failed
-  active-window crops with desktop screenshots. Windows ordinary input coverage
-  must prove that printable text,
-  including pywinauto metacharacters and Unicode surrogate pairs, remains
-  literal while explicit key chords keep their native virtual-key mapping.
-- Large-payload boundary, binary, cancellation, and reconnect regressions belong
-  in the default suite. The 16/32/64 MiB transport soak is marked
-  `large_payload_soak` and remains skipped unless
-  `A0_RUN_LARGE_PAYLOAD_SOAK=1`; this keeps ordinary CI fast while exposing one
-  deterministic nightly command.
+- Gateway coverage must include its parser/JSONL contract, tools-only connection without chat creation, authentication and capability failures, no-context reconnect, all four tool families, five permission scopes, scope dependencies, result-before-metadata ordering, correlated command success/failure, and complete shutdown cleanup. macOS Computer Use coverage must assert staged Accessibility then Screen Recording setup, one prompt per service, fresh helper polling, bounded timeout, and resumption of the original start request. macOS A0 Tag coverage must separately prove that its private session still requires Accessibility but can return text-only context without Screen Recording, while verified native-window screenshots remain fail-closed.
+- Windows A0 Tag coverage must exercise both HWND-backed native Edit ranges and HWND-less UIA TextPattern fields, protected-field ordering, exact Unicode value/range/caret revalidation, normalization rollback, target lifecycle, failed-context target disposal, stdio privacy, and refusal to replace failed active-window crops with desktop screenshots. Windows ordinary input coverage must prove that printable text, including pywinauto metacharacters and Unicode surrogate pairs, remains literal while explicit key chords keep their native virtual-key mapping.
+- Large-payload boundary, binary, cancellation, and reconnect regressions belong in the default suite. The 16/32/64 MiB transport soak is marked `large_payload_soak` and remains skipped unless `A0_RUN_LARGE_PAYLOAD_SOAK=1`; this keeps ordinary CI fast while exposing one deterministic nightly command.
 
 ## Verification
 

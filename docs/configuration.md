@@ -30,68 +30,34 @@ For the initial chat:
 3. The last remembered chat for the connected host
 4. A new chat
 
-`a0 --chat-last` skips any configured default chat and uses the last remembered
-chat for the host.
+`a0 --chat-last` skips any configured default chat and uses the last remembered chat for the host.
 
 For frontend remote execution, the CLI no longer runtime-imports a local Agent Zero Core checkout. The backend sends execution settings in the WebSocket `connector_hello` payload, and the CLI keeps the platform-specific shell and TTY logic locally.
 
 ## Terminal completion notifications
 
-The TUI and `a0 headless` notify a capable terminal once when an active run
-returns to input-ready state. Kitty uses OSC 99, iTerm2 uses OSC 9, and other
-terminals receive OSC 777. Unsupported terminals ignore the sequence.
+The TUI and `a0 headless` notify a capable terminal once when an active run returns to input-ready state. Kitty uses OSC 99, iTerm2 uses OSC 9, and other terminals receive OSC 777. Unsupported terminals ignore the sequence.
 
-Notifications are emitted only to a terminal: the TUI uses its terminal driver,
-and headless mode uses TTY stderr after final output has settled. Pipes and JSONL
-stdout remain unchanged. Inside tmux, enable `allow-passthrough` for the wrapped
-notification sequence to reach the outer terminal. Set
-`A0_TERMINAL_NOTIFY=0` to disable notifications.
+Notifications are emitted only to a terminal: the TUI uses its terminal driver, and headless mode uses TTY stderr after final output has settled. Pipes and JSONL stdout remain unchanged. Inside tmux, enable `allow-passthrough` for the wrapped notification sequence to reach the outer terminal. Set `A0_TERMINAL_NOTIFY=0` to disable notifications.
 
 ## Terminal image rendering
 
-`A0_CLI_IMAGE_MODE=auto` is the normal user path. Before the Textual app starts,
-it combines reliable terminal capability advertisements, live protocol probes,
-and compatibility guards to select native TGP or Sixel. If neither complete
-rendering path is available, `auto` omits image entries and preserves the
-ordinary transcript. `tgp` and `sixel` also disable image rendering with one
-notice when their requested path is unavailable. `halfcell` explicitly forces
-the low-resolution renderer; `off` preserves the pre-image transcript and
-makes no image-loading attempt. `a0 headless` and `a0 gateway` remain
-text/JSONL-only regardless of this setting.
+`A0_CLI_IMAGE_MODE=auto` is the normal user path. Before the Textual app starts, it combines reliable terminal capability advertisements, live protocol probes, and compatibility guards to select native TGP or Sixel. If neither complete rendering path is available, `auto` omits image entries and preserves the ordinary transcript. `tgp` and `sixel` also disable image rendering with one notice when their requested path is unavailable. `halfcell` explicitly forces the low-resolution renderer; `off` preserves the pre-image transcript and makes no image-loading attempt. `a0 headless` and `a0 gateway` remain text/JSONL-only regardless of this setting.
 
-Selection follows terminal capability, not the command shell. Bash, Zsh, and
-PowerShell all render images only when their hosting terminal provides the
-complete native protocol.
+Selection follows terminal capability, not the command shell. Bash, Zsh, and PowerShell all render images only when their hosting terminal provides the complete native protocol.
 
-Some terminals implement only part of a graphics protocol. Warp accepts the
-basic Kitty capability query but does not implement the Unicode virtual
-placements used by the Textual TGP widget, so automatic image rendering stays
-off there rather than printing broken or pixelated output. A direct iTerm
-session may advertise Sixel through `TERM_FEATURES` and use native raster
-output; inside tmux, the CLI relies on live probing because protocol
-pass-through depends on the multiplexer configuration.
+Some terminals implement only part of a graphics protocol. Warp accepts the basic Kitty capability query but does not implement the Unicode virtual placements used by the Textual TGP widget, so automatic image rendering stays off there rather than printing broken or pixelated output. A direct iTerm session may advertise Sixel through `TERM_FEATURES` and use native raster output; inside tmux, the CLI relies on live probing because protocol pass-through depends on the multiplexer configuration.
 
-Transcript images open in their expanded complete-aspect view, capped at 96 by
-32 terminal cells and the available transcript width. Click the image, or focus
-it and press `Enter` or `Space`, to collapse it to a 36-by-12-cell thumbnail or
-expand it again.
+Transcript images open in their expanded complete-aspect view, capped at 96 by 32 terminal cells and the available transcript width. Click the image, or focus it and press `Enter` or `Space`, to collapse it to a 36-by-12-cell thumbnail or expand it again.
 
-Browser preview and SVG snapshots deliberately force half-cell rendering:
-xterm.js does not validate native protocol output or cleanup. A forced TGP or
-Sixel run is evidence only in a terminal verified to support that protocol.
-In particular, Apple Terminal remains image-free in automatic mode unless a
-capable native-protocol path has been verified separately.
+Browser preview and SVG snapshots deliberately force half-cell rendering: xterm.js does not validate native protocol output or cleanup. A forced TGP or Sixel run is evidence only in a terminal verified to support that protocol. In particular, Apple Terminal remains image-free in automatic mode unless a capable native-protocol path has been verified separately.
 
 ### Image troubleshooting
 
-- Leave `A0_CLI_IMAGE_MODE` unset (or set it to `auto`) to adapt to the active
-  terminal automatically.
+- Leave `A0_CLI_IMAGE_MODE` unset (or set it to `auto`) to adapt to the active terminal automatically.
 - Force `A0_CLI_IMAGE_MODE=halfcell` only when diagnosing the low-resolution renderer.
-- If a forced TGP or Sixel mode reports unsupported, use `auto` or explicit `halfcell`;
-  terminal multiplexers such as tmux may need protocol pass-through enabled.
-- An `image unavailable` placeholder means the authenticated `/api/image_get`
-  request, source validation, or image limits rejected the source; it does not
-  expose URLs, cookies, or cached file paths.
+- If a forced TGP or Sixel mode reports unsupported, use `auto` or explicit `halfcell`; terminal multiplexers such as tmux may need protocol pass-through enabled.
+- An `image unavailable` placeholder means the authenticated `/api/image_get` request, source validation, or image limits rejected the source; it does not expose URLs, cookies, or cached file paths.
 - Use `A0_CLI_IMAGE_MODE=off` to require the pre-image transcript behavior.
 
 ## First-run behavior
@@ -108,8 +74,7 @@ capable native-protocol path has been verified separately.
 ## Local discovery
 
 - The startup picker only inspects Docker. It does not probe arbitrary localhost ports.
-- On Windows, discovery can use the local Docker API bridge or WSL-hosted
-  `docker` command even when `docker.exe` is not installed on the host PATH.
+- On Windows, discovery can use the local Docker API bridge or WSL-hosted `docker` command even when `docker.exe` is not installed on the host PATH.
 - A container is considered an Agent Zero candidate only when it is running, publishes `80/tcp`, and exposes at least one Agent Zero signal such as:
   - an image name containing `agent-zero`
   - a command or entrypoint containing `/exe/initialize.sh` or `run_ui.py`
