@@ -1,7 +1,6 @@
 import asyncio
 import hashlib
 import os
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -95,7 +94,6 @@ def test_read_rechecks_scope_before_upload(folders):
 
 
 def test_rename_does_not_overwrite_racing_destination(folders, monkeypatch):
-    from agent_zero_cli import file_browser_paths
     workspace, root, _ = folders
     original = files.rename_new
     def concurrent(source_fd, source, target_fd, target):
