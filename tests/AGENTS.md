@@ -8,6 +8,7 @@
 
 - All files under `tests/` are owned here, including self-signed certificate fixtures.
 - Tests may import package sources and package backend `src/` directories directly when validating local package contracts.
+- `test_computer_use_contract.py` checks macOS and Windows backend imports and boolean payload behavior in fresh interpreters, both with the current CLI and with `agent_zero_cli.text_utils` unavailable as in older releases.
 
 ## Local Contracts
 

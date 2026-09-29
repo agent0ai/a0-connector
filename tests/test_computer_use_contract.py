@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from agent_zero_cli.computer_use_backend import COMPUTER_USE_CONTRACT_VERSION
 
@@ -19,6 +22,45 @@ for package in (
 from a0_computer_use_macos.backend import MACOS_BACKEND_SPEC  # noqa: E402
 from a0_computer_use_wayland import WAYLAND_BACKEND_SPEC  # noqa: E402
 from a0_computer_use_windows.backend import WINDOWS_BACKEND_SPEC  # noqa: E402
+
+
+@pytest.mark.parametrize("backend", ("macos", "windows"))
+@pytest.mark.parametrize("legacy_cli", (False, True), ids=("current-cli", "without-text-utils"))
+def test_backend_boolean_payloads_work_without_new_cli_modules(backend: str, legacy_cli: bool) -> None:
+    result = subprocess.run(
+        [
+            sys.executable, "-I", "-c",
+            """
+import importlib
+import sys
+
+sys.path[:0] = sys.argv[1:3]
+if sys.argv[4] == "True":
+    sys.modules["agent_zero_cli.text_utils"] = None
+shared = importlib.import_module(sys.argv[3] + ".shared")
+
+for value in (True, 1, -1, 0.5, "1", " TRUE ", "yes", "on", " EnAbLeD "):
+    assert shared.coerce_bool(value) is True, value
+    payload = shared.normalize_action_payload("type", {"text": "hello", "submit": value}, context_id="test")
+    assert payload["submit"] is True, payload
+for value in (False, 0, 0.0, "0", " FALSE ", "no", "off", " DiSaBlEd ", "", "  "):
+    assert shared.coerce_bool(value, default=True) is False, value
+    payload = shared.normalize_action_payload("type", {"text": "hello", "submit": value}, context_id="test")
+    assert "submit" not in payload, payload
+for value in (None, "unknown", [], {}):
+    for default in (False, True):
+        assert shared.coerce_bool(value, default=default) is default, value
+""",
+            str(PROJECT_ROOT / "src"),
+            str(PROJECT_ROOT / "packages" / f"a0-computer-use-{backend}" / "src"),
+            f"a0_computer_use_{backend}",
+            str(legacy_cli),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_windows_uia_advertises_full_background_contract() -> None:

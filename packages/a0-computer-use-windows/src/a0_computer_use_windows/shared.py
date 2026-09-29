@@ -4,8 +4,6 @@ from dataclasses import dataclass
 import uuid
 from typing import Any
 
-from agent_zero_cli.text_utils import coerce_bool
-
 WINDOWS_BACKEND_ID = "windows"
 WINDOWS_BACKEND_FAMILY = "windows"
 WINDOWS_BACKEND_PRIORITY = 100
@@ -77,6 +75,21 @@ def coerce_int(value: object, *, name: str, default: int | None = None) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} must be an integer") from exc
+
+
+def coerce_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled", ""}:
+        return False
+    return default
 
 
 def normalize_restore_token(value: object) -> str:
