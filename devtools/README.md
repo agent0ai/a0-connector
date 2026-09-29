@@ -4,8 +4,7 @@ Tools for web-like development of the Textual TUI.
 
 ## Prerequisites
 
-Use the project venv. `textual-serve` is part of the workspace dependencies now.
-If an older venv is missing it, refresh the environment:
+Use the project venv. `textual-serve` is part of the workspace dependencies now. If an older venv is missing it, refresh the environment:
 
 ```bash
 # Windows
@@ -19,9 +18,7 @@ If an older venv is missing it, refresh the environment:
 
 ## 1. Browser Preview (`serve.py`)
 
-Runs the full TUI inside a browser tab — the closest thing to "inspect element"
-for a terminal app. Works with any browser; the AI assistant can take
-screenshots of it just like a web page.
+Runs the full TUI inside a browser tab — the closest thing to "inspect element" for a terminal app. Works with any browser; the AI assistant can take screenshots of it just like a web page.
 
 ```bash
 # Windows
@@ -35,22 +32,15 @@ screenshots of it just like a web page.
 ./.venv/bin/python devtools/serve.py --debug             # enable Textual devtools
 ```
 
-On Linux, the preview launcher now arms a parent-death signal so browser-preview
-CLI sessions shut down with the serving process instead of lingering under
-`systemd --user`.
+On Linux, the preview launcher now arms a parent-death signal so browser-preview CLI sessions shut down with the serving process instead of lingering under `systemd --user`.
 
-The launcher deliberately sets `A0_CLI_IMAGE_MODE=halfcell` for its child.
-xterm.js previews the portable, bounded fallback and do not exercise TGP/Sixel
-protocol bytes or native-surface cleanup. Use a separately verified capable
-terminal for native TGP/Sixel acceptance; do not assume Apple Terminal supports
-either protocol.
+The launcher deliberately sets `A0_CLI_IMAGE_MODE=halfcell` for its child. xterm.js previews the portable, bounded fallback and do not exercise TGP/Sixel protocol bytes or native-surface cleanup. Use a separately verified capable terminal for native TGP/Sixel acceptance; do not assume Apple Terminal supports either protocol.
 
 > **Tip:** Append `?fontsize=14` to the URL to tweak the rendered font size.
 
 ## 2. SVG Snapshot (`snapshot.py`)
 
-Captures a pixel-perfect SVG of the TUI's initial screen (no live backend
-needed). Great for quick layout checks, CI diffing, or sharing.
+Captures a pixel-perfect SVG of the TUI's initial screen (no live backend needed). Great for quick layout checks, CI diffing, or sharing.
 
 ```bash
 # Windows
@@ -64,30 +54,22 @@ needed). Great for quick layout checks, CI diffing, or sharing.
 
 Output lands in `devtools/snapshots/` by default.
 
-Snapshots initialize and inject the same forced half-cell renderer, so capture
-is deterministic and library-free. SVG output is layout evidence only; it does
-not prove native terminal-protocol rendering or cleanup.
+Snapshots initialize and inject the same forced half-cell renderer, so capture is deterministic and library-free. SVG output is layout evidence only; it does not prove native terminal-protocol rendering or cleanup.
 
 ## 3. AI Agent Runbook: Send Text Through the Textual Wrapper
 
-When the app is served via `devtools/serve.py`, Textual is rendered through an
-`xterm.js` wrapper. This means widget IDs like `#splash-host-input` are not
-normal browser DOM inputs. For automation, send keystrokes through the hidden
-terminal helper textarea:
+When the app is served via `devtools/serve.py`, Textual is rendered through an `xterm.js` wrapper. This means widget IDs like `#splash-host-input` are not normal browser DOM inputs. For automation, send keystrokes through the hidden terminal helper textarea:
 
 - Selector: `#terminal .xterm-helper-textarea`
 - Model: click/focus terminal helper -> type keys -> press Enter
-- Multiline composer input: use `Ctrl+J` to insert a newline. Some
-  browser/xterm paths collapse `Shift+Enter` into plain `Enter`.
+- Multiline composer input: use `Ctrl+J` to insert a newline. Some browser/xterm paths collapse `Shift+Enter` into plain `Enter`.
 
 ### Why this matters
 
 - `document.querySelector("input")` may return nothing useful for app widgets.
-- Direct `fill()` calls on Textual widget IDs usually do not work in browser
-  automation.
+- Direct `fill()` calls on Textual widget IDs usually do not work in browser automation.
 - Typing often fails if the helper textarea is not focused first.
-- `/copy` copies the currently visible transcript text through the TUI clipboard
-  path, which is more reliable than drag-selecting the xterm canvas.
+- `/copy` copies the currently visible transcript text through the TUI clipboard path, which is more reliable than drag-selecting the xterm canvas.
 
 ### Minimal Playwright Example (Linux)
 
@@ -132,14 +114,10 @@ NODE
 
 ### Operational Notes for DevOps Automation
 
-- Start the preview server first:
-  `./.venv/bin/python devtools/serve.py --debug`
-- Verify the endpoint before automation:
-  `curl -I http://localhost:8566/`
-- If the first typed character is missing, add:
-  `helper.click()` + a short wait + `keyboard.insertText(...)`.
-- Use screenshots as ground truth for state transitions, since rendered Textual
-  content is on xterm canvas layers.
+- Start the preview server first: `./.venv/bin/python devtools/serve.py --debug`
+- Verify the endpoint before automation: `curl -I http://localhost:8566/`
+- If the first typed character is missing, add: `helper.click()` + a short wait + `keyboard.insertText(...)`.
+- Use screenshots as ground truth for state transitions, since rendered Textual content is on xterm canvas layers.
 
 ---
 
@@ -147,10 +125,8 @@ NODE
 
 1. **Making CSS / layout changes** → run `serve.py`, open browser, iterate live.
 2. **Quick smoke test** → run `snapshot.py`, compare SVGs before/after.
-3. **AI-assisted review** → start `serve.py`, let the assistant take browser
-   screenshots and give visual feedback.
-4. **AI/DevOps scripted input** → drive `#terminal .xterm-helper-textarea` for
-   reproducible login/host-entry flows in CI or local diagnostics.
+3. **AI-assisted review** → start `serve.py`, let the assistant take browser screenshots and give visual feedback.
+4. **AI/DevOps scripted input** → drive `#terminal .xterm-helper-textarea` for reproducible login/host-entry flows in CI or local diagnostics.
 
 ## Files
 

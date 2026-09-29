@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import uuid
 from typing import Any
 
+from agent_zero_cli.text_utils import coerce_bool
+
 MACOS_BACKEND_ID = "macos"
 MACOS_BACKEND_FAMILY = "macos"
 MACOS_BACKEND_PRIORITY = 100
@@ -83,21 +85,6 @@ def coerce_int(value: object, *, name: str, default: int | None = None) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} must be an integer") from exc
-
-
-def coerce_bool(value: object, *, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    normalized = str(value).strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off", ""}:
-        return False
-    return default
 
 
 def normalize_dispatch(value: object, *, default: str = "background") -> str:

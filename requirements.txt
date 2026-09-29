@@ -1,3 +1,0 @@
-# Runtime dependencies are release-locked in constraints/a0-runtime.txt.
-# Regenerate with: python devtools/lock_dependencies.py
--r constraints/a0-runtime.txt

@@ -12,6 +12,8 @@ from urllib.parse import unquote
 
 import httpx
 
+from agent_zero_cli.text_utils import as_mapping, strip_text
+
 
 DiscoveryStatus: TypeAlias = Literal["loading", "ready", "empty", "unavailable", "error"]
 
@@ -102,18 +104,6 @@ async def _run_command(*args: str, timeout: float = 8.0) -> _CommandResult:
     )
 
 
-def _stringify(value: object) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def _mapping(value: object) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
-        return value
-    return {}
-
-
 def _string_list(value: object) -> tuple[str, ...]:
     if isinstance(value, str):
         text = value.strip()
@@ -121,7 +111,7 @@ def _string_list(value: object) -> tuple[str, ...]:
     if isinstance(value, (list, tuple)):
         items: list[str] = []
         for item in value:
-            text = _stringify(item)
+            text = strip_text(item)
             if text:
                 items.append(text)
         return tuple(items)
@@ -129,39 +119,39 @@ def _string_list(value: object) -> tuple[str, ...]:
 
 
 def _container_name(container: Mapping[str, Any]) -> str:
-    name = _stringify(container.get("Name")).lstrip("/")
+    name = strip_text(container.get("Name")).lstrip("/")
     if name:
         return name
-    config = _mapping(container.get("Config"))
-    return _stringify(config.get("Hostname")) or "Agent Zero"
+    config = as_mapping(container.get("Config"))
+    return strip_text(config.get("Hostname")) or "Agent Zero"
 
 
 def _container_config_labels(container: Mapping[str, Any]) -> Mapping[str, Any]:
-    config = _mapping(container.get("Config"))
-    return _mapping(config.get("Labels"))
+    config = as_mapping(container.get("Config"))
+    return as_mapping(config.get("Labels"))
 
 
 def _launcher_instance_name(container: Mapping[str, Any]) -> str:
     config_labels = _container_config_labels(container)
-    top_level_labels = _mapping(container.get("Labels"))
-    return _stringify(
+    top_level_labels = as_mapping(container.get("Labels"))
+    return strip_text(
         config_labels.get(_LAUNCHER_INSTANCE_NAME_LABEL)
         or top_level_labels.get(_LAUNCHER_INSTANCE_NAME_LABEL)
     )
 
 
 def _container_image(container: Mapping[str, Any]) -> str:
-    config = _mapping(container.get("Config"))
-    container_config = _mapping(container.get("ContainerConfig"))
+    config = as_mapping(container.get("Config"))
+    container_config = as_mapping(container.get("ContainerConfig"))
     return (
-        _stringify(config.get("Image"))
-        or _stringify(container_config.get("Image"))
-        or _stringify(container.get("Image"))
+        strip_text(config.get("Image"))
+        or strip_text(container_config.get("Image"))
+        or strip_text(container.get("Image"))
     )
 
 
 def _is_running(container: Mapping[str, Any]) -> bool:
-    state = _mapping(container.get("State"))
+    state = as_mapping(container.get("State"))
     return bool(state.get("Running"))
 
 
@@ -175,8 +165,8 @@ def _display_host(host_ip: str) -> str:
 
 
 def _published_http_bindings(container: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
-    network_settings = _mapping(container.get("NetworkSettings"))
-    ports = _mapping(network_settings.get("Ports"))
+    network_settings = as_mapping(container.get("NetworkSettings"))
+    ports = as_mapping(network_settings.get("Ports"))
     bindings = ports.get("80/tcp")
     if not isinstance(bindings, list):
         return ()
@@ -185,16 +175,16 @@ def _published_http_bindings(container: Mapping[str, Any]) -> tuple[tuple[str, s
     for binding in bindings:
         if not isinstance(binding, Mapping):
             continue
-        host_port = _stringify(binding.get("HostPort"))
+        host_port = strip_text(binding.get("HostPort"))
         if not host_port:
             continue
-        host = _display_host(_stringify(binding.get("HostIp")))
+        host = _display_host(strip_text(binding.get("HostIp")))
         urls.append((f"http://{host}:{host_port}", host_port))
     return tuple(urls)
 
 
 def _command_signal(container: Mapping[str, Any]) -> bool:
-    config = _mapping(container.get("Config"))
+    config = as_mapping(container.get("Config"))
     parts: list[str] = []
     parts.extend(_string_list(container.get("Path")))
     parts.extend(_string_list(container.get("Args")))
@@ -210,12 +200,12 @@ def _mount_targets_a0(container: Mapping[str, Any]) -> bool:
         for mount in mounts:
             if not isinstance(mount, Mapping):
                 continue
-            destination = _stringify(mount.get("Destination")).rstrip("/")
-            mount_type = _stringify(mount.get("Type")).lower()
+            destination = strip_text(mount.get("Destination")).rstrip("/")
+            mount_type = strip_text(mount.get("Type")).lower()
             if destination == "/a0" and (not mount_type or mount_type == "bind"):
                 return True
 
-    host_config = _mapping(container.get("HostConfig"))
+    host_config = as_mapping(container.get("HostConfig"))
     for bind in _string_list(host_config.get("Binds")):
         parts = bind.split(":")
         if len(parts) >= 2 and parts[1].rstrip("/") == "/a0":
@@ -224,14 +214,14 @@ def _mount_targets_a0(container: Mapping[str, Any]) -> bool:
 
 
 def _image_signal(container: Mapping[str, Any]) -> bool:
-    config = _mapping(container.get("Config"))
-    container_config = _mapping(container.get("ContainerConfig"))
+    config = as_mapping(container.get("Config"))
+    container_config = as_mapping(container.get("ContainerConfig"))
     image_text = " ".join(
         part
         for part in (
-            _stringify(config.get("Image")),
-            _stringify(container_config.get("Image")),
-            _stringify(container.get("Image")),
+            strip_text(config.get("Image")),
+            strip_text(container_config.get("Image")),
+            strip_text(container.get("Image")),
         )
         if part
     ).lower()
@@ -257,7 +247,7 @@ def _collect_instances(payload: object, *, source: str = "docker") -> tuple[Disc
         if not bindings or not _looks_like_agent_zero(container):
             continue
 
-        container_id = _stringify(container.get("Id")) or _container_name(container)
+        container_id = strip_text(container.get("Id")) or _container_name(container)
         container_name = _container_name(container)
         friendly_name = _launcher_instance_name(container)
         display_name = friendly_name or container_name
@@ -288,7 +278,7 @@ def _command_failure_detail(prefix: str, stderr: str) -> str:
 
 
 def _docker_host_api_base_url(value: object) -> str:
-    text = _stringify(value)
+    text = strip_text(value)
     if not text:
         return ""
     if text.startswith("tcp://"):
@@ -299,7 +289,7 @@ def _docker_host_api_base_url(value: object) -> str:
 
 
 def _docker_host_socket_path(value: object) -> str:
-    text = _stringify(value)
+    text = strip_text(value)
     if not text.startswith("unix://"):
         return ""
     return unquote(text[7:]).strip()
@@ -326,8 +316,8 @@ def _docker_context_socket_paths() -> tuple[str, ...]:
             payload = json.loads(meta_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             continue
-        endpoints = _mapping(_mapping(payload).get("Endpoints"))
-        docker_endpoint = _mapping(endpoints.get("docker"))
+        endpoints = as_mapping(as_mapping(payload).get("Endpoints"))
+        docker_endpoint = as_mapping(endpoints.get("docker"))
         socket_path = _docker_host_socket_path(docker_endpoint.get("Host"))
         if socket_path:
             paths.append(socket_path)
@@ -391,9 +381,9 @@ async def _discover_with_docker_client(client: httpx.AsyncClient, *, source: str
         )
 
     container_ids = [
-        _stringify(container.get("Id"))
+        strip_text(container.get("Id"))
         for container in listed_payload
-        if isinstance(container, Mapping) and _stringify(container.get("Id"))
+        if isinstance(container, Mapping) and strip_text(container.get("Id"))
     ]
     if not container_ids:
         return DiscoveryResult(

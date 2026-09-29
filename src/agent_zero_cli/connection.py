@@ -8,16 +8,24 @@ from typing import TYPE_CHECKING, Any
 from agent_zero_cli.client import (
     A0ConnectorPluginMissingError,
     DEFAULT_HOST,
+    RECOVERY_DELAYS_SECONDS,
+    normalize_host,
 )
 from agent_zero_cli.config import delete_env, save_env, save_remember_host
-from agent_zero_cli.protocol import connector_version_warning, validate_capabilities
+from agent_zero_cli.protocol import (
+    connector_version_warning,
+    context_has_messages,
+    context_identifier,
+    validate_capabilities,
+)
 from agent_zero_cli.widgets import ChatInput
 from agent_zero_cli.widgets.chat_log import ChatLog
 
 if TYPE_CHECKING:
     from agent_zero_cli.app import AgentZeroCLI
 
-_RECOVERY_DELAYS_SECONDS = (1.0, 2.0, 5.0, 10.0, 20.0)
+# Module alias kept for tests that patch the bounded retry ramp per connection.
+_RECOVERY_DELAYS_SECONDS = RECOVERY_DELAYS_SECONDS
 # After the initial fast retries, keep retrying at a steady cadence forever.
 # A container restart or long server outage used to exhaust the 5 bounded
 # attempts (~38s) and leave the CLI permanently disconnected until manual
@@ -40,7 +48,7 @@ def _connection_login_credentials(username: str = "", password: str = "") -> tup
 
 
 async def startup(app: AgentZeroCLI) -> None:
-    host = app.config.instance_url.strip() or DEFAULT_HOST
+    host = normalize_host(app.config.instance_url)
     app._set_splash_stage(
         "host",
         message="",
@@ -77,10 +85,6 @@ async def _silently_disconnect_websocket(app: AgentZeroCLI) -> None:
         pass
 
 
-def _chat_identifier(chat: dict[str, Any]) -> str:
-    return str(chat.get("id") or chat.get("context_id") or chat.get("ctxid") or "").strip()
-
-
 async def _resolve_initial_context(app: AgentZeroCLI, host: str) -> tuple[str, bool]:
     default_context_id = app.config.default_context_id.strip()
     if default_context_id:
@@ -101,17 +105,17 @@ async def _resolve_initial_context(app: AgentZeroCLI, host: str) -> tuple[str, b
             contexts = []
 
         selected = next(
-            (context for context in contexts if _chat_identifier(context) == saved_context_id),
+            (context for context in contexts if context_identifier(context) == saved_context_id),
             None,
         )
         if selected is not None:
-            has_messages_hint = bool(selected.get("last_message"))
+            has_messages_hint = context_has_messages(selected)
             if not has_messages_hint and "chat_get" in app.connector_features:
                 try:
                     metadata = await app.client.get_chat(saved_context_id)
                 except Exception:
                     metadata = {}
-                has_messages_hint = bool(metadata.get("last_message") or metadata.get("log_entries"))
+                has_messages_hint = context_has_messages(metadata)
             return saved_context_id, has_messages_hint
 
     return await app.client.create_chat(), False

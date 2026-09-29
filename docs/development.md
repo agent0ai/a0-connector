@@ -10,9 +10,7 @@ a0-connector/
 └── docs/                   # You are here
 ```
 
-The builtin `_a0_connector` plugin is not vendored in this repository. Backend
-changes happen directly in Agent Zero Core under `plugins/_a0_connector` (or
-`/a0/plugins/_a0_connector` in Docker).
+The builtin `_a0_connector` plugin is not vendored in this repository. Backend changes happen directly in Agent Zero Core under `plugins/_a0_connector` (or `/a0/plugins/_a0_connector` in Docker).
 
 ## Runtime setup options
 
@@ -34,9 +32,7 @@ To test a protected instance, start Agent Zero with `AUTH_LOGIN` and `AUTH_PASSW
 
 ### CLI
 
-The root editable install includes the embedded computer-use backends from
-`packages/`, matching the release wheel model where the CLI and local
-computer-use support update as one unit.
+The root editable install includes the embedded computer-use backends from `packages/`, matching the release wheel model where the CLI and local computer-use support update as one unit.
 
 Windows PowerShell:
 
@@ -80,12 +76,7 @@ The published `a0` wheel embeds the Wayland, macOS, and Windows remote computer-
 
 The sibling `packages/a0-computer-use-*` manifests remain useful for isolated backend package development, but end-user installs should use the root `a0` package.
 
-The standalone installers and `a0 update` default to a managed CPython 3.12
-runtime via `uv`, so end users do not need a preinstalled Python 3.10+ on the
-host to get a consistent tool environment. The updater resolves the latest
-published GitHub release at runtime instead of baking the current tag into the
-installed CLI, then installs with the runtime and build constraints committed to
-that same release.
+The standalone installers and `a0 update` default to a managed CPython 3.12 runtime via `uv`, so end users do not need a preinstalled Python 3.10+ on the host to get a consistent tool environment. The updater resolves the latest published GitHub release at runtime instead of baking the current tag into the installed CLI, then installs with the runtime and build constraints committed to that same release.
 
 Runtime dependencies are locked as release artifacts:
 
@@ -94,18 +85,11 @@ Runtime dependencies are locked as release artifacts:
 ./.venv/bin/python devtools/lock_dependencies.py --check
 ```
 
-Edit `requirements/a0-runtime.in` or `requirements/a0-build.in`, regenerate the
-constraints, and commit the updated `constraints/` files plus the synced
-`pyproject.toml` pins together. The package metadata is intentionally exact
-pinned because `a0` is a CLI app installed into an isolated `uv tool`
-environment, and it protects users who update from older unpinned CLIs.
+Edit `requirements/a0-runtime.in` or `requirements/a0-build.in`, regenerate the constraints, and commit the updated `constraints/` files plus the synced `pyproject.toml` pins together. The package metadata is intentionally exact pinned because `a0` is a CLI app installed into an isolated `uv tool` environment, and it protects users who update from older unpinned CLIs.
 
 ### Backend source of truth
 
-There is no repo-local mirror to sync. The source of truth for backend work is
-your Agent Zero Core/runtime copy of `plugins/_a0_connector`. The tests in this
-repo resolve that plugin from `A0_CONNECTOR_PLUGIN_ROOT` when set, otherwise
-from a sibling `../agent-zero/plugins/_a0_connector` checkout if present.
+There is no repo-local mirror to sync. The source of truth for backend work is your Agent Zero Core/runtime copy of `plugins/_a0_connector`. The tests in this repo resolve that plugin from `A0_CONNECTOR_PLUGIN_ROOT` when set, otherwise from a sibling `../agent-zero/plugins/_a0_connector` checkout if present.
 
 ## Tests
 

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from rich.text import Text
 from textual.widgets import ContentSwitcher
 
-from agent_zero_cli.client import DEFAULT_HOST
+from agent_zero_cli.client import DEFAULT_HOST, normalize_host
 from agent_zero_cli.widgets import (
     ChatInput,
     ComputerUseBanner,
@@ -45,10 +45,6 @@ async def refresh_workspace_from_settings(app: AgentZeroCLI) -> None:
 
 def splash_host(app: AgentZeroCLI) -> str:
     return app._splash_state.host or app.config.instance_url or DEFAULT_HOST
-
-
-def normalize_host(host: str) -> str:
-    return host.strip() or DEFAULT_HOST
 
 
 def set_splash_state(app: AgentZeroCLI, **changes: Any) -> None:

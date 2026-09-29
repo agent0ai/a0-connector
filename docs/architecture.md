@@ -16,10 +16,7 @@
 
 ## Startup flow
 
-Both the Textual TUI and `a0 headless` use the same connector protocol. The
-TUI still owns its historical connection orchestration; headless uses the
-UI-neutral `ConnectorSession` core for transport, context subscription, remote
-file operations, remote exec operations, and workspace-tree publishing.
+Both the Textual TUI and `a0 headless` use the same connector protocol. The TUI still owns its historical connection orchestration; headless uses the UI-neutral `ConnectorSession` core for transport, context subscription, remote file operations, remote exec operations, and workspace-tree publishing.
 
 1. Discover: `POST /api/plugins/_a0_connector/v1/capabilities`
 2. Validate: confirm protocol, `/ws`, handler activation, `auth == ["session"]`, and boolean `auth_required`
@@ -102,75 +99,31 @@ All events are `connector_`-prefixed to avoid collisions on the shared `/ws` nam
 | `connector_computer_use_op` | Request a frontend computer-use operation |
 | `connector_browser_op` | Request a host-browser operation |
 
-`connector_hello` is also the canonical permission metadata refresh. The CLI
-sends current `remote_files`, `remote_exec`, `computer_use`, and `host_browser`
-metadata on connect and whenever gated permissions change. When a chat is
-active, the payload includes `context_id`; the backend re-associates that SID
-with the context before the next prompt is built so gated stubs such as
-`code_execution_remote` and host-backed Browser routing are exposed for the
-correct chat.
+`connector_hello` is also the canonical permission metadata refresh. The CLI sends current `remote_files`, `remote_exec`, `computer_use`, and `host_browser` metadata on connect and whenever gated permissions change. When a chat is active, the payload includes `context_id`; the backend re-associates that SID with the context before the next prompt is built so gated stubs such as `code_execution_remote` and host-backed Browser routing are exposed for the correct chat.
 
-Both public `capabilities` and `connector_hello` include `agent_zero_version`.
-The CLI compares that value with its own package version and surfaces a warning
-when the connected Agent Zero Core is newer than the installed CLI.
+Both public `capabilities` and `connector_hello` include `agent_zero_version`. The CLI compares that value with its own package version and surfaces a warning when the connected Agent Zero Core is newer than the installed CLI.
 
-The interactive TUI subscribes with `history: "tail"`, which returns the newest
-100 log-output entries and a `history_before` cursor. When the user reaches the
-top of the visible transcript, it requests the preceding page with that cursor;
-the snapshot includes `has_more_history` until the beginning of the chat. The
-headless frontend omits the hint and retains its complete replay behavior.
+The interactive TUI subscribes with `history: "tail"`, which returns the newest 100 log-output entries and a `history_before` cursor. When the user reaches the top of the visible transcript, it requests the preceding page with that cursor; the snapshot includes `has_more_history` until the beginning of the chat. The headless frontend omits the hint and retains its complete replay behavior.
 
 ## Headless frontend
 
-`a0 headless` is a plain stdin/stdout connector frontend. It does not import
-Textual, but it still registers as the host-side connector client for the
-subscribed chat.
+`a0 headless` is a plain stdin/stdout connector frontend. It does not import Textual, but it still registers as the host-side connector client for the subscribed chat.
 
-Headless `connector_hello` metadata advertises remote files and remote exec as
-available, scoped to the selected local workspace. It advertises computer-use
-and host-browser support as unavailable; if the backend sends those operations
-anyway, the client returns structured unsupported operation results instead of
-leaving server-side futures pending.
+Headless `connector_hello` metadata advertises remote files and remote exec as available, scoped to the selected local workspace. It advertises computer-use and host-browser support as unavailable; if the backend sends those operations anyway, the client returns structured unsupported operation results instead of leaving server-side futures pending.
 
-Text output is append-only and pipe-safe. JSONL output emits connector events
-and synthetic lifecycle records (`ready`, `complete`, `notice`, `error`) as one
-JSON object per stdout line.
+Text output is append-only and pipe-safe. JSONL output emits connector events and synthetic lifecycle records (`ready`, `complete`, `notice`, `error`) as one JSON object per stdout line.
 
 ## Interactive transcript images
 
-Only the interactive TUI renders images. The CLI extracts eligible references
-from Browser tool output, user attachment metadata, and assistant metadata or
-Markdown. A Browser `Screenshot: img://<path>&t=...` or `browser_snapshot`
-belongs under the existing Browser tool metadata. User attachments belong under
-the user message; assistant metadata and Markdown images belong under the
-assistant message. The extractor is pure and preserves the connector event
-schema, so a screenshot never becomes a duplicate sequence entry.
+Only the interactive TUI renders images. The CLI extracts eligible references from Browser tool output, user attachment metadata, and assistant metadata or Markdown. A Browser `Screenshot: img://<path>&t=...` or `browser_snapshot` belongs under the existing Browser tool metadata. User attachments belong under the user message; assistant metadata and Markdown images belong under the assistant message. The extractor is pure and preserves the connector event schema, so a screenshot never becomes a duplicate sequence entry.
 
-For an Agent Zero path, the client uses its authenticated session to `GET`
-same-origin `/api/image_get`; arbitrary external URLs and filesystem paths are
-not accepted. Raster PNG, JPEG, GIF, WebP, and BMP are supported (GIF uses the
-first frame). SVG is represented by a stable placeholder. Sources are limited
-to 25 MiB encoded input and 32 megapixels decoded; the store runs up to four
-fetch/load tasks at once, admits only one full-resolution decoder at a time,
-and downsamples before applying orientation and color conversion. It retains a
-memory-only 64 MiB LRU of independent display surfaces. Invalid,
-unauthenticated, unavailable, oversized, or unsupported images become stable
-placeholders, and copied transcript text contains semantic image labels rather
-than bytes or cache paths.
+For an Agent Zero path, the client uses its authenticated session to `GET` same-origin `/api/image_get`; arbitrary external URLs and filesystem paths are not accepted. Raster PNG, JPEG, GIF, WebP, and BMP are supported (GIF uses the first frame). SVG is represented by a stable placeholder. Sources are limited to 25 MiB encoded input and 32 megapixels decoded; the store runs up to four fetch/load tasks at once, admits only one full-resolution decoder at a time, and downsamples before applying orientation and color conversion. It retains a memory-only 64 MiB LRU of independent display surfaces. Invalid, unauthenticated, unavailable, oversized, or unsupported images become stable placeholders, and copied transcript text contains semantic image labels rather than bytes or cache paths.
 
-Browser screenshot materialization already exists in Agent Zero Core: browser
-history metadata carries `Screenshot: img://<path>&t=...` plus
-`browser_snapshot`. The separate Core deployment boundary is the builtin
-`_a0_connector` WebSocket user-message handler correction that records sanitized
-uploaded filenames on the user log, matching the HTTP message path so live and
-replayed user attachments retain resolvable metadata. Updating this CLI does not
-deploy that Core correction.
+Browser screenshot materialization already exists in Agent Zero Core: browser history metadata carries `Screenshot: img://<path>&t=...` plus `browser_snapshot`. The separate Core deployment boundary is the builtin `_a0_connector` WebSocket user-message handler correction that records sanitized uploaded filenames on the user log, matching the HTTP message path so live and replayed user attachments retain resolvable metadata. Updating this CLI does not deploy that Core correction.
 
 ## Host browser operations
 
-Host browser mode keeps the public agent API as Agent Zero's existing
-`browser` tool. The Browser plugin decides whether a call uses the container
-Patchright runtime or emits `connector_browser_op` to the subscribed CLI:
+Host browser mode keeps the public agent API as Agent Zero's existing `browser` tool. The Browser plugin decides whether a call uses the container Patchright runtime or emits `connector_browser_op` to the subscribed CLI:
 
 ```json
 {
@@ -198,12 +151,7 @@ The CLI returns:
 }
 ```
 
-Screenshots are transferred as artifact payloads rather than inline tool
-output. The CLI sends base64 bytes in `result.artifact`; explicit `path`
-requests remain user-owned host artifacts. The verified Core connector runtime
-materializes the default host artifact and records browser history metadata as
-`Screenshot: img://<path>&t=...` together with `browser_snapshot`; it is not an
-ephemeral-registry-only architecture.
+Screenshots are transferred as artifact payloads rather than inline tool output. The CLI sends base64 bytes in `result.artifact`; explicit `path` requests remain user-owned host artifacts. The verified Core connector runtime materializes the default host artifact and records browser history metadata as `Screenshot: img://<path>&t=...` together with `browser_snapshot`; it is not an ephemeral-registry-only architecture.
 
 `connector_hello.host_browser` advertises:
 - `supported`, `enabled`, and `status`
@@ -215,55 +163,15 @@ ephemeral-registry-only architecture.
 - `features`
 - `support_reason`
 
-The CLI detects installed Chromium-family browsers and profile roots per OS, but
-it never silently seizes a locked profile. If a browser is already using the
-selected profile, operations fail with `HOST_BROWSER_RELAUNCH_REQUIRED` until
-the user explicitly closes that browser. When Browser settings request host
-mode, Agent Zero may send an idempotent `ensure` browser operation before the
-first user-facing browser action; the CLI then enables host browser control and
-launches the selected profile when it is not locked. `/browser host on` and
-`/browser relaunch` remain manual diagnostics rather than required happy-path
-steps; `/browser list` shows advertised targets, while `/browser auto`,
-`/browser <number>`, `/browser <id>`, and `/browser ws://...` sync the selected
-target to the current Agent Zero project.
+The CLI detects installed Chromium-family browsers and profile roots per OS, but it never silently seizes a locked profile. If a browser is already using the selected profile, operations fail with `HOST_BROWSER_RELAUNCH_REQUIRED` until the user explicitly closes that browser. When Browser settings request host mode, Agent Zero may send an idempotent `ensure` browser operation before the first user-facing browser action; the CLI then enables host browser control and launches the selected profile when it is not locked. `/browser host on` and `/browser relaunch` remain manual diagnostics rather than required happy-path steps; `/browser list` shows advertised targets, while `/browser auto`, `/browser <number>`, `/browser <id>`, and `/browser ws://...` sync the selected target to the current Agent Zero project.
 
-Chrome 136+ does not allow `--remote-debugging-port` or
-`--remote-debugging-pipe` against the default personal Chrome data directory.
-For those browsers, the CLI advertises an A0-controlled local profile such as
-`chrome-a0 Default` under the user's data directory. Cookies and site data stay
-inside that separate browser profile on the host; A0 does not copy them out.
+Chrome 136+ does not allow `--remote-debugging-port` or `--remote-debugging-pipe` against the default personal Chrome data directory. For those browsers, the CLI advertises an A0-controlled local profile such as `chrome-a0 Default` under the user's data directory. Cookies and site data stay inside that separate browser profile on the host; A0 does not copy them out.
 
-When the browser itself exposes a user-authorized debugging server, the CLI
-prefers that explicit consent path. The user opens the browser's Remote
-debugging page, such as `chrome://inspect/#remote-debugging` or
-`opera://inspect/#remote-debugging`, and allows remote debugging for the current
-browser instance. The browser writes `DevToolsActivePort` in its user data
-directory; the CLI reads that file, advertises a `*-cdp` profile, and uses a
-built-in DevTools Protocol WebSocket helper. Discovery never opens a probe
-connection, so status/profile checks do not trigger extra browser **Allow**
-prompts. The first real Browser operation opens one long-lived connection for
-that chat. A0 disconnect does not close the user's browser tabs; explicit
-Browser close actions still act on tabs the agent can see.
+When the browser itself exposes a user-authorized debugging server, the CLI prefers that explicit consent path. The user opens the browser's Remote debugging page, such as `chrome://inspect/#remote-debugging` or `opera://inspect/#remote-debugging`, and allows remote debugging for the current browser instance. The browser writes `DevToolsActivePort` in its user data directory; the CLI reads that file, advertises a `*-cdp` profile, and uses a built-in DevTools Protocol WebSocket helper. Discovery never opens a probe connection, so status/profile checks do not trigger extra browser **Allow** prompts. The first real Browser operation opens one long-lived connection for that chat. A0 disconnect does not close the user's browser tabs; explicit Browser close actions still act on tabs the agent can see.
 
-Explicit selections accept `host:port`, HTTP(S) CDP discovery addresses, and
-full DevTools WebSocket URLs. The connector resolves discovery addresses via
-`/json/version` on the host before opening the WebSocket, so Agent Zero Core
-does not need direct network access to the host browser.
+Explicit selections accept `host:port`, HTTP(S) CDP discovery addresses, and full DevTools WebSocket URLs. The connector resolves discovery addresses via `/json/version` on the host before opening the WebSocket, so Agent Zero Core does not need direct network access to the host browser.
 
-The local-profile launch path uses the Python Playwright client installed as a
-normal A0 CLI runtime dependency. It does not install a separate Chromium
-binary. The Patchright runtime under the Agent Zero Docker container,
-including `/a0/tmp/playwright`, powers the container browser backend and cannot
-control a host Chromium-family profile from inside Docker. User-authorized
-remote debugging does not require the Chrome DevTools MCP package or Playwright
-CDP attach; the connector carries the small CDP helper directly. If an older or
-damaged A0 installation is missing the host Python dependency, Launcher Browser
-setup, `/browser host on`, `/browser relaunch`, and `/browser repair` run the
-same repair with `uv pip install --python <a0-python> playwright` when uv is
-available. Manual/non-uv installs fall back to `python -m pip install
-playwright`, bootstrapping `pip` with `ensurepip` if the interpreter supports it.
-This matters for uv-managed tool environments, which may not include a `pip`
-module inside the tool Python.
+The local-profile launch path uses the Python Playwright client installed as a normal A0 CLI runtime dependency. It does not install a separate Chromium binary. The Patchright runtime under the Agent Zero Docker container, including `/a0/tmp/playwright`, powers the container browser backend and cannot control a host Chromium-family profile from inside Docker. User-authorized remote debugging does not require the Chrome DevTools MCP package or Playwright CDP attach; the connector carries the small CDP helper directly. If an older or damaged A0 installation is missing the host Python dependency, Launcher Browser setup, `/browser host on`, `/browser relaunch`, and `/browser repair` run the same repair with `uv pip install --python <a0-python> playwright` when uv is available. Manual/non-uv installs fall back to `python -m pip install playwright`, bootstrapping `pip` with `ensurepip` if the interpreter supports it. This matters for uv-managed tool environments, which may not include a `pip` module inside the tool Python.
 
 ## Event bridge
 
@@ -343,22 +251,15 @@ Supported runtimes:
 - `reset`
 - `input`
 
-`terminal`, `python`, and `nodejs` payloads may include `reset: true`. The CLI
-must terminate the existing session process tree before running the replacement
-command, so stuck child processes cannot keep the session or CLI shutdown path
-blocked.
+`terminal`, `python`, and `nodejs` payloads may include `reset: true`. The CLI must terminate the existing session process tree before running the replacement command, so stuck child processes cannot keep the session or CLI shutdown path blocked.
 
-Execution payloads may include a `timeouts` object with the same keys used by
-Agent Zero's `_code_execution` plugin settings:
+Execution payloads may include a `timeouts` object with the same keys used by Agent Zero's `_code_execution` plugin settings:
 - `first_output_timeout`
 - `between_output_timeout`
 - `max_exec_timeout`
 - `dialog_timeout`
 
-The backend selects `code_exec_timeouts` for `terminal`, `python`, `nodejs`, and
-`input`, and `output_timeouts` for `output`. The CLI merges operation-level
-timeouts over its latest `connector_hello.exec_config` values before monitoring
-the local shell.
+The backend selects `code_exec_timeouts` for `terminal`, `python`, `nodejs`, and `input`, and `output_timeouts` for `output`. The CLI merges operation-level timeouts over its latest `connector_hello.exec_config` values before monitoring the local shell.
 
 `connector_hello` includes `exec_config` with:
 - `code_exec_timeouts`

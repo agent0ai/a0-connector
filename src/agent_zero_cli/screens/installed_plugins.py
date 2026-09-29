@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from rich.text import Text
@@ -12,11 +11,10 @@ from textual.containers import Center, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, ListItem, ListView, Static
 
+from agent_zero_cli.text_utils import clip_text, coerce_bool, collapse_whitespace, safe_id_fragment
+
 
 PluginToggleCallback = Callable[["InstalledPluginEntry", bool], Awaitable[Sequence[Mapping[str, Any]]]]
-
-_WHITESPACE_RE = re.compile(r"\s+")
-_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 @dataclass(frozen=True)
@@ -48,44 +46,28 @@ class InstalledPluginEntry:
         ).casefold()
 
 
-def _clean_text(value: object) -> str:
-    return _WHITESPACE_RE.sub(" ", str(value or "")).strip()
-
-
-def _coerce_bool(value: object, *, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on", "enabled"}:
-            return True
-        if normalized in {"0", "false", "no", "off", "disabled"}:
-            return False
-    return default
-
-
 def coerce_installed_plugin(value: Mapping[str, Any]) -> InstalledPluginEntry:
-    name = _clean_text(value.get("name"))
-    display_name = _clean_text(value.get("display_name") or value.get("title")) or name
-    toggle_state = _clean_text(value.get("toggle_state")).lower()
-    always_enabled = _coerce_bool(value.get("always_enabled"))
-    enabled = _coerce_bool(
+    name = collapse_whitespace(value.get("name"))
+    display_name = collapse_whitespace(value.get("display_name") or value.get("title")) or name
+    toggle_state = collapse_whitespace(value.get("toggle_state")).lower()
+    always_enabled = coerce_bool(value.get("always_enabled"))
+    enabled = coerce_bool(
         value.get("enabled"),
         default=always_enabled or toggle_state == "enabled",
     )
-    protected_reason = _clean_text(value.get("protected_reason"))
-    toggleable = _coerce_bool(value.get("toggleable"), default=not always_enabled)
+    protected_reason = collapse_whitespace(value.get("protected_reason"))
+    toggleable = coerce_bool(value.get("toggleable"), default=not always_enabled)
     if protected_reason:
         toggleable = False
-    source = _clean_text(value.get("source"))
+    source = collapse_whitespace(value.get("source"))
     if not source:
-        source = "custom" if _coerce_bool(value.get("is_custom")) else "builtin"
+        source = "custom" if coerce_bool(value.get("is_custom")) else "builtin"
 
     return InstalledPluginEntry(
         name=name,
         display_name=display_name,
-        description=_clean_text(value.get("description")),
-        version=_clean_text(value.get("version")),
+        description=collapse_whitespace(value.get("description")),
+        version=collapse_whitespace(value.get("version")),
         source=source.title(),
         enabled=enabled,
         toggleable=toggleable,
@@ -95,7 +77,7 @@ def coerce_installed_plugin(value: Mapping[str, Any]) -> InstalledPluginEntry:
 
 
 def coerce_installed_plugins(values: Sequence[Mapping[str, Any]]) -> tuple[InstalledPluginEntry, ...]:
-    entries = [coerce_installed_plugin(value) for value in values if _clean_text(value.get("name"))]
+    entries = [coerce_installed_plugin(value) for value in values if collapse_whitespace(value.get("name"))]
     return tuple(
         sorted(
             entries,
@@ -109,14 +91,8 @@ def coerce_installed_plugins(values: Sequence[Mapping[str, Any]]) -> tuple[Insta
 
 
 def _item_id(entry: InstalledPluginEntry, index: int) -> str:
-    safe_name = _ID_SAFE_RE.sub("-", entry.name).strip("-") or str(index)
+    safe_name = safe_id_fragment(entry.name) or str(index)
     return f"installed-plugin-{index}-{safe_name}"
-
-
-def _clip(value: str, limit: int) -> str:
-    if len(value) <= limit:
-        return value
-    return f"{value[: max(0, limit - 1)].rstrip()}..."
 
 
 class InstalledPluginRow(ListItem):
@@ -131,7 +107,7 @@ class InstalledPluginRow(ListItem):
         state = "Enabled" if self.entry.enabled else "Disabled"
         source = self.entry.source or "Builtin"
         version = f" v{self.entry.version}" if self.entry.version else ""
-        description = _clip(self.entry.description or self.entry.protected_reason, 76)
+        description = clip_text(self.entry.description or self.entry.protected_reason, 76)
         action = "Space to disable" if self.entry.enabled else "Space to enable"
         if not self.entry.toggleable:
             action = "Protected"

@@ -16,6 +16,7 @@ from rich.padding import Padding
 from rich.text import Text
 
 from agent_zero_cli.icon_text import normalize_icon_text, strip_icon_markers
+from agent_zero_cli.text_utils import coerce_bool
 
 if TYPE_CHECKING:
     from agent_zero_cli.widgets.chat_log import ChatLog
@@ -73,7 +74,6 @@ _OSC_CWD_PREFIX_RE = re.compile(
 _PROMPT_LINE_RE = re.compile(
     r"^\s*(?:\([^)\n]+\)\s*)?(?:[\w.-]+@[\w.-]+:)?[/~.\w-]*[#$]\s*$"
 )
-_TERMINAL_NOTIFY_DISABLED = frozenset({"0", "false", "no", "off"})
 
 
 def completion_notification_sequence(
@@ -84,7 +84,7 @@ def completion_notification_sequence(
     """Build the terminal-native Agent Zero completion notification."""
     environment = os.environ if environ is None else environ
     notify_setting = str(environment.get("A0_TERMINAL_NOTIFY", "")).strip().casefold()
-    if not is_tty or notify_setting in _TERMINAL_NOTIFY_DISABLED:
+    if not is_tty or (notify_setting and not coerce_bool(notify_setting, default=True)):
         return ""
 
     if environment.get("KITTY_WINDOW_ID"):
@@ -284,7 +284,7 @@ def render_connector_event(
     prepend: bool = False,
 ) -> bool:
     """Render a connector event to the chat log.
-    
+
     Returns:
         bool: True if a static block was rendered, False otherwise.
     """

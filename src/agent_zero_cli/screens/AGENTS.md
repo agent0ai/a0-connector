@@ -17,10 +17,8 @@
 - When refreshing `Select` state programmatically, update cached selection inside the suppression window to prevent render loops.
 - Result dataclasses should remain stable and easy for tests to assert.
 - `ModelPresetsScreen` shows Main, Utility, and Embedding model details and describes clearing a chat override as using the concrete preset from settings.
-- `ProfileEditorScreen` returns only Easy-mode title, instructions, and selected
-  tool IDs; profile validation and persistence remain in Agent Zero Core.
-- `PermissionsScreen` returns sparse Tool/MCP and Skill policy intent; Core's
-  Agent Editor remains the persistence and runtime-policy owner.
+- `ProfileEditorScreen` returns only Easy-mode title, instructions, and selected tool IDs; profile validation and persistence remain in Agent Zero Core.
+- `PermissionsScreen` returns sparse Tool/MCP and Skill policy intent; Core's Agent Editor remains the persistence and runtime-policy owner.
 
 ## Work Guidance
 
@@ -33,3 +31,5 @@
 - `./.venv/bin/python -m pytest tests/test_model_presets.py tests/test_installed_plugins_screen.py tests/test_app.py -v`
 
 ## Child DOX Index
+
+No child DOX files.

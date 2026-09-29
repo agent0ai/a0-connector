@@ -18,6 +18,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from agent_zero_cli.text_utils import coerce_bool
+
 _ANSI_ESCAPE_RE = re.compile(
     r"\x1B(?:"
     r"\][^\x07\x1B]*(?:\x07|\x1B\\|$)"
@@ -147,16 +149,6 @@ def _merge_timeout_group(defaults: dict[str, int], raw: Any) -> dict[str, int]:
         except (TypeError, ValueError):
             continue
     return result
-
-
-def _coerce_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return False
 
 
 def _default_exec_config() -> _ExecConfig:
@@ -618,8 +610,8 @@ class RemoteExecManager:
                 "ok": False,
                 "error": "session must be an integer",
             }
-        reset_requested = _coerce_bool(data.get("reset"))
-        allow_running = _coerce_bool(data.get("allow_running"))
+        reset_requested = coerce_bool(data.get("reset"))
+        allow_running = coerce_bool(data.get("allow_running"))
 
         try:
             if runtime == "terminal":

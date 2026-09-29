@@ -14,6 +14,8 @@ from typing import Callable, Mapping
 from urllib.parse import quote, urlparse
 from urllib.request import Request, url2pathname, urlopen
 
+from agent_zero_cli.text_utils import coerce_bool
+
 
 PACKAGE_NAME = "a0"
 GITHUB_REPOSITORY = "agent0ai/a0-connector"
@@ -28,8 +30,6 @@ RUNTIME_CONSTRAINTS_PATH = "constraints/a0-runtime.txt"
 BUILD_CONSTRAINTS_PATH = "constraints/a0-build.txt"
 DEFAULT_PYTHON_SPEC = "3.12"
 _GITHUB_API_TIMEOUT = 10.0
-_DISABLED_ENV_VALUES = frozenset({"0", "false", "no", "off", "disabled"})
-_ENABLED_ENV_VALUES = frozenset({"1", "true", "yes", "on", "enabled"})
 _VERSION_PATTERN = re.compile(r"^v?(?P<version>\d+(?:\.\d+)*)(?:[-+].*)?$", re.IGNORECASE)
 
 
@@ -156,7 +156,7 @@ def resolve_update_target(
             release_file_url_for_tag(release_tag, BUILD_CONSTRAINTS_PATH),
         )
 
-    if _env_enabled(source.get("A0_ALLOW_UNPINNED_UPDATE", "")):
+    if coerce_bool(source.get("A0_ALLOW_UNPINNED_UPDATE", "")):
         return UpdateTarget(package_spec, python_spec, None, None)
 
     raise LatestReleaseError(
@@ -168,11 +168,7 @@ def resolve_update_target(
 def update_check_enabled(env: Mapping[str, str] | None = None) -> bool:
     source = os.environ if env is None else env
     value = source.get("A0_UPDATE_CHECK", "").strip().lower()
-    return value not in _DISABLED_ENV_VALUES
-
-
-def _env_enabled(value: str) -> bool:
-    return value.strip().lower() in _ENABLED_ENV_VALUES
+    return not value or coerce_bool(value, default=True)
 
 
 def normalized_release_version(value: str) -> str:

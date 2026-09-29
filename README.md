@@ -31,51 +31,25 @@ irm https://raw.githubusercontent.com/agent0ai/a0-connector/main/install.ps1 | i
 a0
 ```
 
-Clipboard image paste works natively on macOS and Windows. Linux needs one
-small system clipboard helper: install `wl-clipboard` on Wayland or `xclip` on
-X11 (for Ubuntu, `sudo apt install wl-clipboard` or `sudo apt install xclip`).
+Clipboard image paste works natively on macOS and Windows. Linux needs one small system clipboard helper: install `wl-clipboard` on Wayland or `xclip` on X11 (for Ubuntu, `sudo apt install wl-clipboard` or `sudo apt install xclip`).
 
 ### Inline terminal images
 
-The interactive TUI renders eligible browser screenshots, user attachments,
-and assistant images beneath their owning transcript entry. Browser screenshots
-stay beneath the same Browser tool metadata that produced them; they do not add
-a second transcript event. Images open in the expanded complete-aspect view,
-up to 96 by 32 terminal cells. Select an image with click, `Enter`, or `Space`
-to collapse it to a 36-by-12-cell thumbnail or expand it again.
+The interactive TUI renders eligible browser screenshots, user attachments, and assistant images beneath their owning transcript entry. Browser screenshots stay beneath the same Browser tool metadata that produced them; they do not add a second transcript event. Images open in the expanded complete-aspect view, up to 96 by 32 terminal cells. Select an image with click, `Enter`, or `Space` to collapse it to a 36-by-12-cell thumbnail or expand it again.
 
-Set `A0_CLI_IMAGE_MODE` to `auto` (default), `tgp`, `sixel`, `halfcell`, or
-`off`. Keep `auto` for normal use: it combines terminal capability reporting,
-live protocol probes, and compatibility guards to choose native TGP or Sixel.
-Without a complete native protocol, it keeps the ordinary text transcript and
-does not add or fetch images. This is based on terminal capability, so Bash,
-Zsh, and PowerShell behave the same; the terminal hosting the shell decides.
-`halfcell` is an explicit low-resolution preview/debug mode, while `off` always
-keeps the pre-image transcript behavior. Apple Terminal and Warp therefore show
-no images automatically. A direct iTerm session can advertise Sixel and use the
-native raster renderer. Verify a capable terminal separately before treating
-forced TGP or Sixel as accepted.
+Set `A0_CLI_IMAGE_MODE` to `auto` (default), `tgp`, `sixel`, `halfcell`, or `off`. Keep `auto` for normal use: it combines terminal capability reporting, live protocol probes, and compatibility guards to choose native TGP or Sixel. Without a complete native protocol, it keeps the ordinary text transcript and does not add or fetch images. This is based on terminal capability, so Bash, Zsh, and PowerShell behave the same; the terminal hosting the shell decides. `halfcell` is an explicit low-resolution preview/debug mode, while `off` always keeps the pre-image transcript behavior. Apple Terminal and Warp therefore show no images automatically. A direct iTerm session can advertise Sixel and use the native raster renderer. Verify a capable terminal separately before treating forced TGP or Sixel as accepted.
 
 Computer-use backends are embedded in the `a0` wheel, so the CLI and local computer-use support install and update together. Linux host computer use uses the Wayland portal backend; X11/Xpra control belongs to Agent Zero's internal Docker Desktop tooling rather than the remote host connector.
 
 ## Manual install
 
-If you already use `uv`, the installer and update flow resolve the latest
-published GitHub release at runtime. They default to a managed CPython 3.12
-tool environment across macOS, Linux, and Windows, and install with the
-dependency locks committed to the same A0 release. `uv` can download the
-managed Python automatically without requiring `git` to be installed:
+If you already use `uv`, the installer and update flow resolve the latest published GitHub release at runtime. They default to a managed CPython 3.12 tool environment across macOS, Linux, and Windows, and install with the dependency locks committed to the same A0 release. `uv` can download the managed Python automatically without requiring `git` to be installed:
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/agent0ai/a0-connector/main/install.sh | sh
 ```
 
-Set `A0_PYTHON_SPEC` if you need to override that interpreter request. If you
-set `A0_PACKAGE_SPEC` for a custom package source, also set
-`A0_RUNTIME_CONSTRAINTS` and `A0_BUILD_CONSTRAINTS`; use
-`A0_ALLOW_UNPINNED_UPDATE=1` only for intentional development installs.
-Advanced one-off runs with `uvx` also work, but they are intentionally not the
-primary install path for this project.
+Set `A0_PYTHON_SPEC` if you need to override that interpreter request. If you set `A0_PACKAGE_SPEC` for a custom package source, also set `A0_RUNTIME_CONSTRAINTS` and `A0_BUILD_CONSTRAINTS`; use `A0_ALLOW_UNPINNED_UPDATE=1` only for intentional development installs. Advanced one-off runs with `uvx` also work, but they are intentionally not the primary install path for this project.
 
 ## Update
 
@@ -85,13 +59,7 @@ If you installed `a0` with the standard `uv tool` flow, update it in place with:
 a0 update
 ```
 
-By default `a0 update` resolves the latest published GitHub release at runtime,
-downloads that release's runtime and build constraints, and installs it into
-the managed CPython 3.12 tool runtime used by the installer. The updater
-upgrades A0 itself while keeping dependencies pinned to the tested release set.
-For advanced cases you can override the interpreter request with
-`A0_PYTHON_SPEC`, or provide `A0_PACKAGE_SPEC` together with
-`A0_RUNTIME_CONSTRAINTS` and `A0_BUILD_CONSTRAINTS`.
+By default `a0 update` resolves the latest published GitHub release at runtime, downloads that release's runtime and build constraints, and installs it into the managed CPython 3.12 tool runtime used by the installer. The updater upgrades A0 itself while keeping dependencies pinned to the tested release set. For advanced cases you can override the interpreter request with `A0_PYTHON_SPEC`, or provide `A0_PACKAGE_SPEC` together with `A0_RUNTIME_CONSTRAINTS` and `A0_BUILD_CONSTRAINTS`.
 
 `a0 update` requires `uv` to be available on your `PATH`.
 
@@ -135,31 +103,20 @@ a0 --host http://localhost:5080
 
 Use `a0 --no-auto-connect` to keep the picker open even when Docker finds exactly one local instance. Use `a0 --no-docker-discovery` to skip Docker inspection and open manual URL entry immediately, which is useful for remote hosts, HTTPS tunnels such as Cloudflare, or machines without Docker.
 
-You can optionally remember the chosen host from inside the app. Protected
-sessions may persist browser-style session cookies for that host so future CLI
-runs can reconnect; the CLI never stores usernames, passwords, or connector
-tokens.
+You can optionally remember the chosen host from inside the app. Protected sessions may persist browser-style session cookies for that host so future CLI runs can reconnect; the CLI never stores usernames, passwords, or connector tokens.
 
 ## Headless mode
 
-Use `a0 headless` when you need the connector without the full-screen Textual
-interface. It streams events over stdout and keeps remote file, remote exec,
-and workspace-tree publishing active for the subscribed chat.
+Use `a0 headless` when you need the connector without the full-screen Textual interface. It streams events over stdout and keeps remote file, remote exec, and workspace-tree publishing active for the subscribed chat.
 
 ```bash
 a0 headless --host http://localhost:32080
 echo "what is 2+2" | a0 headless --host http://localhost:32080 --print --output jsonl
 ```
 
-Headless host resolution uses `--host`, then saved/env config, then Docker
-single-instance discovery. Protected instances reuse a persisted web session,
-`A0_USERNAME`/`A0_PASSWORD`, or TTY prompts; non-TTY auth failures exit with
-code `2`. Headless and `a0 gateway` remain text/JSONL-only: they neither import
-terminal-image rendering nor emit terminal image-protocol bytes. See [Headless mode](https://github.com/agent0ai/a0-connector/blob/main/docs/headless.md).
+Headless host resolution uses `--host`, then saved/env config, then Docker single-instance discovery. Protected instances reuse a persisted web session, `A0_USERNAME`/`A0_PASSWORD`, or TTY prompts; non-TTY auth failures exit with code `2`. Headless and `a0 gateway` remain text/JSONL-only: they neither import terminal-image rendering nor emit terminal image-protocol bytes. See [Headless mode](https://github.com/agent0ai/a0-connector/blob/main/docs/headless.md).
 
-Active TUI and headless terminal sessions send one ready-for-input notification
-after each completed run. Set `A0_TERMINAL_NOTIFY=0` to disable it; headless
-notification bytes use terminal stderr and never contaminate stdout.
+Active TUI and headless terminal sessions send one ready-for-input notification after each completed run. Set `A0_TERMINAL_NOTIFY=0` to disable it; headless notification bytes use terminal stderr and never contaminate stdout.
 
 ## Usage
 
@@ -203,13 +160,11 @@ notification bytes use terminal stderr and never contaminate stdout.
 
 ### Agent profiles and permissions
 
-Run `/profile` to open the profile menu. It lists profiles available from Agent
-Zero and gives you **Create profile** and **Edit current profile** actions.
+Run `/profile` to open the profile menu. It lists profiles available from Agent Zero and gives you **Create profile** and **Edit current profile** actions.
 
 ![A0 CLI profile menu](docs/res/usage/agent-profiles/profile-menu.png)
 
-The interactive editor asks for the profile name and instructions, then lets
-you review tool access before saving.
+The interactive editor asks for the profile name and instructions, then lets you review tool access before saving.
 
 ![A0 CLI create-profile editor](docs/res/usage/agent-profiles/profile-editor.png)
 
@@ -220,34 +175,19 @@ You can also select or create directly from the composer:
 /profile "Source Scout" "Verify every important claim and cite the source."
 ```
 
-Use an unquoted name or profile ID when selecting an existing profile. Quick
-creation opens a fresh chat with the new profile activated.
+Use an unquoted name or profile ID when selecting an existing profile. Quick creation opens a fresh chat with the new profile activated.
 
 ![A0 CLI quick profile creation confirmation](docs/res/usage/agent-profiles/profile-created.png)
 
-Run `/permissions` to edit Tools, MCPs, and Skills for the current profile.
-Choose a tab, change the category default if needed, and use Space or Enter on
-an item to move through **Default**, **On**, and **Off**. Press `Ctrl+S` or select
-**Save** when finished.
+Run `/permissions` to edit Tools, MCPs, and Skills for the current profile. Choose a tab, change the category default if needed, and use Space or Enter on an item to move through **Default**, **On**, and **Off**. Press `Ctrl+S` or select **Save** when finished.
 
 ![A0 CLI permissions editor](docs/res/usage/agent-profiles/permissions.png)
 
-Both commands use the current chat's scope: a project chat edits that project;
-a chat with no project edits Global. A0 CLI intentionally does not duplicate
-the Web UI's scope selector, availability controls, duplicate/delete actions,
-or full Advanced prompt editor. Use **Manage agents** in Agent Zero for those.
+Both commands use the current chat's scope: a project chat edits that project; a chat with no project edits Global. A0 CLI intentionally does not duplicate the Web UI's scope selector, availability controls, duplicate/delete actions, or full Advanced prompt editor. Use **Manage agents** in Agent Zero for those.
 
-The full policy and manual-file reference is in the
-[Agent Profiles guide](https://github.com/agent0ai/agent-zero/blob/main/docs/guides/agent-profiles.md).
+The full policy and manual-file reference is in the [Agent Profiles guide](https://github.com/agent0ai/agent-zero/blob/main/docs/guides/agent-profiles.md).
 
-Computer Use may need platform approval before the CLI can capture or control
-the host desktop. `/computer-use on` enables the active backend; if the system
-portal does not appear immediately, ask Agent Zero to perform the desktop task
-and the portal will appear for that task. Launcher 1.4 and A0 CLI 2.6 add a
-staged macOS setup flow: enabling Computer Use requests Accessibility before
-Screen Recording, polls permission changes through fresh helpers, and resumes
-the initiating desktop operation after approval. Later launches preflight
-silently and surface an explicit retry or restart action if needed.
+Computer Use may need platform approval before the CLI can capture or control the host desktop. `/computer-use on` enables the active backend; if the system portal does not appear immediately, ask Agent Zero to perform the desktop task and the portal will appear for that task. Launcher 1.4 and A0 CLI 2.6 add a staged macOS setup flow: enabling Computer Use requests Accessibility before Screen Recording, polls permission changes through fresh helpers, and resumes the initiating desktop operation after approval. Later launches preflight silently and surface an explicit retry or restart action if needed.
 
 ### Skill shortcuts
 
@@ -276,10 +216,7 @@ Browser settings limit JavaScript `evaluate` to 30 seconds by default (0.1–60 
 
 For Chromium-family browsers, if the browser's Remote debugging page has been allowed, A0 reads the local `DevToolsActivePort` file and keeps one DevTools Protocol connection open for browser actions. Status checks and profile listing do not connect to either browser runtime, so they should not create repeated permission prompts.
 
-For a browser launched with an explicit debugging port, select its discovery
-address directly, for example `/browser localhost:9222`. A0 CLI resolves
-`/json/version` on the host; full `ws://` or `wss://` DevTools endpoints remain
-supported.
+For a browser launched with an explicit debugging port, select its discovery address directly, for example `/browser localhost:9222`. A0 CLI resolves `/json/version` on the host; full `ws://` or `wss://` DevTools endpoints remain supported.
 
 If the selected profile must be launched by A0 and is already locked by a normal browser window, A0 reports `relaunch_required`; close that browser and retry the agent request or run `/browser relaunch` manually. This launch path uses the Python Playwright client installed with A0 CLI against an installed Chromium-family executable.
 

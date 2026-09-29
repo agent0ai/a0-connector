@@ -6,16 +6,27 @@ from pathlib import Path
 from time import monotonic
 from typing import Any, Callable, Protocol
 
-from agent_zero_cli.client import A0Client, A0ConnectorPluginMissingError, DEFAULT_HOST
+from agent_zero_cli.client import (
+    A0Client,
+    A0ConnectorPluginMissingError,
+    normalize_host,
+    RECOVERY_DELAYS_SECONDS,
+)
 from agent_zero_cli.config import CLIConfig, save_last_context
 from agent_zero_cli.computer_use import ComputerUseManager
 from agent_zero_cli.host_browser_manager import HostBrowserManager
-from agent_zero_cli.protocol import connector_version_warning, validate_capabilities
+from agent_zero_cli.protocol import (
+    connector_version_warning,
+    context_has_messages,
+    context_identifier,
+    validate_capabilities,
+)
 from agent_zero_cli.remote_exec import RemoteExecManager
 from agent_zero_cli.remote_files import RemoteFileUtility
 
 _REMOTE_TREE_KEEPALIVE_SECONDS = 60.0
-_RECOVERY_DELAYS_SECONDS = (1.0, 2.0, 5.0, 10.0, 20.0)
+# Module alias kept for tests that patch the bounded retry ramp per session.
+_RECOVERY_DELAYS_SECONDS = RECOVERY_DELAYS_SECONDS
 
 
 class SessionObserver(Protocol):
@@ -66,16 +77,17 @@ class SessionError(RuntimeError):
 ClientFactory = Callable[[str], A0Client]
 
 
-def normalize_host(host: str) -> str:
-    return str(host or "").strip() or DEFAULT_HOST
-
-
-def _chat_identifier(chat: dict[str, Any]) -> str:
-    return str(chat.get("id") or chat.get("context_id") or chat.get("ctxid") or "").strip()
-
-
-def _chat_has_messages(chat: dict[str, Any]) -> bool:
-    return bool(chat.get("last_message") or chat.get("log_entries"))
+def queue_selector_to_item_id(queue: list[dict[str, Any]], selector: str) -> str:
+    """Resolve a `/queue remove` selector to a queued item id."""
+    value = selector.strip()
+    if not value:
+        return ""
+    if value.isdigit():
+        index = int(value) - 1
+        if 0 <= index < len(queue):
+            return str(queue[index].get("id", "") or "")
+        return ""
+    return value
 
 
 def _unsupported_result(data: dict[str, Any], *, tool: str, code: str) -> dict[str, Any]:
@@ -619,11 +631,11 @@ class ConnectorSession:
             except Exception:
                 contexts = []
             selected = next(
-                (context for context in contexts if _chat_identifier(context) == saved_context_id),
+                (context for context in contexts if context_identifier(context) == saved_context_id),
                 None,
             )
             if selected is not None:
-                has_messages_hint = _chat_has_messages(selected)
+                has_messages_hint = context_has_messages(selected)
                 if not has_messages_hint:
                     has_messages_hint = await self._context_has_messages(saved_context_id)
                 return saved_context_id, has_messages_hint
@@ -637,7 +649,7 @@ class ConnectorSession:
             metadata = await self._require_client().get_chat(context_id)
         except Exception:
             return False
-        return _chat_has_messages(metadata)
+        return context_has_messages(metadata)
 
     def _wire_client_callbacks(self, client: A0Client) -> None:
         client.on_connect = self._handle_connect

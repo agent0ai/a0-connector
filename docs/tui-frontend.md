@@ -8,39 +8,15 @@ When you run the CLI inside Cursor or VS Code, it appears in the **integrated te
 
 The interactive TUI opens a long chat at its newest 100 log entries. Scroll to the top (or press `Home`) to load the next older page; the full transcript remains available without mounting it all at once.
 
-Clipboard images use Pillow's native reader on macOS and Windows. Linux uses
-`wl-paste` from `wl-clipboard` on Wayland or `xclip` on X11; the Unix installer
-prints the matching package commands when neither helper is available.
+Clipboard images use Pillow's native reader on macOS and Windows. Linux uses `wl-paste` from `wl-clipboard` on Wayland or `xclip` on X11; the Unix installer prints the matching package commands when neither helper is available.
 
 ## Inline transcript images
 
-The interactive transcript renders eligible images in place: Browser screenshots
-appear directly beneath their existing Browser tool metadata, user attachments
-under the user message, and assistant image metadata or Markdown under the
-assistant message. A browser screenshot does not create an extra log entry.
-Images open in the 96-by-32-cell expanded view. Click an image, or focus it and
-press `Enter` or `Space`, to collapse it to the 36-by-12-cell thumbnail or
-expand it again. Both preserve complete aspect ratio and retain their state
-through transcript updates and resize.
+The interactive transcript renders eligible images in place: Browser screenshots appear directly beneath their existing Browser tool metadata, user attachments under the user message, and assistant image metadata or Markdown under the assistant message. A browser screenshot does not create an extra log entry. Images open in the 96-by-32-cell expanded view. Click an image, or focus it and press `Enter` or `Space`, to collapse it to the 36-by-12-cell thumbnail or expand it again. Both preserve complete aspect ratio and retain their state through transcript updates and resize.
 
-The supported raster formats are PNG, JPEG, GIF (first frame), WebP, and BMP.
-SVG, unavailable, unsupported, invalid, unauthenticated, and over-limit sources
-display stable placeholders. Image loading is same-origin through the
-authenticated `/api/image_get` route; the UI never fetches arbitrary remote
-URLs. Its in-memory cache is bounded to 64 MiB. Up to four fetch/load tasks may
-run concurrently, but only one full-resolution decoder runs at a time and it
-downsamples before applying orientation and color conversion. Source limits are
-25 MiB encoded data and 32 megapixels decoded.
+The supported raster formats are PNG, JPEG, GIF (first frame), WebP, and BMP. SVG, unavailable, unsupported, invalid, unauthenticated, and over-limit sources display stable placeholders. Image loading is same-origin through the authenticated `/api/image_get` route; the UI never fetches arbitrary remote URLs. Its in-memory cache is bounded to 64 MiB. Up to four fetch/load tasks may run concurrently, but only one full-resolution decoder runs at a time and it downsamples before applying orientation and color conversion. Source limits are 25 MiB encoded data and 32 megapixels decoded.
 
-Rendering is selected with `A0_CLI_IMAGE_MODE=auto|tgp|sixel|halfcell|off`.
-Automatic selection prefers supported TGP or Sixel and otherwise omits image
-entries, preserving the pre-image transcript without fetching image bytes.
-Shell choice does not alter this: Bash, Zsh, and PowerShell depend on the native
-capability of their hosting terminal. `halfcell` is explicit only. The browser
-xterm.js preview and SVG snapshots force it for deterministic layout, not
-native-protocol cleanup acceptance. Apple Terminal and Warp stay image-free in
-automatic mode unless a complete compatible protocol path is available.
-Headless and gateway modes stay text/JSONL-only.
+Rendering is selected with `A0_CLI_IMAGE_MODE=auto|tgp|sixel|halfcell|off`. Automatic selection prefers supported TGP or Sixel and otherwise omits image entries, preserving the pre-image transcript without fetching image bytes. Shell choice does not alter this: Bash, Zsh, and PowerShell depend on the native capability of their hosting terminal. `halfcell` is explicit only. The browser xterm.js preview and SVG snapshots force it for deterministic layout, not native-protocol cleanup acceptance. Apple Terminal and Warp stay image-free in automatic mode unless a complete compatible protocol path is available. Headless and gateway modes stay text/JSONL-only.
 
 ## Chat Tab Shortcuts
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-import re
 from typing import Any, Mapping, Sequence
 
 from textual import events
@@ -12,8 +11,7 @@ from textual.containers import Center, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, ListItem, ListView, Static
 
-
-_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]+")
+from agent_zero_cli.text_utils import clip_text, safe_id_fragment
 
 
 @dataclass(frozen=True)
@@ -102,10 +100,6 @@ def _entry_state(policy: Mapping[str, Any], key: str) -> str:
     return "default"
 
 
-def _clip(value: str, limit: int = 84) -> str:
-    return value if len(value) <= limit else f"{value[: limit - 1].rstrip()}..."
-
-
 def _profile_label(state: Mapping[str, Any]) -> str:
     profile = state.get("profile") if isinstance(state.get("profile"), Mapping) else {}
     metadata = profile.get("metadata") if isinstance(profile.get("metadata"), Mapping) else {}
@@ -174,7 +168,7 @@ class PermissionRow(ListItem):
         if not self.entry.available:
             description = f"{description} · Unavailable" if description else "Unavailable · kept in settings"
         if description:
-            yield Static(_clip(description), classes="permission-description")
+            yield Static(clip_text(description, 84), classes="permission-description")
 
 
 class PermissionsScreen(ModalScreen[PermissionsResult | None]):
@@ -245,7 +239,7 @@ class PermissionsScreen(ModalScreen[PermissionsResult | None]):
         )
 
     def _row_id(self, entry: PermissionEntry, index: int) -> str:
-        safe = _ID_SAFE_RE.sub("-", entry.key).strip("-") or str(index)
+        safe = safe_id_fragment(entry.key) or str(index)
         return f"permission-{index}-{safe}"
 
     async def _rebuild_rows(self, *, preserve_key: str = "") -> None:

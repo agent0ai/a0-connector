@@ -7,6 +7,8 @@ from hashlib import sha256
 from typing import Literal, Mapping
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from agent_zero_cli.text_utils import as_mapping
+
 
 ImageOwner = Literal["browser", "user", "assistant"]
 ImageSource = Literal["agent_zero_path", "data_uri", "unavailable"]
@@ -52,8 +54,8 @@ def extract_image_references(
     perform network, filesystem, image-decoding, or UI work.
     """
 
-    data = _mapping(event.get("data"))
-    meta = _mapping(data.get("meta"))
+    data = as_mapping(event.get("data"))
+    meta = as_mapping(data.get("meta"))
     context_id = str(event.get("context_id", ""))
     sequence = event.get("sequence")
     if not isinstance(sequence, int) or isinstance(sequence, bool):
@@ -118,7 +120,7 @@ def _append_browser_snapshot_candidate(
     snapshot: object,
     base_url: str,
 ) -> None:
-    snapshot_data = _mapping(snapshot)
+    snapshot_data = as_mapping(snapshot)
     for key in ("uri", "a0_path", "path"):
         value = snapshot_data.get(key)
         if isinstance(value, str):
@@ -330,7 +332,3 @@ def _markdown_image_values(text: str) -> tuple[tuple[str, str], ...]:
         values.append((text[start + 2 : alt_end], text[alt_end + 2 : value_end]))
         cursor = value_end + 1
     return tuple(values)
-
-
-def _mapping(value: object) -> Mapping[str, object]:
-    return value if isinstance(value, Mapping) else {}

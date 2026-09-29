@@ -10,7 +10,8 @@ from textual.containers import Center, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import ListItem, ListView, Static
 
-_WHITESPACE_RE = re.compile(r"\s+")
+from agent_zero_cli.text_utils import collapse_whitespace
+
 _TOKEN_NAME_RE = re.compile(r"^[A-Za-z0-9]{6,16}$")
 _ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 
@@ -23,10 +24,6 @@ class ChatListEntry:
     preview: str = ""
 
 
-def _normalize_text(value: object) -> str:
-    return _WHITESPACE_RE.sub(" ", str(value or "")).strip()
-
-
 def _parse_timestamp(value: object) -> datetime | None:
     if isinstance(value, (int, float)):
         try:
@@ -34,7 +31,7 @@ def _parse_timestamp(value: object) -> datetime | None:
         except (OverflowError, OSError, ValueError):
             return None
 
-    raw = _normalize_text(value)
+    raw = collapse_whitespace(value)
     if not raw:
         return None
     try:
@@ -75,10 +72,10 @@ def _looks_generated_name(value: str) -> bool:
 
 
 def _normalize_preview(value: object, *, created_at: object = "") -> str:
-    preview = _normalize_text(value)
+    preview = collapse_whitespace(value)
     if not preview:
         return ""
-    if preview == _normalize_text(created_at):
+    if preview == collapse_whitespace(created_at):
         return ""
     if _ISO_TIMESTAMP_RE.match(preview):
         return ""
@@ -88,7 +85,7 @@ def _normalize_preview(value: object, *, created_at: object = "") -> str:
 
 
 def _format_webui_title(context: Mapping[str, object], index: int) -> str:
-    raw_name = _normalize_text(context.get("name"))
+    raw_name = collapse_whitespace(context.get("name"))
     if raw_name:
         return raw_name
 
@@ -103,8 +100,8 @@ def _format_webui_title(context: Mapping[str, object], index: int) -> str:
 
 
 def _build_entry(context: Mapping[str, object], index: int, *, now: datetime | None = None) -> ChatListEntry:
-    context_id = _normalize_text(context.get("id"))
-    raw_name = _normalize_text(context.get("name"))
+    context_id = collapse_whitespace(context.get("id"))
+    raw_name = collapse_whitespace(context.get("name"))
     created_at = context.get("created_at")
     updated_at = context.get("updated_at")
     preview = _normalize_preview(context.get("last_message"), created_at=created_at)

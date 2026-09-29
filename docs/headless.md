@@ -1,12 +1,8 @@
 # Headless Mode
 
-`a0 headless` runs the Agent Zero connector over plain stdin/stdout instead of
-the Textual TUI. It still connects through `_a0_connector`, subscribes to a
-chat, streams connector events, publishes the local workspace tree, and handles
-host-side remote file and remote exec operations while it is running.
+`a0 headless` runs the Agent Zero connector over plain stdin/stdout instead of the Textual TUI. It still connects through `_a0_connector`, subscribes to a chat, streams connector events, publishes the local workspace tree, and handles host-side remote file and remote exec operations while it is running.
 
-Use it for dumb terminals, SSH sessions, CI jobs, pipes, and automation that
-wants to drive Agent Zero over stdio.
+Use it for dumb terminals, SSH sessions, CI jobs, pipes, and automation that wants to drive Agent Zero over stdio.
 
 ## Quick Start
 
@@ -26,8 +22,7 @@ One-shot prompt from stdin with machine-readable output:
 echo "what is 2+2" | a0 headless --host http://localhost:32080 --print --output jsonl
 ```
 
-Use `--workspace` to choose the local root exposed to remote file and exec
-operations:
+Use `--workspace` to choose the local root exposed to remote file and exec operations:
 
 ```bash
 a0 headless --host http://localhost:32080 --workspace /home/eclypso/a0/a0-connector
@@ -41,11 +36,9 @@ Host resolution:
 2. `AGENT_ZERO_HOST` or saved `~/.agent-zero/.env`
 3. Docker discovery, only when exactly one local Agent Zero Web UI endpoint is found
 
-If Docker finds zero or multiple instances, headless exits with code `2` and
-asks for `--host`.
+If Docker finds zero or multiple instances, headless exits with code `2` and asks for `--host`.
 
-Protected Agent Zero instances use the same `/login` session as the TUI. The
-headless auth order is:
+Protected Agent Zero instances use the same `/login` session as the TUI. The headless auth order is:
 
 1. persisted session cookie for the host
 2. `A0_USERNAME` and `A0_PASSWORD`
@@ -54,17 +47,11 @@ headless auth order is:
 
 ## Output Modes
 
-`--output text` is the default. It prints assistant messages as plain text and
-status/tool activity as simple, append-only lines.
+`--output text` is the default. It prints assistant messages as plain text and status/tool activity as simple, append-only lines.
 
-`--output jsonl` prints one JSON object per line on stdout. Connector events
-use `{"type":"event", ...}` and runner lifecycle records include `ready`,
-`complete`, `notice`, and `error`. Prompts and human diagnostics do not corrupt
-JSONL stdout.
+`--output jsonl` prints one JSON object per line on stdout. Connector events use `{"type":"event", ...}` and runner lifecycle records include `ready`, `complete`, `notice`, and `error`. Prompts and human diagnostics do not corrupt JSONL stdout.
 
-When stderr is attached to a terminal, completion emits one terminal-native
-notification after final snapshot output has settled. It never writes the
-notification to stdout, and `A0_TERMINAL_NOTIFY=0` disables it.
+When stderr is attached to a terminal, completion emits one terminal-native notification after final snapshot output has settled. It never writes the notification to stdout, and `A0_TERMINAL_NOTIFY=0` disables it.
 
 ## Slash Commands
 
@@ -87,9 +74,7 @@ notification to stdout, and `A0_TERMINAL_NOTIFY=0` disables it.
 | `/clear` | Reset the current chat through `chat_reset` |
 | `/quit` / `/exit` | Shut down cleanly |
 
-TUI-only commands such as `/browser`, `/computer-use`, model pickers, plugin
-screens, and attachment helpers return a one-line unavailable message in
-headless mode.
+TUI-only commands such as `/browser`, `/computer-use`, model pickers, plugin screens, and attachment helpers return a one-line unavailable message in headless mode.
 
 ## Connector Duties
 
@@ -100,8 +85,7 @@ Headless mode advertises:
 - computer use: unsupported in headless mode
 - host browser: unsupported in headless mode
 
-If a server sends a browser or computer-use operation anyway, headless replies
-with a structured unsupported result so the server-side operation does not hang.
+If a server sends a browser or computer-use operation anyway, headless replies with a structured unsupported result so the server-side operation does not hang.
 
 ## Exit Codes
 
