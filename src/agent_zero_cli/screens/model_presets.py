@@ -12,6 +12,7 @@ from textual.widgets import Button, Select, Static
 from textual.widgets._select import SelectOverlay
 
 from agent_zero_cli.model_config import format_model_label, format_settings_preset_label
+from agent_zero_cli.text_utils import as_mapping, coerce_bool
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class ModelPresetChoice:
     main_model: str = ""
     utility_model: str = ""
     embedding_model: str = ""
+    vision_model: str = ""
 
 
 @dataclass(frozen=True)
@@ -29,7 +31,7 @@ class ModelPresetsResult:
     preset_name: str | None
 
 
-def _coerce_model_preset(value: object) -> ModelPresetChoice:
+def _coerce_model_preset(value: object, *, default_supports_vision: bool = True) -> ModelPresetChoice:
     if isinstance(value, ModelPresetChoice):
         return value
     if isinstance(value, str):
@@ -53,6 +55,15 @@ def _coerce_model_preset(value: object) -> ModelPresetChoice:
         )
         raw_utility_model = value.get("utility") or value.get("utility_model")
         raw_embedding_model = value.get("embedding") or value.get("embedding_model")
+        vision = as_mapping(value.get("vision") or value.get("vision_model"))
+        main_vision = coerce_bool(as_mapping(raw_main_model).get("vision"), default=default_supports_vision)
+        vision_label = (
+            "Main model (native vision)"
+            if main_vision and not coerce_bool(vision.get("override_main"))
+            else format_model_label(vision)
+            if vision.get("provider") and vision.get("name")
+            else "No sidecar configured"
+        )
         return ModelPresetChoice(
             name=raw_name,
             label=raw_label or raw_name or "Unnamed preset",
@@ -60,6 +71,7 @@ def _coerce_model_preset(value: object) -> ModelPresetChoice:
             main_model=format_model_label(raw_main_model),
             utility_model=format_model_label(raw_utility_model),
             embedding_model=format_model_label(raw_embedding_model),
+            vision_model=vision_label,
         )
     clean = str(value).strip()
     return ModelPresetChoice(
@@ -76,8 +88,13 @@ def _coerce_preset_list(
 ) -> tuple[ModelPresetChoice, ...]:
     items: list[ModelPresetChoice] = []
     seen: set[str] = set()
+    default_preset = next(
+        (item for item in presets or () if isinstance(item, Mapping) and item.get("name") == "Default"),
+        {},
+    )
+    default_supports_vision = coerce_bool(as_mapping(default_preset.get("chat")).get("vision"), default=True)
     for raw in presets or ():
-        preset = _coerce_model_preset(raw)
+        preset = _coerce_model_preset(raw, default_supports_vision=default_supports_vision)
         if not preset.name or preset.name in seen:
             continue
         seen.add(preset.name)
@@ -116,6 +133,9 @@ def _render_preset_details(preset: ModelPresetChoice) -> Text:
     details.append(preset.label or preset.name, style="bold")
     details.append("\nMain model:", style="dim")
     details.append(f" {preset.main_model or 'Connector default'}")
+    if preset.vision_model:
+        details.append("\nVision:", style="dim")
+        details.append(f" {preset.vision_model}")
     details.append("\nUtility model:", style="dim")
     details.append(f" {preset.utility_model or 'Connector default'}")
     details.append("\nEmbedding model:", style="dim")
@@ -127,7 +147,7 @@ def _render_preset_details(preset: ModelPresetChoice) -> Text:
 
 
 class ModelPresetsScreen(ModalScreen[ModelPresetsResult | None]):
-    """Select a model preset with visible main/utility/embedding details."""
+    """Select a model preset with Main, Vision, Utility, and Embedding details."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
@@ -165,7 +185,7 @@ class ModelPresetsScreen(ModalScreen[ModelPresetsResult | None]):
             with Vertical(id="model-presets-box"):
                 yield Static("Model Presets", id="model-presets-title")
                 yield Static(
-                    "Select a preset and inspect its Main, Utility, and Embedding models.",
+                    "Select a preset and inspect its Main, Vision, Utility, and Embedding models.",
                     id="model-presets-description",
                 )
                 yield Select(

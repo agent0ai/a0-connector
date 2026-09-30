@@ -4407,6 +4407,79 @@ async def test_model_runtime_main_change_preserves_other_models(
         assert saved_presets[0][0]["chat"] == default_chat
 
 
+@pytest.mark.parametrize("change", ["native", "sidecar", "clear"])
+async def test_model_runtime_persists_vision_settings_in_active_preset(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    from copy import deepcopy
+
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connected = True
+    dummy_app.connector_features = {"model_switcher"}
+    dummy_app._model_switch_allowed = True
+    presets = [
+        {"name": "Default", "chat": {"provider": "openai", "name": "main", "vision": False}},
+        {
+            "name": "Power",
+            "chat": {},
+            "vision": {"provider": "openai", "name": "old", "override_main": False, "timeout": 90, "kwargs": {"temperature": 0}},
+            "utility": {"provider": "openai", "name": "utility"},
+            "embedding": {"provider": "openai", "name": "embedding"},
+        },
+    ]
+    saved = []
+
+    async def get_state(context_id: str) -> dict:
+        return {
+            "allowed": True, "effective_preset": "Power", "presets": deepcopy(presets),
+            "main_model": {"provider": "openai", "name": "main"},
+            "utility_model": presets[1]["utility"],
+        }
+
+    async def edit(self: object, screen: object) -> ModelRuntimeResult:
+        assert screen._supports_vision is False
+        assert screen._vision_model == {"provider": "openai", "name": "old"}
+        return ModelRuntimeResult(
+            main_model=screen._main_model, utility_model=screen._utility_model,
+            main_changed=False, utility_changed=False,
+            main_vision=True if change == "native" else None,
+            vision_model=None if change == "native" else {} if change == "clear" else {
+                "provider": "openai", "name": "new", "override_main": True, "vision": True,
+            },
+        )
+
+    async def save(values: list) -> dict:
+        saved.extend(values)
+        return {"ok": True}
+
+    async def activate(context_id: str, name: str) -> dict:
+        assert (context_id, name) == ("ctx-1", "Power")
+        return await get_state(context_id)
+
+    async def refresh(**kwargs) -> None:
+        pass
+
+    monkeypatch.setattr(dummy_app.client, "get_model_switcher", get_state)
+    monkeypatch.setattr(dummy_app.client, "save_model_presets", save)
+    monkeypatch.setattr(dummy_app.client, "set_model_preset", activate)
+    monkeypatch.setattr(DummyAgentZeroCLI, "push_screen_wait", edit)
+    monkeypatch.setattr(dummy_app, "_refresh_token_usage", refresh)
+    await dummy_app._cmd_models()
+    assert saved[0] == presets[0]
+    assert saved[1]["utility"] == presets[1]["utility"]
+    assert saved[1]["embedding"] == presets[1]["embedding"]
+    if change == "native":
+        assert saved[1]["chat"]["vision"] is True
+        assert saved[1]["vision"] == presets[1]["vision"]
+    else:
+        assert saved[1]["chat"] == presets[1]["chat"]
+        assert saved[1]["vision"] == ({} if change == "clear" else {
+            **presets[1]["vision"], "name": "new", "override_main": True, "vision": True,
+        })
+
+
 async def test_chat_list_command_supports_project_filter_and_sort_flags(
     dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,

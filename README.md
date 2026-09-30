@@ -141,8 +141,8 @@ Active TUI and headless terminal sessions send one ready-for-input notification 
 | `/goal <objective>` / `/goal update <text>` / `/goal delete` | Set, update, or delete the active chat goal; setting or reactivating a terminal goal sends the objective to the agent |
 | `/nudge` | Nudge the current agent run |
 | `/pause` / `/resume` | Pause or resume the active agent run |
-| `/presets` | Pick a model preset |
-| `/models` | Edit Main and Utility models in the active preset |
+| `/presets` | Pick a model preset and inspect its vision routing |
+| `/models` | Edit Main, optional Vision sidecar, and Utility models in the active preset |
 | `/profile` / `/profile <agent>` / `/profile "<name>" "<instructions>"` | Select, create, or edit the current agent profile |
 | `/permissions` | Edit Tools, MCP, and Skill permissions for the current agent |
 | `/computer-use on` / `/computer-use off` | Advertise or disable local Computer Use from this CLI; enabling arms the platform permission flow when needed |

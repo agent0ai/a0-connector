@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Input, Select, Static
+from textual.widgets import Checkbox, Input, Select, Static
 
 from agent_zero_cli.model_config import apply_model_switcher_state
 from agent_zero_cli.screens.model_presets import (
@@ -16,6 +16,87 @@ from agent_zero_cli.widgets.model_switcher_bar import ModelSwitcherBar, _preset_
 
 
 pytestmark = pytest.mark.anyio
+
+
+@pytest.mark.parametrize("separate", [False, True], ids=["main-without-vision", "separate-vision"])
+async def test_vision_fields_follow_main_first_routing_and_preserve_hidden_values(separate: bool) -> None:
+    app = App()
+    results = []
+    screen = ModelRuntimeScreen(
+        main_model={"provider": "openai", "name": "main"},
+        utility_model={"provider": "openai", "name": "utility"},
+    )
+    async with app.run_test(size=(100, 65)) as pilot:
+        await app.push_screen(screen, results.append)
+        await pilot.pause()
+        supports = screen.query_one("#model-runtime-supports-vision", Checkbox)
+        override = screen.query_one("#model-runtime-separate-vision", Checkbox)
+        fields = screen.query_one("#model-runtime-vision-section")
+        assert supports.value and override.display and not override.value
+        assert not fields.display
+
+        if separate:
+            override.value = True
+        else:
+            supports.value = False
+        await pilot.pause()
+        assert fields.display
+        assert override.display == separate
+        screen.query_one("#model-runtime-vision-provider", Select).value = "openai"
+        screen.query_one("#model-runtime-vision-name", Input).value = "sidecar"
+
+        supports.value = True
+        override.value = False
+        await pilot.pause()
+        assert not fields.display
+        assert screen.query_one("#model-runtime-vision-name", Input).value == "sidecar"
+        supports.value = separate
+        override.value = separate
+        await pilot.pause()
+        screen.action_apply()
+        await pilot.pause()
+
+    assert results[0].main_vision == (None if separate else False)
+    assert results[0].vision_model == {
+        "provider": "openai", "name": "sidecar", "vision": True, "override_main": separate,
+    }
+    assert not results[0].main_changed and not results[0].utility_changed
+
+
+async def test_vision_editor_reopens_saved_settings_validates_and_clears_sidecar() -> None:
+    app = App()
+    results = []
+    screen = ModelRuntimeScreen(
+        main_model={"provider": "openai", "name": "main"},
+        supports_vision=False,
+        vision_model={"provider": "custom", "name": "sidecar", "override_main": False},
+    )
+    async with app.run_test(size=(100, 65)) as pilot:
+        await app.push_screen(screen, results.append)
+        await pilot.pause()
+        assert screen.query_one("#model-runtime-vision-section").display
+        assert not screen.query_one("#model-runtime-separate-vision").display
+        screen.query_one("#model-runtime-vision-name", Input).value = ""
+        screen.action_apply()
+        await pilot.pause()
+        assert not results
+        screen.query_one("#model-runtime-vision-provider", Select).value = Select.NULL
+        screen.action_apply()
+        await pilot.pause()
+    assert results[0].vision_model == {}
+
+
+@pytest.mark.parametrize(("native", "override", "expected"), [
+    (True, False, "Main model (native vision)"),
+    (False, False, "openai/sidecar"),
+    (True, True, "openai/sidecar"),
+])
+def test_preset_details_show_vision_routing(native: bool, override: bool, expected: str) -> None:
+    preset = _coerce_model_preset({
+        "name": "Power", "chat": {"provider": "openai", "name": "main", "vision": native},
+        "vision": {"provider": "openai", "name": "sidecar", "override_main": override},
+    })
+    assert f"Vision: {expected}" in _render_preset_details(preset).plain
 
 
 async def test_model_editor_provider_enter_selects_before_saving() -> None:

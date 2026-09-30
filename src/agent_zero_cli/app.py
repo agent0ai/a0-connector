@@ -510,14 +510,14 @@ class AgentZeroCLI(App):
             CommandSpec(
                 "/presets",
                 (),
-                "Open preset picker with Main, Utility, and Embedding model details.",
+                "Open preset picker with Main, Vision, Utility, and Embedding model details.",
                 lambda app: availability.model_presets_availability(app),
                 lambda app: app._cmd_model_presets(),
             ),
             CommandSpec(
                 "/models",
                 (),
-                "Open Main/Utility model runtime editor.",
+                "Edit Main, Vision sidecar, and Utility models in the active preset.",
                 lambda app: availability.model_runtime_availability(app),
                 lambda app: app._cmd_models(),
             ),

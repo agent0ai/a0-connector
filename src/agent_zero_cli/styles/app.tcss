@@ -299,7 +299,31 @@ ModelRuntimeScreen {
     border: none;
     background: transparent;
     padding: 1 2;
-    overflow-y: auto;
+}
+
+#model-runtime-fields {
+    height: 1fr;
+}
+
+#model-runtime-fields Checkbox {
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin-bottom: 1;
+}
+
+#model-runtime-fields Checkbox > .toggle--button {
+    color: #2a3a4a;
+    background: #2a3a4a;
+}
+
+#model-runtime-fields Checkbox.-on > .toggle--button {
+    color: #00b4ff;
+    text-style: bold;
+}
+
+#model-runtime-vision-description {
+    color: #9aa7b4;
 }
 
 #model-runtime-title {
