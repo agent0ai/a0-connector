@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Static
+from textual.widgets import Input, Select, Static
 
 from agent_zero_cli.model_config import apply_model_switcher_state
 from agent_zero_cli.screens.model_presets import (
@@ -11,10 +11,40 @@ from agent_zero_cli.screens.model_presets import (
     _coerce_model_preset,
     _render_preset_details,
 )
+from agent_zero_cli.screens.model_runtime import ModelRuntimeResult, ModelRuntimeScreen
 from agent_zero_cli.widgets.model_switcher_bar import ModelSwitcherBar, _preset_options
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_model_editor_provider_enter_selects_before_saving() -> None:
+    app = App()
+    results = []
+    screen = ModelRuntimeScreen(
+        preset_name="Power",
+        main_model={"provider": "openai", "name": "old", "api_base": "https://example.test/v1"},
+        utility_model={"provider": "openai", "name": "utility", "api_key": "existing-key"},
+        provider_options=[("OpenAI", "openai"), ("Anthropic", "anthropic")],
+    )
+    async with app.run_test(size=(100, 65)) as pilot:
+        await app.push_screen(screen, results.append)
+        await pilot.pause()
+        await pilot.press("space", "down", "enter")
+        await pilot.pause()
+        assert not results
+        assert screen.query_one("#model-runtime-main-provider", Select).value == "anthropic"
+        screen.query_one("#model-runtime-main-name", Input).value = "new"
+        screen.query_one("#model-runtime-main-base-url", Input).value = ""
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+    assert results == [ModelRuntimeResult(
+        main_model={"provider": "anthropic", "name": "new"},
+        utility_model={"provider": "openai", "name": "utility"},
+        main_changed=True,
+        utility_changed=False,
+    )]
 
 
 class ModelPresetsHarness(App[None]):

@@ -17,6 +17,7 @@
 - When refreshing `Select` state programmatically, update cached selection inside the suppression window to prevent render loops.
 - Result dataclasses should remain stable and easy for tests to assert.
 - `ModelPresetsScreen` shows Main, Utility, and Embedding model details and describes clearing a chat override as using the concrete preset from settings.
+- `ModelRuntimeScreen` identifies the preset being edited and explains that Apply persists it for all chats using it; its initial models must match the active model summary. Enter commits an expanded provider dropdown before it can apply the form. Credentials are not editable fields and must not count as model changes.
 - `ProfileEditorScreen` returns only Easy-mode title, instructions, and selected tool IDs; profile validation and persistence remain in Agent Zero Core.
 - `PermissionsScreen` returns sparse Tool/MCP and Skill policy intent; Core's Agent Editor remains the persistence and runtime-policy owner.
 

@@ -28,7 +28,7 @@ class ModelRuntimeResult:
 
 
 class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
-    """Edit the Main/Utility models in Agent Zero's Default preset."""
+    """Edit the Main/Utility models in the active Agent Zero preset."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
@@ -39,14 +39,18 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
     def __init__(
         self,
         *,
+        preset_name: str = "Default",
         main_model: Mapping[str, Any] | None = None,
         utility_model: Mapping[str, Any] | None = None,
         focus_target: str = "main",
         provider_options: Sequence[tuple[str, str]] | None = None,
     ) -> None:
         super().__init__()
+        self._preset_name = preset_name
         self._main_model = coerce_model_config(main_model)
         self._utility_model = coerce_model_config(utility_model)
+        self._main_model.pop("api_key", None)
+        self._utility_model.pop("api_key", None)
         self._focus_target = "utility" if focus_target == "utility" else "main"
         self._main_label = format_model_label(main_model)
         self._utility_label = format_model_label(utility_model)
@@ -93,9 +97,9 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="model-runtime-box"):
-            yield Static("Change Default LLMs", id="model-runtime-title")
+            yield Static(f"Edit preset: {self._preset_name}", id="model-runtime-title", markup=False)
             yield Static(
-                "Pick the provider and model for Agent Zero's Default preset. Configure API keys in Agent Zero.",
+                "Apply saves this preset for all chats using it. Configure API keys in Agent Zero.",
                 id="model-runtime-description",
             )
             yield from self._compose_section(
@@ -154,6 +158,11 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "apply" and any(select.expanded for select in self.query(Select)):
+            return False
+        return super().check_action(action, parameters)
 
     def action_apply(self) -> None:
         self._apply()
