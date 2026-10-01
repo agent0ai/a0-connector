@@ -11,8 +11,15 @@
 
 ## Local Contracts
 
+- `test_setup_verification.py`, `test_host_control.py` and `test_host_viewer.py`
+  cover explicit verification, held-state exclusion, owned-page cleanup and
+  takeover races without touching real host apps or persisting test pixels.
+
 - Async tests use pytest/anyio with asyncio-compatible fixtures; many files set `pytestmark = pytest.mark.anyio`.
 - Prefer `tmp_path`, `monkeypatch`, and local fake classes over real user config or live services.
+- Normalize macOS `ru_maxrss` bytes to KiB before cross-platform memory-budget
+  assertions; Linux already reports KiB. Keep fixture executable names distinct
+  from profile directories on case-insensitive filesystems.
 - `tests/test_app.py` fake widgets mirror the widget API used by `AgentZeroCLI`. When app code calls a new widget method, update the fake.
 - Image-rendering tests use `ImageRenderer.for_test()` or a fake renderer; they
   must not probe a developer terminal, import native terminal backends for
@@ -28,6 +35,10 @@
 ## Work Guidance
 
 - Add focused regression tests near the behavior changed.
+- `test_host_browser_connection.py` uses local WebSocket peers to verify idle
+  heartbeats, silent-peer detection, pending-command failure without replay,
+  exact-target recovery, and cancelled approval cleanup. Gateway session tests
+  cover extended recovery and explicit shutdown without releasing takeover holds.
 - Preview tests must assert forced half-cell mode and usable explicit widget
   construction, while native TGP/Sixel visual acceptance remains a separately
   recorded capable-terminal check.

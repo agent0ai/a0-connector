@@ -217,7 +217,8 @@ async def test_cdp_cancellation_clears_protocol_future_and_lock(during_send):
         if during_send:
             await asyncio.sleep(1)
 
-    connection._ws = SimpleNamespace(send_json=send_json)
+    connection._ws = SimpleNamespace(send_json=send_json, closed=False)
+    connection._reader_task = asyncio.create_task(asyncio.Event().wait())
     operation = asyncio.create_task(connection.command("Runtime.evaluate", {"expression": "1+1"}))
     await asyncio.wait_for(started.wait(), 1)
     operation.cancel()
@@ -225,3 +226,4 @@ async def test_cdp_cancellation_clears_protocol_future_and_lock(during_send):
         await asyncio.wait_for(operation, 1)
     assert not connection._pending
     assert not connection._send_lock.locked()
+    await connection.close()

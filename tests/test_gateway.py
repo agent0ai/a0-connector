@@ -136,6 +136,7 @@ class FakeSession:
     instances: list["FakeSession"] = []
 
     def __init__(self, config: CLIConfig, observer: Any, **kwargs: Any) -> None:
+        self.setup_verifications = {}
         self.config = config
         self.observer = observer
         self.kwargs = kwargs
@@ -241,7 +242,7 @@ async def test_gateway_jsonl_contract_and_environment_auth(
     assert session.gateway["scopes"]["files"] is False
     assert session.gateway["scopes"]["file_write"] is False
     assert session.gateway["scopes"]["code_execution"] is False
-    assert session.gateway["features"] == ["computer_use_setup_v1"]
+    assert session.gateway["features"] == ["computer_use_setup_v1", "host_setup_verify_v1"]
     assert session.closed is True
 
     records = [json.loads(line) for line in output.getvalue().splitlines()]

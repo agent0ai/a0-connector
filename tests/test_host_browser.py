@@ -795,6 +795,50 @@ async def test_cdp_connection_resolves_discovery_address(monkeypatch: pytest.Mon
     assert session.websocket_url == "ws://localhost:9222/devtools/Browser/OperaAbC"
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize('endpoint,status,expected', [
+    ('http://127.0.0.1:9222', 404, 'ws://127.0.0.1:9222/devtools/browser'),
+    ('https://localhost:9333', 404, 'wss://localhost:9333/devtools/browser'),
+    ('http://[::1]:9444/json/version', 404, 'ws://[::1]:9444/devtools/browser'),
+    ('http://localhost:9222', 403, None),
+    ('http://localhost:9222', 401, None),
+    ('http://localhost:9222', 500, None),
+    ('http://remote.example:9222', 404, None),
+])
+async def test_cdp_approval_server_fallback_is_local_and_404_only(monkeypatch, endpoint, status, expected):
+    from agent_zero_cli import host_browser_cdp as cdp
+    class Response:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): pass
+        def raise_for_status(self): raise RuntimeError(f'HTTP {status}')
+    response = Response()
+    response.status = status
+    class Socket:
+        def __aiter__(self): return self
+        async def __anext__(self): raise StopAsyncIteration
+        async def close(self): pass
+    class Session:
+        connected = None
+        closed = False
+        def get(self, url): return response
+        async def ws_connect(self, url, **kwargs):
+            self.connected = url
+            return Socket()
+        async def close(self): self.closed = True
+    session = Session()
+    monkeypatch.setattr(cdp.aiohttp, 'ClientSession', lambda **kwargs: session)
+    connection = cdp.CDPConnection(endpoint)
+    if expected:
+        await connection.connect()
+        assert session.connected == expected
+        await connection.close()
+    else:
+        with pytest.raises(RuntimeError, match=f'HTTP {status}'):
+            await connection.connect()
+        assert session.connected is None
+    assert session.closed
+
+
 def test_selected_profile_prefers_user_allowed_remote_debugging_over_a0_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -830,6 +874,24 @@ def test_selected_profile_prefers_user_allowed_remote_debugging_over_a0_profile(
 
     assert selected is not None
     assert selected.family == "chrome-cdp"
+
+
+@pytest.mark.parametrize('same_root,mode,restricted,use_remote', [
+    (True, 'existing', True, True),
+    (False, 'existing', True, False),
+    (True, 'agent', True, False),
+    (True, 'existing', False, False),
+])
+def test_personal_profile_reuses_only_its_own_approved_connection(monkeypatch, tmp_path, same_root, mode, restricted, use_remote):
+    personal = BrowserProfile('chrome', 'Chrome', '/bin/chrome', tmp_path / 'personal', 'Default', 'Default')
+    remote = BrowserProfile('chrome-cdp', 'Chrome remote', '',
+        personal.user_data_dir if same_root else tmp_path / 'different', '9222', 'Remote',
+        cdp_endpoint='ws://localhost:9222/devtools/browser/test')
+    manager = HostBrowserManager(CLIConfig(), candidate_provider=lambda: [])
+    monkeypatch.setattr(manager, 'available_profiles', lambda: [remote, personal])
+    monkeypatch.setattr(host_browser_manager_module, 'remote_debugging_restriction_reason', lambda profile: 'restricted' if restricted else '')
+    selected = manager.selected_profile(profile_mode=mode, browser_selection=personal.browser_id)
+    assert selected is (remote if use_remote else personal)
 
 
 def test_remote_debugging_profile_does_not_require_playwright(tmp_path: Path) -> None:
@@ -1378,7 +1440,7 @@ async def test_host_browser_rejects_oversized_screenshot_before_base64(
 ) -> None:
     root = tmp_path / "Chrome"
     (root / "Default").mkdir(parents=True)
-    executable = tmp_path / "chrome"
+    executable = tmp_path / "chrome-bin"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
     playwright = FakePlaywright()
     monkeypatch.setattr(host_browser_session_module, "_SCREENSHOT_ARTIFACT_MAX_BYTES", 4)
@@ -1515,6 +1577,10 @@ async def test_remote_debugging_session_attaches_without_closing_user_context(
     instances = []
 
     class FakeCDPConnection:
+        @property
+        def is_connected(self):
+            return not self.closed
+
         def __init__(self, endpoint: str) -> None:
             self.endpoint = endpoint
             self.closed = False
@@ -1634,6 +1700,10 @@ async def test_remote_debugging_connection_retries_changed_active_port(
     instances = []
 
     class RefreshingCDPConnection:
+        @property
+        def is_connected(self):
+            return not self.closed
+
         def __init__(self, endpoint: str) -> None:
             self.endpoint = endpoint
             self.closed = False
@@ -1691,6 +1761,10 @@ async def test_remote_debugging_session_opens_lists_and_reads_content(
     instances = []
 
     class FakeCDPConnection:
+        @property
+        def is_connected(self):
+            return not self.closed
+
         def __init__(self, endpoint: str) -> None:
             self.endpoint = endpoint
             self.closed = False

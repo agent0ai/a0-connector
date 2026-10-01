@@ -900,6 +900,15 @@ class HostBrowserManager:
     ) -> BrowserProfile | None:
         for profile in profiles:
             if self._profile_matches_browser_id(profile, selection):
+                if mode != "agent" and not profile.is_remote_debugging and remote_debugging_restriction_reason(profile):
+                    # The selected personal profile cannot be relaunched for
+                    # automation. Reuse only its own user-approved browser
+                    # connection; never switch to a different data directory.
+                    for remote in profiles:
+                        if (remote.is_remote_debugging
+                            and base_browser_family(remote.family) == base_browser_family(profile.family)
+                            and remote.user_data_dir == profile.user_data_dir):
+                            return remote
                 return profile
         for profile in profiles:
             if self._profile_matches_mode(profile, mode) and self._profile_matches_family(profile, selection):

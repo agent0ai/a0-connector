@@ -324,7 +324,7 @@ result = RemoteFileUtility(scan_root=sys.argv[2]).handle_file_op(
 )["result"]
 after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 print(json.dumps({
-    "delta_kib": after - before,
+    "delta_kib": (after - before) / (1024 if sys.platform == "darwin" else 1),
     "content_bytes": len(result["content"].encode("utf-8")),
     "total_lines": result["total_lines"],
     "truncated": result["truncated"],

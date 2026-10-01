@@ -120,6 +120,9 @@ class _PlaywrightRuntimeAdapter(_RuntimeAdapter):
 class _CDPRuntimeAdapter(_RuntimeAdapter):
     close_pages_on_session_close = False
 
+    async def is_started(self, session: "HostBrowserSession") -> bool:
+        return session.context is not None and session.browser is not None and session.browser.is_connected
+
     async def start(self, session: "HostBrowserSession") -> None:
         profile = _refreshed_remote_debugging_profile(session.profile)
         session.profile = profile
@@ -500,11 +503,18 @@ class HostBrowserSession:
             runtime = self._runtime
             if await self.is_started():
                 return
+            page_ids = {
+                item.page.target_id: item.id for item in self.pages.values()
+                if isinstance(item.page, CDPPage)
+            }
+            last_interacted = self.last_interacted_browser_id
             if self.context is not None:
                 await runtime.close_runtime(self)
-            await self._start()
+            await self._start(cdp_page_ids=page_ids)
+            if last_interacted in self.pages:
+                self.last_interacted_browser_id = last_interacted
 
-    async def _start(self) -> None:
+    async def _start(self, *, cdp_page_ids: dict[str, int] | None = None) -> None:
         lock = profile_lock_state_for_profile(self.profile)
         if lock.locked:
             raise ProfileLockedError(
@@ -532,9 +542,10 @@ class HostBrowserSession:
                 await self.context.add_init_script(script=self._content_helper_source)
 
         for page in list(getattr(self.context, "pages", []) or []):
-            if getattr(page, "url", "") == "about:blank":
+            previous_id = (cdp_page_ids or {}).get(page.target_id) if isinstance(page, CDPPage) else None
+            if getattr(page, "url", "") == "about:blank" and previous_id is None:
                 continue
-            await self._register_page(page)
+            await self._register_page(page, browser_id=previous_id)
 
     async def open(self, url: str = "") -> dict[str, Any]:
         await self.ensure_started()
@@ -1350,13 +1361,14 @@ class HostBrowserSession:
             "runtime": "host",
         }
 
-    async def _register_page(self, page: Any) -> HostBrowserPage:
+    async def _register_page(self, page: Any, *, browser_id: int | None = None) -> HostBrowserPage:
         async with self._registry_lock:
             existing = self._browser_id_for_page(page)
             if existing is not None:
                 return self.pages[existing]
-            browser_id = self.next_browser_id
-            self.next_browser_id += 1
+            if browser_id is None:
+                browser_id = self.next_browser_id
+                self.next_browser_id += 1
             browser_page = HostBrowserPage(id=browser_id, page=page)
             self.pages[browser_id] = browser_page
 

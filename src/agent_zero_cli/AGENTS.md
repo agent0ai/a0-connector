@@ -80,6 +80,29 @@
   and a repair attempt must run before reporting that no supported browser is
   installed.
 - Explicit host-browser endpoints may be `host:port`, HTTP(S) CDP discovery addresses, or full DevTools WebSocket URLs. Resolve discovery addresses through `/json/version` on the host, preserve WebSocket path/query case, and fail explicitly instead of selecting another browser.
+- Chrome approval-mode servers omit HTTP discovery. For an explicit loopback
+  HTTP(S) endpoint returning 404, connect to the same origin's
+  `/devtools/browser` WebSocket and retain native approval. Never use that
+  fallback for authentication errors, other HTTP failures, or remote hosts.
+- A selected personal profile blocked from Playwright launch may resolve to its
+  discovered approval connection only when browser family and data directory
+  both match. Separate A0 profiles and other browser directories remain explicit.
+- Browser setup verification has a 90-second bound so the 60-second native
+  approval handshake can finish before typing/capture. Computer verification
+  retains its 40-second bound; Launcher must allow the correlated result to finish.
+- Direct CDP connections use idle WebSocket heartbeats without a receive/idle
+  expiry. A closed socket or failed reader invalidates the runtime; the next
+  operation reconnects to the selected endpoint under the session start lock.
+  Retain browser IDs only for the same surviving CDP target, including blank
+  tabs; never reuse a vanished tab's ID, close personal tabs during reconnect,
+  or replay an interrupted input. Native browser approval still applies.
+  Bound CDP messages to 36 MiB so base64 for permitted 25 MiB captures fits;
+  retain the decoded screenshot limit and reject larger protocol messages.
+- Tools-only Launcher sessions keep retrying server transport recovery every
+  30 seconds after the initial backoff. Preserve browser sessions and takeover
+  holds through an outage; stop recovery on shutdown, emergency disconnect,
+  client/host replacement or context change. Interactive/headless sessions
+  retain their existing finite recovery policy.
 - WebSocket recovery in `connection.py` retries with the bounded `_RECOVERY_DELAYS_SECONDS` backoff and then keeps retrying on the steady `_RECOVERY_STEADY_DELAY_SECONDS` cadence indefinitely; after the initial ramp, Back and Try again remain available. A new connection, Back, or exit must cancel the prior recovery task before taking ownership. Recovery exits quietly when the active context changes and aborts when the client's `base_url` changes.
 - Host-browser discovery covers Safari on macOS through the system
   `safaridriver`, plus major Chromium-family browsers with CDP-compatible
@@ -224,6 +247,14 @@
 - Keep command names, footer shortcuts, slash commands, and README/docs in sync when user-facing behavior changes.
 
 ## Verification
+
+- `setup_verification.py` implements explicit `host_setup_verify_v1` gateway
+  checks. It uses the host-control gate, refuses held or active host work, and
+  never resumes A0. Browser tests type only in a newly created blank page, close
+  that page and return the prepared profile to the relaunch handoff slot.
+  Computer tests capture without sending input, then stop their private helper.
+  Correlated results contain evidence names and time, never pixels. Scope or
+  master changes and preparation invalidate in-memory verification metadata.
 
 - Broad CLI checks: `./.venv/bin/python -m pytest tests/test_app.py tests/test_client.py -v`.
 - Remote tools: `./.venv/bin/python -m pytest tests/test_remote_files.py tests/test_remote_exec.py -v`.

@@ -270,6 +270,15 @@ Happy path:
 
 When a subscribed CLI supports host-browser control, the first browser action can enable and prepare the local browser automatically. The CLI slash commands remain available for diagnostics and manual override.
 
+Existing Chromium connections stay open while idle and use a heartbeat to detect
+an unresponsive connection. The next browser action reconnects to the same
+selected browser when necessary; Chrome may ask you to approve again. Surviving
+tabs keep their identities, and interrupted clicks or typing are never replayed
+automatically. Launcher keeps retrying its Agent Zero connection through longer
+server or network outages until you disconnect or close it. Recovery does not
+release a human takeover hold. Quitting the browser, revoking access, or putting
+the computer to sleep can still interrupt availability.
+
 The CLI does not bundle a browser and it does not copy credentials, cookies, or profile data out of a browser profile. For Safari, A0 uses Apple's bundled `/usr/bin/safaridriver` and opens a Safari automation window for one Agent Zero browser context at a time. It never enables Safari's remote-automation setting silently. Safari WebDriver provides viewport screenshots; a full-page screenshot request fails explicitly.
 
 Browser settings limit JavaScript `evaluate` to 30 seconds by default (0.1–60 seconds). A timeout first interrupts execution in place, preserving the page and unsaved edits. Only unresolved async execution requires reloading the affected tab; that fallback preserves cookies and tab storage but loses unsaved page edits. The error reports any reload or fallback closure. Safari rejects `evaluate` because its backend cannot forcibly interrupt JavaScript. Updated Core requires a connector that advertises timeout support before sending a host evaluate script.

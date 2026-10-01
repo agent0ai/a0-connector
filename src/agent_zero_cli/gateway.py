@@ -25,7 +25,7 @@ from agent_zero_cli.session import ConnectorSession, SessionError
 
 
 _SCOPE_KEYS = ("files", "file_write", "code_execution", "browser", "computer_use")
-_GATEWAY_FEATURES = ("computer_use_setup_v1",)
+_GATEWAY_FEATURES = ("computer_use_setup_v1", "host_setup_verify_v1")
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9._:-]+")
 _TAG_RESULT_MAX_CHARS = 16384
 _TAG_CONTEXT_CHUNK_CHARS = 2048
@@ -379,6 +379,7 @@ class GatewayRunner:
                 result = session._gateway_metadata()
                 refresh_metadata = True
             elif action == "prepare_browser":
+                session.setup_verifications.pop("browser", None)
                 if self.host_browser is None:
                     raise RuntimeError("Browser access is unavailable")
                 refresh_metadata = True
@@ -387,12 +388,21 @@ class GatewayRunner:
                     browser_selection=self.options.browser_selection,
                 )
                 refresh_metadata = True
+            elif action == "verify_host_setup":
+                from .setup_verification import verify_connection
+                refresh_metadata = True
+                session.setup_verifications.pop(payload.get("capability"), None)
+                result = await verify_connection(session, payload.get("capability"), self.options.browser_selection)
+                session.setup_verifications[result["capability"]] = result
+                refresh_metadata = True
             elif action == "rearm_computer_use":
+                session.setup_verifications.pop("computer_use", None)
                 if self.computer_use is None:
                     raise RuntimeError("Computer Use is unavailable")
                 result = await self.computer_use.setup_permissions("launcher", prompt=True)
                 refresh_metadata = True
             elif action == "setup_computer_use":
+                session.setup_verifications.pop("computer_use", None)
                 if self.computer_use is None:
                     raise RuntimeError("Computer Use is unavailable")
                 result = await self.computer_use.setup_permissions(

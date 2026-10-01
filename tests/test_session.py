@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -448,6 +450,75 @@ async def test_tools_only_gateway_reconnects_without_context(
     assert client.subscribe_calls == []
     assert len(client.hello_calls) >= 3
     await session.close()
+
+
+async def test_gateway_recovers_after_initial_retry_budget_without_closing_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr('agent_zero_cli.session._RECOVERY_DELAYS_SECONDS', (0.0, 0.0))
+    monkeypatch.setattr('agent_zero_cli.session._RECOVERY_STEADY_DELAY_SECONDS', 0.0)
+    observer = Observer()
+    session = ConnectorSession(CLIConfig(), observer, workspace=tmp_path,
+        client_factory=GatewayFakeClient, tools_only=True,
+        gateway={'id': 'launcher-test', 'scopes': {'files': True}})
+    await session.connect('http://agent.test')
+    client = session.client
+    reconnect = client.connect_websocket
+    attempts = 0
+    async def flaky_connect():
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 6:
+            raise OSError('temporary outage')
+        await reconnect()
+    client.connect_websocket = flaky_connect
+    if session.host_browser is not None:
+        monkeypatch.setattr(session.host_browser, 'close', AsyncMock())
+    session.host_control.state['phase'] = 'held'
+    session._handle_disconnect()
+    await asyncio.wait_for(session._recovery_task, 2)
+    assert attempts == 7
+    assert session.connected
+    assert observer.disconnected == 0
+    assert client.subscribe_calls == []
+    assert client.create_calls == 0
+    assert session.host_control.snapshot()['phase'] == 'held'
+    if session.host_browser is not None:
+        session.host_browser.close.assert_not_awaited()
+    await session.close()
+
+
+@pytest.mark.parametrize('stop', ['close', 'emergency', 'host_change'])
+async def test_gateway_recovery_stops_when_ownership_ends(tmp_path, monkeypatch, stop):
+    monkeypatch.setattr('agent_zero_cli.session._RECOVERY_DELAYS_SECONDS', (0.0,))
+    monkeypatch.setattr('agent_zero_cli.session._RECOVERY_STEADY_DELAY_SECONDS', 0.0)
+    session = ConnectorSession(CLIConfig(), Observer(), workspace=tmp_path,
+        client_factory=GatewayFakeClient, tools_only=True,
+        gateway={'id': 'launcher-test', 'scopes': {}})
+    await session.connect('http://agent.test')
+    attempted = asyncio.Event()
+    release = asyncio.Event()
+    async def unavailable():
+        attempted.set()
+        await release.wait()
+        raise OSError('offline')
+    session.client.connect_websocket = AsyncMock(side_effect=unavailable)
+    client = session.client
+    session._handle_disconnect()
+    task = session._recovery_task
+    await asyncio.wait_for(attempted.wait(), 2)
+    if stop == 'close':
+        await session.close()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        if stop == 'emergency':
+            session._emergency_disconnected = True
+        else:
+            client.base_url = 'http://different.test'
+        release.set()
+        await asyncio.wait_for(task, 2)
+        await session.close()
+    assert client.connect_websocket.await_count == 1
+    assert not session.connected
 
 
 async def test_tools_only_gateway_requires_both_core_features(tmp_path: Path) -> None:

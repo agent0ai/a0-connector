@@ -16,6 +16,11 @@ from agent_zero_cli.host_browser_common import (
     REMOTE_DEBUGGING_CONNECT_TIMEOUT_SECONDS,
 )
 
+CDP_HEARTBEAT_SECONDS = 20.0
+# A permitted 25 MiB screenshot expands to ~34 MiB in a CDP base64 response.
+CDP_MAX_MESSAGE_BYTES = 36 * 1024 * 1024
+
+
 class CDPError(RuntimeError):
     pass
 
@@ -30,7 +35,17 @@ class CDPConnection:
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._send_lock = asyncio.Lock()
 
+    @property
+    def is_connected(self) -> bool:
+        return (
+            self._ws is not None
+            and not self._ws.closed
+            and self._reader_task is not None
+            and not self._reader_task.done()
+        )
+
     async def connect(self) -> None:
+        await self.close()
         timeout = aiohttp.ClientTimeout(total=REMOTE_DEBUGGING_CONNECT_TIMEOUT_SECONDS)
         self._session = aiohttp.ClientSession(timeout=timeout)
         try:
@@ -40,19 +55,31 @@ class CDPConnection:
                 path = parsed.path if parsed.path == "/json/version" else "/json/version"
                 version_url = urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
                 async with self._session.get(version_url) as response:
-                    response.raise_for_status()
-                    version = await response.json()
-                endpoint = str(version.get("webSocketDebuggerUrl") or "").strip()
+                    if getattr(response, "status", None) == 404 and parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+                        # Chrome's user-approved server deliberately omits HTTP
+                        # discovery. This WebSocket path still requires its
+                        # native approval; never fall back on auth failures.
+                        endpoint = urlunsplit(("wss" if parsed.scheme == "https" else "ws",
+                            parsed.netloc, "/devtools/browser", parsed.query, ""))
+                    else:
+                        response.raise_for_status()
+                        version = await response.json()
+                        endpoint = str(version.get("webSocketDebuggerUrl") or "").strip()
                 resolved = urlsplit(endpoint)
                 if resolved.scheme not in {"ws", "wss"} or not resolved.netloc or not resolved.path:
                     raise CDPError(f"{version_url} did not return webSocketDebuggerUrl.")
             self._ws = await self._session.ws_connect(
                 endpoint,
-                timeout=REMOTE_DEBUGGING_CONNECT_TIMEOUT_SECONDS,
+                timeout=(
+                    aiohttp.ClientWSTimeout(ws_close=5.0, ws_receive=None)
+                    if hasattr(aiohttp, "ClientWSTimeout") else 5.0
+                ),
                 autoclose=True,
                 autoping=True,
+                heartbeat=CDP_HEARTBEAT_SECONDS,
+                max_msg_size=CDP_MAX_MESSAGE_BYTES,
             )
-        except Exception:
+        except BaseException:
             await self.close()
             raise
         self._reader_task = asyncio.create_task(self._read_loop())
@@ -65,12 +92,14 @@ class CDPConnection:
         session_id: str | None = None,
         timeout: float = 30.0,
     ) -> dict[str, Any]:
-        if self._ws is None:
+        if not self.is_connected:
             raise CDPError("Chrome DevTools connection is not open.")
         msg_id = None
         future = None
         try:
             async with self._send_lock:
+                if not self.is_connected:
+                    raise CDPError("Chrome DevTools connection is not open.")
                 msg_id = self._next_id
                 self._next_id += 1
                 future = asyncio.get_running_loop().create_future()
@@ -114,22 +143,30 @@ class CDPConnection:
 
     async def _read_loop(self) -> None:
         assert self._ws is not None
-        async for message in self._ws:
-            if message.type == aiohttp.WSMsgType.TEXT:
-                try:
-                    payload = json.loads(message.data)
-                except Exception:
-                    continue
-                msg_id = payload.get("id")
-                if isinstance(msg_id, int):
-                    future = self._pending.get(msg_id)
-                    if future is not None and not future.done():
-                        future.set_result(payload)
-            elif message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
-                break
-        for future in list(self._pending.values()):
-            if not future.done():
-                future.set_result({"error": {"message": "Chrome DevTools connection closed."}})
+        try:
+            async for message in self._ws:
+                if message.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        payload = json.loads(message.data)
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    msg_id = payload.get("id")
+                    if isinstance(msg_id, int):
+                        future = self._pending.get(msg_id)
+                        if future is not None and not future.done():
+                            future.set_result(payload)
+                elif message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+                    break
+        except Exception:
+            # A failed reader is a disconnected transport, not a live browser.
+            # Never replay pending commands: an input may already have executed.
+            pass
+        finally:
+            for future in list(self._pending.values()):
+                if not future.done():
+                    future.set_result({"error": {"message": "Chrome DevTools connection closed."}})
 
 
 class CDPMouse:
