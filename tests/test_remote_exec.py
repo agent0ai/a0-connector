@@ -119,6 +119,50 @@ def _manager(tmp_path: Path, *, enabled: bool = True) -> RemoteExecManager:
     return RemoteExecManager(cwd=str(tmp_path), enabled=enabled, poll_interval=0.01)
 
 
+async def test_chat_sessions_isolate_commands_input_output_and_reset(
+    tmp_path: Path, created_shells: list[FakeShellSession],
+) -> None:
+    manager = _manager(tmp_path)
+    async def call(context, runtime, **args):
+        result = await manager.handle_exec_op({
+            "context_id": context, "session": 0, "runtime": runtime, **args,
+        })
+        assert result["ok"], result
+        return result["result"]
+
+    try:
+        # The legacy namespace and two chats may all independently use session 0.
+        await asyncio.gather(*(call(context, "terminal", code="ask", timeouts={"dialog_timeout": 0})
+                               for context in (None, "chat-a", "chat-b")))
+        assert len(created_shells) == 3
+        assert (await call("chat-a", "terminal", code="answer-a", allow_running=True))["output"] == "input:answer-a"
+        assert created_shells[0].inputs == created_shells[2].inputs == []
+        assert (await call("chat-b", "output", timeouts={"first_output_timeout": 0}))["output"] == "Continue?"
+        await call("chat-a", "reset")
+        assert not created_shells[1].is_alive
+        assert created_shells[0].is_alive and created_shells[2].is_alive
+        assert (await call("chat-b", "terminal", code="answer-b", allow_running=True))["output"] == "input:answer-b"
+        assert (await call(None, "terminal", code="legacy", allow_running=True))["output"] == "input:legacy"
+        await call("chat-a", "python", code="print(42)")
+        await call("chat-b", "nodejs", code="console.log('node ok')")
+        assert "A0_PY_CODE" in created_shells[3].commands[-1]
+        assert "A0_NODE_CODE" in created_shells[2].commands[-1]
+    finally:
+        await manager.close()
+    assert all(not shell.is_alive for shell in created_shells)
+
+
+@pytest.mark.parametrize("context", [False, 7, [], {}, "x" * 257])
+async def test_remote_exec_rejects_invalid_context_before_creating_shell(
+    tmp_path: Path, created_shells: list[FakeShellSession], context,
+) -> None:
+    manager = _manager(tmp_path)
+    result = await manager.handle_exec_op({"runtime": "terminal", "code": "ansi", "context_id": context})
+    assert not result["ok"]
+    assert "context_id" in result["error"]
+    assert not created_shells
+
+
 @pytest.mark.parametrize(
     "size",
     [

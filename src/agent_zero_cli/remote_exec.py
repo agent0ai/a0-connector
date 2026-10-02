@@ -555,7 +555,7 @@ class RemoteExecManager:
         self.allow_writes = allow_writes
         self.poll_interval = poll_interval
         self._exec_config = _default_exec_config()
-        self._sessions: dict[int, _SessionState] = {}
+        self._sessions: dict[tuple[str, int], _SessionState] = {}
 
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = enabled
@@ -612,6 +612,12 @@ class RemoteExecManager:
             }
         reset_requested = coerce_bool(data.get("reset"))
         allow_running = coerce_bool(data.get("allow_running"))
+        context_id = data.get("context_id")
+        if context_id is None:
+            context_id = ""
+        if not isinstance(context_id, str) or len(context_id) > 256:
+            return {"op_id": op_id, "ok": False, "error": "context_id must be a string up to 256 characters"}
+        context_id = context_id.strip()
 
         try:
             if runtime == "terminal":
@@ -620,6 +626,7 @@ class RemoteExecManager:
                     raise ValueError("code is required for runtime=terminal")
                 result = await self.execute_terminal(
                     session=session,
+                    context_id=context_id,
                     command=str(code),
                     reset=reset_requested,
                     allow_running=allow_running,
@@ -631,6 +638,7 @@ class RemoteExecManager:
                     raise ValueError("code is required for runtime=python")
                 result = await self.execute_python(
                     session=session,
+                    context_id=context_id,
                     code=str(code),
                     reset=reset_requested,
                     timeouts=self._timeouts_for_runtime(runtime, data),
@@ -641,6 +649,7 @@ class RemoteExecManager:
                     raise ValueError("code is required for runtime=nodejs")
                 result = await self.execute_nodejs(
                     session=session,
+                    context_id=context_id,
                     code=str(code),
                     reset=reset_requested,
                     timeouts=self._timeouts_for_runtime(runtime, data),
@@ -648,11 +657,13 @@ class RemoteExecManager:
             elif runtime == "output":
                 result = await self.collect_output(
                     session=session,
+                    context_id=context_id,
                     timeouts=self._timeouts_for_runtime(runtime, data),
                 )
             else:
                 result = await self.reset_session(
                     session=session,
+                    context_id=context_id,
                     reason=str(data.get("reason") or ""),
                 )
         except Exception as exc:
@@ -714,6 +725,7 @@ class RemoteExecManager:
         self,
         *,
         session: int,
+        context_id: str = "",
         command: str,
         reset: bool = False,
         allow_running: bool = False,
@@ -721,6 +733,7 @@ class RemoteExecManager:
     ) -> dict[str, Any]:
         return await self._run_shell_command(
             session=session,
+            context_id=context_id,
             command=command,
             timeouts=timeouts or self._exec_config.code_exec_timeouts,
             reset=reset,
@@ -731,12 +744,14 @@ class RemoteExecManager:
         self,
         *,
         session: int,
+        context_id: str = "",
         code: str,
         reset: bool = False,
         timeouts: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         return await self._run_shell_command(
             session=session,
+            context_id=context_id,
             command=_build_python_command(code),
             timeouts=timeouts or self._exec_config.code_exec_timeouts,
             reset=reset,
@@ -746,12 +761,14 @@ class RemoteExecManager:
         self,
         *,
         session: int,
+        context_id: str = "",
         code: str,
         reset: bool = False,
         timeouts: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         return await self._run_shell_command(
             session=session,
+            context_id=context_id,
             command=_build_node_command(code),
             timeouts=timeouts or self._exec_config.code_exec_timeouts,
             reset=reset,
@@ -761,16 +778,18 @@ class RemoteExecManager:
         self,
         *,
         session: int,
+        context_id: str = "",
         timeouts: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         return await self._get_terminal_output(
             session=session,
+            context_id=context_id,
             timeouts=timeouts or self._exec_config.output_timeouts,
             reset_full_output=False,
         )
 
-    async def reset_session(self, *, session: int, reason: str = "") -> dict[str, Any]:
-        await self._ensure_session(session, reset=True)
+    async def reset_session(self, *, session: int, context_id: str = "", reason: str = "") -> dict[str, Any]:
+        await self._ensure_session(session, context_id=context_id, reset=True)
         message = _RESET_MESSAGE
         if reason.strip():
             message = f"{message} Reason: {reason.strip()}."
@@ -787,14 +806,15 @@ class RemoteExecManager:
         self,
         *,
         session: int,
+        context_id: str = "",
         command: str,
         timeouts: dict[str, int],
         reset: bool = False,
         allow_running: bool = False,
     ) -> dict[str, Any]:
-        state = await self._ensure_session(session, reset=reset)
+        state = await self._ensure_session(session, context_id=context_id, reset=reset)
         if not allow_running:
-            if response := await self._handle_running_session(session=session):
+            if response := await self._handle_running_session(session=session, context_id=context_id):
                 return response
 
         if allow_running and state.running:
@@ -808,17 +828,19 @@ class RemoteExecManager:
         state.running = True
         return await self._get_terminal_output(
             session=session,
+            context_id=context_id,
             timeouts=timeouts,
             reset_full_output=False,
         )
 
-    async def _ensure_session(self, session: int, *, reset: bool = False) -> _SessionState:
+    async def _ensure_session(self, session: int, *, context_id: str = "", reset: bool = False) -> _SessionState:
+        key = (context_id, session)
         if reset:
-            existing = self._sessions.pop(session, None)
+            existing = self._sessions.pop(key, None)
             if existing is not None:
                 await existing.shell.close()
 
-        existing = self._sessions.get(session)
+        existing = self._sessions.get(key)
         if existing is not None and existing.shell.is_alive:
             return existing
         if existing is not None:
@@ -827,11 +849,11 @@ class RemoteExecManager:
         shell = self._create_shell_session()
         await shell.connect()
         state = _SessionState(shell=shell, running=False)
-        self._sessions[session] = state
+        self._sessions[key] = state
         return state
 
-    async def _handle_running_session(self, *, session: int) -> dict[str, Any] | None:
-        state = self._sessions.get(session)
+    async def _handle_running_session(self, *, session: int, context_id: str = "") -> dict[str, Any] | None:
+        state = self._sessions.get((context_id, session))
         if state is None or not state.running:
             return None
 
@@ -856,10 +878,11 @@ class RemoteExecManager:
         self,
         *,
         session: int,
+        context_id: str = "",
         timeouts: dict[str, int],
         reset_full_output: bool,
     ) -> dict[str, Any]:
-        state = await self._ensure_session(session)
+        state = await self._ensure_session(session, context_id=context_id)
 
         start_time = time.monotonic()
         last_output_time = start_time
