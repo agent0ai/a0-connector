@@ -3487,6 +3487,127 @@ def test_computer_use_remote_capture_missing_path_returns_tool_message() -> None
     assert agent.history_messages == []
 
 
+@pytest.mark.parametrize("backend_id,family", [("wayland", "linux"), ("macos", "macos"), ("windows", "windows")])
+@pytest.mark.parametrize("action", ["list_windows", "capture", "type"])
+def test_computer_use_remote_first_action_starts_context_once(
+    backend_id: str, family: str, action: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_zero_cli import computer_use as manager_mod
+    from agent_zero_cli.computer_use_backend import ComputerUseBackendSelection, ComputerUseBackendSpec
+    from agent_zero_cli.config import CLIConfig
+
+    spec = ComputerUseBackendSpec(
+        backend_id=backend_id, backend_family=family, priority=1, detect=lambda: True,
+        features=("native-window-list",), interpreter_strategy="current_python",
+        helper_target="unused", trust_mode_support=("allow",), support_reason=lambda: "available",
+    )
+    manager = manager_mod.ComputerUseManager(
+        CLIConfig(computer_use_enabled=True, computer_use_trust_mode="allow",
+                  computer_use_restore_token="123e4567-e89b-12d3-a456-426614174000"),
+        persist_enabled=False,
+        backend_selection=ComputerUseBackendSelection(spec=spec, supported=True, support_reason="available"),
+    )
+    monkeypatch.setattr(manager_mod, "HOST_ARTIFACT_ROOT", tmp_path / "captures")
+    helper_calls = []
+
+    async def helper(session, request):
+        helper_calls.append(dict(request))
+        return {"ok": True, "result": {
+            "active": True, "session_id": f"session-{session.context_id}", "width": 1, "height": 1,
+            "windows": [], "text": request.get("text", ""),
+            "artifact": {"mime_type": "image/png", "encoding": "base64", "data": _PNG_1X1_BASE64},
+        }}
+
+    monkeypatch.setattr(manager, "_helper_request", helper)
+    ws, runtime, tool_mod = _load_computer_use_remote_tool(computer_use_handler=manager.handle_op)
+    monkeypatch.setattr(tool_mod.asyncio, "sleep", _no_sleep)
+    runtime.register_sid("sid-cli")
+    runtime.store_sid_computer_use_metadata("sid-cli", manager.hello_metadata())
+
+    async def run():
+        for context_id in ("ctx-1", "ctx-2"):
+            agent = _FakeRemoteAgent(context_id=context_id)
+            runtime.subscribe_sid_to_context("sid-cli", context_id)
+            args = {"action": action, "text": "literal test", "window_id": "window-1"}
+            first = await _create_computer_use_remote(tool_mod, agent, **args).execute()
+            assert f"session_id=session-{context_id}" in first.message
+            assert f"backend={backend_id}/{family}" in first.message
+            assert f"host-computer-use-{family}" in first.message
+            if action in {"capture", "type"}:
+                assert first.additional["raw_content"]
+            second = await _create_computer_use_remote(tool_mod, agent, **args).execute()
+            assert "Computer-use session started" not in second.message
+            assert manager._sessions[context_id].active
+        for context_id in ("ctx-1", "ctx-2"):
+            calls = [call["payload"] for call in ws.calls if call["payload"]["context_id"] == context_id]
+            assert [call["action"] for call in calls[:3]] == [action, "start_session", action]
+            assert calls[2]["session_id"] == f"session-{context_id}"
+            starts = [call for call in helper_calls if call["context_id"] == context_id and call["action"] == "start_session"]
+            assert len(starts) == 1
+            assert starts[0]["allow_prompt"] is False
+            if action == "type":
+                assert sum(call["action"] == "type" and call["context_id"] == context_id for call in helper_calls) == 2
+        assert len({call["payload"]["op_id"] for call in ws.calls}) == len(ws.calls)
+        assert {call["sid"] for call in ws.calls} == {"sid-cli"}
+        agent = _FakeRemoteAgent()
+        await _create_computer_use_remote(tool_mod, agent, action="stop_session").execute()
+        assert not manager._sessions["ctx-1"].active
+        assert manager._sessions["ctx-2"].active
+        await _create_computer_use_remote(tool_mod, agent, action="status").execute()
+        assert not manager._sessions["ctx-1"].active
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("action,code,session_id", [
+    ("capture", "COMPUTER_USE_APPROVAL_REQUIRED", ""),
+    ("capture", "COMPUTER_USE_REARM_REQUIRED", ""),
+    ("capture", "COMPUTER_USE_DISABLED", ""),
+    ("type", "COMPUTER_USE_SESSION_MISMATCH", ""),
+    ("type", "COMPUTER_USE_TARGET_NOT_FOCUSED", ""),
+    ("capture", "COMPUTER_USE_SESSION_REQUIRED", "stale-session"),
+    ("status", "COMPUTER_USE_SESSION_REQUIRED", ""),
+    ("stop_session", "COMPUTER_USE_SESSION_REQUIRED", ""),
+    ("start_session", "COMPUTER_USE_SESSION_REQUIRED", ""),
+])
+def test_computer_use_remote_does_not_restart_after_other_errors(action, code, session_id):
+    ws, runtime, tool_mod = _load_computer_use_remote_tool(
+        computer_use_handler=lambda payload: {"ok": False, "code": code, "error": code}
+    )
+    runtime.register_sid("sid-cli")
+    runtime.subscribe_sid_to_context("sid-cli", "ctx-1")
+    runtime.store_sid_computer_use_metadata("sid-cli", {"supported": True, "enabled": True})
+    response = asyncio.run(_create_computer_use_remote(
+        tool_mod, _FakeRemoteAgent(), action=action, session_id=session_id, text="test",
+    ).execute())
+    assert "REARM_REQUIRED" in response.message if "APPROVAL" in code else code in response.message
+    assert [call["payload"]["action"] for call in ws.calls] == [action]
+
+
+@pytest.mark.parametrize("start_error", ["COMPUTER_USE_APPROVAL_REQUIRED", "COMPUTER_USE_REARM_REQUIRED", "COMPUTER_USE_DISABLED", "missing_id", ""])
+def test_computer_use_remote_automatic_start_is_bounded(start_error):
+    def handler(payload):
+        if payload["action"] == "start_session":
+            if start_error and start_error != "missing_id":
+                return {"ok": False, "code": start_error, "error": start_error}
+            return {"ok": True, "result": {} if start_error else {"session_id": "sess-1"}}
+        return {"ok": False, "code": "COMPUTER_USE_SESSION_REQUIRED"}
+
+    ws, runtime, tool_mod = _load_computer_use_remote_tool(computer_use_handler=handler)
+    runtime.register_sid("sid-cli")
+    runtime.subscribe_sid_to_context("sid-cli", "ctx-1")
+    runtime.store_sid_computer_use_metadata("sid-cli", {"supported": True, "enabled": True})
+    response = asyncio.run(_create_computer_use_remote(tool_mod, _FakeRemoteAgent(), action="capture").execute())
+    expected = ["capture", "start_session"] + ([] if start_error else ["capture"])
+    assert [call["payload"]["action"] for call in ws.calls] == expected
+    if start_error == "missing_id":
+        assert "without returning a session_id" in response.message
+    elif start_error:
+        assert "REARM_REQUIRED" in response.message if "APPROVAL" in start_error else start_error in response.message
+    else:
+        assert "COMPUTER_USE_SESSION_REQUIRED" in response.message
+
+
 def test_computer_use_remote_start_session_auto_refreshes_screen(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
