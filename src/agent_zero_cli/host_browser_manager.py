@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib.util
+import os
 from pathlib import Path
 import platform
 import subprocess
@@ -89,6 +90,7 @@ class HostBrowserManager:
         playwright_available: bool | None = None,
         playwright_starter: Callable[[], Any] | None = None,
         playwright_installer: Callable[[list[str]], Awaitable[tuple[int, str]]] | None = None,
+        durable_journal=None,
     ) -> None:
         self.config = config
         self.enabled = bool(config.host_browser_enabled)
@@ -104,6 +106,16 @@ class HostBrowserManager:
         self._content_helper_source: str | None = None
         self._content_helper_sha256 = ""
         self.last_error = ""
+        self._durable = None
+        self._durable_journal = durable_journal
+        self._durable_permission = lambda: self.enabled
+
+    def _durable_controller(self):
+        if self._durable is None and (self._durable_journal is not None or os.environ.get("A0_CONNECTOR_DURABILITY_KEY")):
+            from .host_browser_durable import BrowserJournal
+            from .host_browser_durable_runtime import DurableHostBrowser
+            self._durable = DurableHostBrowser(self._durable_journal or BrowserJournal())
+        return self._durable
 
     @property
     def supported(self) -> bool:
@@ -127,6 +139,12 @@ class HostBrowserManager:
         can_repair = not self._has_playwright() and not bool(
             profile and (profile.is_remote_debugging or profile.is_safari)
         )
+        try:
+            durable = self._durable_controller()
+        except (ValueError, RuntimeError, OSError, ImportError):
+            durable = None
+        durable_supported = bool(durable and profile and not profile.is_safari and
+                                 (profile.is_remote_debugging or is_a0_managed_family(profile.family)))
         return {
             "supported": bool(status["supported"]),
             "can_prepare": bool(status["can_prepare"]),
@@ -142,6 +160,7 @@ class HostBrowserManager:
             "available_browsers": self.available_browser_metadata(),
             "dom_helper_sha256": self._dom_helper_sha256,
             "content_helper_sha256": self._content_helper_sha256,
+            "durable_instance_id": durable.journal.instance_id if durable_supported else "",
             "features": [
                 "existing_profile",
                 "dedicated_profile",
@@ -154,6 +173,7 @@ class HostBrowserManager:
                 "dom_helper_rpc",
                 "evaluate_timeout_v1",
                 "local_upload_paths",
+                *(["durable_session_v1"] if durable_supported else []),
                 *sorted(_SUPPORTED_ACTIONS),
             ],
             "support_reason": status["support_reason"],
@@ -549,6 +569,11 @@ class HostBrowserManager:
         )
 
     async def close(self) -> None:
+        if self._durable is not None:
+            tasks = list(self._durable.journal.pending.values())
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         operations = [task for _, task in self._evaluate_ops.values()]
         for task in operations:
             task.cancel()
@@ -559,11 +584,24 @@ class HostBrowserManager:
         for session in sessions:
             with contextlib.suppress(Exception):
                 await session.close()
+        if self._durable is not None:
+            self._durable.journal.close()
+            self._durable = None
+            self._durable_journal = None
 
     async def disconnect(self) -> None:
         await self.close()
 
     async def handle_op(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if "durable" in payload:
+            try:
+                controller = self._durable_controller()
+                if controller is None:
+                    raise ValueError("Durable Browser is unavailable")
+                return await controller.handle(self, payload)
+            except Exception:
+                return self._error(str(payload.get("op_id") or ""), "DURABLE_BROWSER_HELD",
+                                   "Durable Browser requires permission, matching target identity, or outcome review")
         op_id = str(payload.get("op_id") or "").strip()
         context_id = str(payload.get("context_id") or "").strip() or "default"
         if normalize_action(payload.get("action")) == "cancel_evaluate":

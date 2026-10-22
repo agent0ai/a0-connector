@@ -14,6 +14,7 @@
 
 - Edit `.in` files for dependency intent; regenerate locks through `devtools/lock_dependencies.py`.
 - Keep platform-specific dependencies guarded with environment markers.
+- `cryptography` supplies Fernet authentication/encryption for opt-in durable host receipts and managed-profile exports; never replace this with plaintext journal fallback.
 - New dependencies require user approval before installation and must be justified by project needs.
 - Dependency changes must keep `pyproject.toml`, `requirements/`, and `constraints/` coherent.
 - Preserve the shared HTTP dependency security floors: `aiohttp>=3.14.3`, `anyio>=4.14.2`, and `multidict>=6.9.1`.

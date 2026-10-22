@@ -765,6 +765,8 @@ class ConnectorSession:
             )
         if self.computer_use is None:
             return await self._handle_unsupported_computer_use_op(data)
+        if "durable" in data:
+            self.computer_use._durable_permission = lambda: self._scope_available("computer_use")
         return await self.computer_use.handle_op(data)
 
     async def _handle_browser_op(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -773,6 +775,14 @@ class ConnectorSession:
         if self.host_browser is None:
             return await self._handle_unsupported_browser_op(data)
         request = dict(data)
+        if "durable" in request:
+            # Identity-bound requests cannot be silently rewritten after their
+            # fingerprint was committed by Core. Enforce the current gateway
+            # target and permission again when queued work actually executes.
+            if self.browser_selection and request.get("browser_selection") != self.browser_selection:
+                return _unsupported_result(data, tool="Host browser", code="HOST_BROWSER_TARGET_CHANGED")
+            self.host_browser._durable_permission = lambda: self._scope_available("browser")
+            return await self.host_browser.handle_op(request)
         request["profile_mode"] = "existing"
         request.pop("browser_selection", None)
         if self.browser_selection:

@@ -14,4 +14,5 @@ textual-image>=0.8.5,<0.9; python_version < "3.12"
 textual-image>=0.13.2,<0.14; python_version >= "3.12"
 numpy<2.3; platform_system == "Windows"
 playwright>=1.52.0
+cryptography>=44.0.0
 pywinauto; platform_system == "Windows"

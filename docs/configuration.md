@@ -11,6 +11,8 @@
 | `A0_CLI_IMAGE_MODE` | Interactive terminal image renderer: `auto`, `tgp`, `sixel`, `halfcell`, or `off` | `auto` |
 | `A0_TERMINAL_NOTIFY` | Terminal-native notification when an active run becomes ready for input. Set to `0`, `false`, `no`, or `off` to disable. | enabled for terminal output |
 | `A0_UPDATE_CHECK` | Startup check for a newer CLI release. Set to `0`, `false`, `no`, or `off` to disable. | enabled |
+| `A0_CONNECTOR_DURABILITY_KEY` | Persistent secret Fernet key for [durable host receipts](durability.md); never saved in connector settings | unset; durable features disabled |
+| `A0_CONNECTOR_DURABILITY_ROOT` | Private browser receipt/profile directory; Computer Use uses its `computer_use` child | platform data directory under `a0/durability/browser` |
 
 ## Resolution order
 

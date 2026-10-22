@@ -13,6 +13,8 @@
 
 ## Local Contracts
 
+- Durable host tests use private encrypted journals and synthetic targets. `A0_TEST_DURABLE_CHROMIUM` explicitly enables real detached Chromium/process-kill/profile-transfer coverage with private temporary profiles; never attach a personal browser. Computer Use durable tests launch a synthetic JSONL helper and do not claim physical desktop acceptance.
+
 - Async tests use pytest/anyio with asyncio-compatible fixtures; many files set `pytestmark = pytest.mark.anyio`.
 - Prefer `tmp_path`, `monkeypatch`, and local fake classes over real user config or live services.
 - `tests/test_app.py` fake widgets mirror the widget API used by `AgentZeroCLI`. When app code calls a new widget method, update the fake.

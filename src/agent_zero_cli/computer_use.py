@@ -439,6 +439,7 @@ class ComputerUseManager:
         *,
         persist_enabled: bool = True,
         backend_selection: ComputerUseBackendSelection | None = None,
+        durable_journal=None,
     ) -> None:
         self.config = config
         self.enabled = bool(config.computer_use_enabled)
@@ -462,6 +463,15 @@ class ComputerUseManager:
         }
         self._debug_enabled = _env_flag(_DEBUG_ENV)
         self._debug_log_path = _resolve_debug_log_path()
+        self._durable = None
+        self._durable_journal = durable_journal
+        self._durable_permission = lambda: self.enabled
+
+    def _durable_controller(self):
+        if self._durable is None and (self._durable_journal is not None or os.environ.get("A0_CONNECTOR_DURABILITY_KEY")):
+            from .computer_use_durable import DurableComputerUse
+            self._durable = DurableComputerUse(self._durable_journal)
+        return self._durable
 
     @property
     def status_label(self) -> str:
@@ -487,6 +497,14 @@ class ComputerUseManager:
             "setup": dict(self._permission_setup),
         }
         metadata.update(self._backend_metadata)
+        try:
+            durable = self._durable_controller()
+            if durable is not None:
+                durable.identity(self)
+                metadata["features"] = [*metadata.get("features", []), "computer_use_durable_v1"]
+                metadata["durable_instance_id"] = durable.journal.instance_id
+        except (ValueError, RuntimeError, OSError, ImportError):
+            pass
         return metadata
 
     def metadata(self) -> dict[str, Any]:
@@ -627,12 +645,21 @@ class ComputerUseManager:
         return payload
 
     async def close(self) -> None:
+        if self._durable is not None:
+            tasks = list(self._durable.journal.pending.values())
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         for session in list(self._sessions.values()):
             await self._close_helper_session(session)
         self._sessions.clear()
         self._prune_capture_artifacts()
         status, error = self._configured_status()
         self._set_status(status, error=error)
+        if self._durable is not None:
+            self._durable.journal.close()
+            self._durable = None
+            self._durable_journal = None
 
     async def disconnect(self) -> None:
         await self.close()
@@ -1091,6 +1118,18 @@ class ComputerUseManager:
             )
 
     async def handle_op(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if "durable" in payload:
+            try:
+                controller = self._durable_controller()
+                if controller is None:
+                    raise ValueError("Durable Computer Use is unavailable")
+                return await controller.handle(self, payload)
+            except Exception:
+                return self._error(str(payload.get("op_id") or ""), "COMPUTER_USE_DURABLE_HELD",
+                                   message="Computer Use requires current permission, matching instance, or outcome review")
+        return await self._handle_legacy_op(payload)
+
+    async def _handle_legacy_op(self, payload: dict[str, Any]) -> dict[str, Any]:
         op_id = str(payload.get("op_id", "")).strip()
         action = str(payload.get("action", "")).strip().lower()
         context_id = _normalize_context_id(payload.get("context_id"))
@@ -1392,6 +1431,8 @@ class ComputerUseManager:
 
         helper_path = Path(helper_target).resolve()
         helper_env = os.environ.copy()
+        helper_env.pop("A0_CONNECTOR_DURABILITY_KEY", None)
+        helper_env.pop("A0_DURABILITY_RESOURCE_KEY", None)
         pythonpath_entries = [str(Path(__file__).resolve().parents[1])]
         if (helper_path.parent / "__init__.py").exists():
             pythonpath_entries.append(str(helper_path.parent.parent))
@@ -1461,6 +1502,8 @@ class ComputerUseManager:
         deadline = started_at + response_timeout
 
         async with session.lock:
+            from .computer_use_durable import check_current_permission
+            check_current_permission()
             process.stdin.write((json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8"))
             _drained, timed_out_io_task = await _await_helper_io(
                 process.stdin.drain(),
