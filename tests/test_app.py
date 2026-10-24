@@ -4413,6 +4413,76 @@ async def test_model_runtime_main_change_preserves_other_models(
         assert saved_presets[0][0]["chat"] == default_chat
 
 
+@pytest.mark.parametrize("slot", ["main", "utility"])
+async def test_model_runtime_context_window_inherits_and_persists_only_active_slot(
+    dummy_app: DummyAgentZeroCLI,
+    monkeypatch: pytest.MonkeyPatch,
+    slot: str,
+) -> None:
+    from copy import deepcopy
+
+    dummy_app.current_context = "ctx-1"
+    dummy_app.connected = True
+    dummy_app.connector_features = {"model_switcher"}
+    dummy_app._model_switch_allowed = True
+    presets = [
+        {
+            "name": "Default",
+            "chat": {"provider": "openai", "name": "main", "ctx_length": 128000},
+            "utility": {"provider": "openai", "name": "utility", "ctx_length": 64000},
+        },
+        {
+            "name": "Power",
+            "chat": {"provider": "openai", "name": "power", "kwargs": {"temperature": 0}, "vision": False},
+            "utility": {"provider": "openai", "name": "utility", "ctx_length": 32000},
+            "vision": {"provider": "openai", "name": "sidecar", "override_main": False},
+            "embedding": {"provider": "openai", "name": "embedding"},
+        },
+    ]
+    saved = []
+
+    async def get_state(context_id: str) -> dict:
+        return {
+            "allowed": True, "effective_preset": "Power", "presets": deepcopy(presets),
+            "main_model": {"provider": "openai", "name": "power"},
+            "utility_model": {"provider": "openai", "name": "utility"},
+        }
+
+    async def edit(self: object, screen: object) -> ModelRuntimeResult:
+        assert screen._main_model["ctx_length"] == 128000
+        assert screen._utility_model["ctx_length"] == 32000
+        return ModelRuntimeResult(
+            main_model={**screen._main_model, **({"ctx_length": 200000} if slot == "main" else {})},
+            utility_model={**screen._utility_model, **({"ctx_length": 100000} if slot == "utility" else {})},
+            main_changed=slot == "main", utility_changed=slot == "utility",
+        )
+
+    async def save(values: list) -> dict:
+        saved.extend(values)
+        return {"ok": True}
+
+    async def activate(context_id: str, name: str) -> dict:
+        assert (context_id, name) == ("ctx-1", "Power")
+        return await get_state(context_id)
+
+    refreshed = []
+
+    async def refresh(**kwargs) -> None:
+        refreshed.append(kwargs)
+
+    monkeypatch.setattr(dummy_app.client, "get_model_switcher", get_state)
+    monkeypatch.setattr(dummy_app.client, "save_model_presets", save)
+    monkeypatch.setattr(dummy_app.client, "set_model_preset", activate)
+    monkeypatch.setattr(DummyAgentZeroCLI, "push_screen_wait", edit)
+    monkeypatch.setattr(dummy_app, "_refresh_token_usage", refresh)
+    await dummy_app._cmd_models()
+
+    expected = deepcopy(presets)
+    expected[1]["chat" if slot == "main" else "utility"]["ctx_length"] = 200000 if slot == "main" else 100000
+    assert saved == expected
+    assert refreshed == [{"context_id": "ctx-1"}]
+
+
 @pytest.mark.parametrize("change", ["native", "sidecar", "clear"])
 async def test_model_runtime_persists_vision_settings_in_active_preset(
     dummy_app: DummyAgentZeroCLI,

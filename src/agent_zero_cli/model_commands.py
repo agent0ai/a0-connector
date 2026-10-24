@@ -248,6 +248,11 @@ async def cmd_models(app: AgentZeroCLI, *, focus_target: str = "main") -> None:
         (item for item in presets if isinstance(item, dict) and item.get("name") == "Default"),
         {},
     )
+    for slot, model in (("chat", main_model), ("utility", utility_model)):
+        if "ctx_length" not in model:
+            ctx_length = coerce_model_config(default_preset.get(slot)).get("ctx_length")
+            if ctx_length is not None:
+                model["ctx_length"] = ctx_length
     supports_vision = True
     for source in (
         default_preset.get("chat"), selected_preset.get("chat"),

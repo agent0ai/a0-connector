@@ -128,6 +128,74 @@ async def test_model_editor_provider_enter_selects_before_saving() -> None:
     )]
 
 
+@pytest.mark.parametrize("slot", ["main", "utility"])
+async def test_model_context_window_validates_and_saves_integer_tokens(slot: str) -> None:
+    app = App()
+    results = []
+    screen = ModelRuntimeScreen(
+        main_model={"provider": "openai", "name": "main", "ctx_length": "128000"},
+        utility_model={"provider": "openai", "name": "utility", "ctx_length": 64000},
+    )
+    async with app.run_test(size=(100, 65)) as pilot:
+        await app.push_screen(screen, results.append)
+        await pilot.pause()
+        assert screen.query_one("#model-runtime-main-context-window", Input).value == "128000"
+        assert screen.query_one("#model-runtime-utility-context-window", Input).value == "64000"
+        assert not screen.query("#model-runtime-vision-context-window")
+        field = screen.query_one(f"#model-runtime-{slot}-context-window", Input)
+        for invalid in ("0", "-1", "1.5", "128k"):
+            field.value = invalid
+            screen.action_apply()
+            await pilot.pause()
+            assert not results
+            assert screen.focused is field
+            assert "positive whole number" in str(screen.query_one("#model-runtime-status", Static).render())
+
+        field.value = "200000"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+    result = results[0]
+    edited = result.main_model if slot == "main" else result.utility_model
+    assert edited["ctx_length"] == 200000
+    assert isinstance(edited["ctx_length"], int)
+    assert result.main_changed == (slot == "main")
+    assert result.utility_changed == (slot == "utility")
+    assert result.main_vision is None and result.vision_model is None
+
+
+@pytest.mark.parametrize("ctx_length", [None, 128000])
+async def test_blank_context_windows_keep_current_limits_without_false_changes(ctx_length: int | None) -> None:
+    app = App()
+    results = []
+    main_model = {"provider": "openai", "name": "main"}
+    if ctx_length is not None:
+        main_model["ctx_length"] = ctx_length
+    screen = ModelRuntimeScreen(
+        main_model=main_model,
+        utility_model={"provider": "openai", "name": "utility", "ctx_length": 64000},
+        vision_model={"provider": "openai", "name": "sidecar", "ctx_length": 32000, "timeout": 90},
+    )
+    async with app.run_test(size=(100, 65)) as pilot:
+        await app.push_screen(screen, results.append)
+        await pilot.pause()
+        for slot in ("main", "utility"):
+            screen.query_one(f"#model-runtime-{slot}-context-window", Input).value = ""
+        screen.action_apply()
+        await pilot.pause()
+        assert not results
+        assert "No model changes" in str(screen.query_one("#model-runtime-status", Static).render())
+
+        screen.query_one("#model-runtime-main-name", Input).value = "new"
+        screen.action_apply()
+        await pilot.pause()
+
+    assert results[0].main_model == {**main_model, "name": "new"}
+    assert results[0].utility_model["ctx_length"] == 64000
+    assert not results[0].utility_changed
+    assert results[0].vision_model is None
+
+
 class ModelPresetsHarness(App[None]):
     def __init__(self) -> None:
         super().__init__()

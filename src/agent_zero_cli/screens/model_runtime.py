@@ -15,14 +15,14 @@ _DEFAULT_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Openai", "openai"),
 )
 
-from agent_zero_cli.model_config import coerce_model_config, format_model_label, format_provider_label
+from agent_zero_cli.model_config import coerce_model_config, coerce_positive_int, format_model_label, format_provider_label
 from agent_zero_cli.text_utils import coerce_bool, strip_text
 
 
 @dataclass(frozen=True)
 class ModelRuntimeResult:
-    main_model: dict[str, str]
-    utility_model: dict[str, str]
+    main_model: dict[str, str | int]
+    utility_model: dict[str, str | int]
     main_changed: bool = True
     utility_changed: bool = True
     main_vision: bool | None = None
@@ -58,6 +58,7 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
         self._supports_vision = supports_vision
         self._vision_model = coerce_model_config(vision_model)
         self._vision_model.pop("api_key", None)
+        self._vision_model.pop("ctx_length", None)
         self._override_main = coerce_bool((vision_model or {}).get("override_main"))
         self._focus_target = "utility" if focus_target == "utility" else "main"
         self._main_label = format_model_label(main_model)
@@ -162,6 +163,14 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
                 placeholder="Optional: custom provider base URL",
                 id=f"model-runtime-{key}-base-url",
             )
+            if key in {"main", "utility"}:
+                yield Static("Context window (tokens)", classes="model-runtime-label")
+                yield Input(
+                    value=strip_text(values.get("ctx_length")),
+                    placeholder="Leave empty to keep the current limit",
+                    type="integer",
+                    id=f"model-runtime-{key}-context-window",
+                )
 
     def on_mount(self) -> None:
         self._sync_vision_fields()
@@ -204,22 +213,36 @@ class ModelRuntimeScreen(Screen[ModelRuntimeResult | None]):
         if button_id == "model-runtime-cancel":
             self.dismiss(None)
 
-    def _collect_model(self, key: str) -> dict[str, str]:
+    def _collect_model(self, key: str) -> dict[str, str | int]:
         provider_value = self.query_one(f"#model-runtime-{key}-provider", Select).value
         provider = strip_text(provider_value) if isinstance(provider_value, str) else ""
         name = strip_text(self.query_one(f"#model-runtime-{key}-name", Input).value)
         base_url = strip_text(self.query_one(f"#model-runtime-{key}-base-url", Input).value)
-        payload: dict[str, str] = {}
+        payload: dict[str, str | int] = {}
         if provider:
             payload["provider"] = provider
         if name:
             payload["name"] = name
         if base_url:
             payload["api_base"] = base_url
+        if key in {"main", "utility"}:
+            current = self._main_model if key == "main" else self._utility_model
+            context_window = self.query_one(f"#model-runtime-{key}-context-window", Input).value.strip()
+            ctx_length = coerce_positive_int(context_window) if context_window else current.get("ctx_length")
+            if ctx_length is not None:
+                payload["ctx_length"] = ctx_length
         return payload
 
     def _apply(self) -> None:
         status = self.query_one("#model-runtime-status", Static)
+        for key in ("main", "utility"):
+            field = self.query_one(f"#model-runtime-{key}-context-window", Input)
+            value = field.value.strip()
+            ctx_length = coerce_positive_int(value)
+            if value and (ctx_length is None or ctx_length <= 0):
+                status.update(Text(f"{key.title()} context window must be a positive whole number of tokens.", style="#ff8b6b"))
+                field.focus()
+                return
         main_model = self._collect_model("main")
         utility_model = self._collect_model("utility")
         supports_vision = self.query_one("#model-runtime-supports-vision", Checkbox).value

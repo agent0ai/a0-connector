@@ -144,7 +144,7 @@ Active TUI and headless terminal sessions send one ready-for-input notification 
 | `/nudge` | Nudge the current agent run |
 | `/pause` / `/resume` | Pause or resume the active agent run |
 | `/presets` | Pick a model preset and inspect its vision routing |
-| `/models` | Edit Main, optional Vision sidecar, and Utility models in the active preset |
+| `/models` | Edit Main, optional Vision sidecar, and Utility models, including Main/Utility context windows |
 | `/profile` / `/profile <agent>` / `/profile "<name>" "<instructions>"` | Select, create, or edit the current agent profile |
 | `/permissions` | Edit Tools, MCP, and Skill permissions for the current agent |
 | `/computer-use on` / `/computer-use off` | Advertise or disable local Computer Use from this CLI; enabling arms the platform permission flow when needed |

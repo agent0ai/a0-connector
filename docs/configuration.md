@@ -1,5 +1,9 @@
 # Configuration
 
+## Model context windows
+
+Open `/models` (or click the model summary) to edit the active preset. Main and Utility each have a **Context window (tokens)** field: enter a positive whole number, such as `200000`. Leaving it empty keeps the current limit. Apply saves the preset for all chats using it and refreshes the token-usage limit.
+
 ## Environment variables
 
 | Variable | Purpose | Default |

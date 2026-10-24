@@ -48,10 +48,10 @@ def extract_token_limit(stats: Mapping[str, object] | None) -> int | None:
     return None
 
 
-def coerce_model_config(value: object) -> dict[str, str]:
+def coerce_model_config(value: object) -> dict[str, str | int]:
     if not isinstance(value, Mapping):
         return {}
-    payload: dict[str, str] = {}
+    payload: dict[str, str | int] = {}
     for key in ("provider", "name", "api_key"):
         text = str(value.get(key) or "").strip()
         if text:
@@ -60,6 +60,9 @@ def coerce_model_config(value: object) -> dict[str, str]:
     base_url = str(value.get("api_base") or value.get("base_url") or "").strip()
     if base_url:
         payload["api_base"] = base_url
+    ctx_length = coerce_positive_int(value.get("ctx_length"))
+    if ctx_length is not None and ctx_length > 0:
+        payload["ctx_length"] = ctx_length
 
     return payload
 
