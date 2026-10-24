@@ -21,6 +21,7 @@
 - The model editor defaults Supports Vision to checked when no saved flag is available. Hide sidecar fields while Main supports vision unless Use separate Vision Model is checked; show the same fields when Main vision is unchecked, hiding the separate-model toggle. Toggling visibility preserves entered sidecar values. Main's `vision` flag and the optional `vision` preset slot (`override_main`, provider, name, base URL) persist through the existing preset API; clearing the sidecar removes its slot settings, while untouched advanced settings remain intact. Keep Apply/Cancel visible outside the scrolling fields.
 - `ProfileEditorScreen` returns only Easy-mode title, instructions, and selected tool IDs; profile validation and persistence remain in Agent Zero Core.
 - `PermissionsScreen` returns sparse Tool/MCP and Skill policy intent; Core's Agent Editor remains the persistence and runtime-policy owner.
+- `ComposerChoiceScreen` renders server-defined titles, descriptions, choice labels/values, and optional bounded custom input above a supplied anchor. Defaults are ordinary server-defined choices, not client policy. Escape/outside click cancel; server rejection preserves custom input for correction. It returns intent only and must not issue network requests.
 
 ## Work Guidance
 

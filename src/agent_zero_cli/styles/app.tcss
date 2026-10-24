@@ -195,6 +195,89 @@ TranscriptEntry > CodeEntry {
     color: #d9e2ec;
 }
 
+#model-switcher-controls {
+    width: auto;
+    max-width: 60%;
+    height: 1;
+    overflow-x: auto;
+    scrollbar-size-horizontal: 0;
+}
+
+.composer-control {
+    max-width: 26;
+    margin-right: 0;
+    color: #80d0ff;
+}
+
+ComposerChoiceScreen {
+    background: transparent;
+}
+
+#composer-choice-popover {
+    overlay: screen;
+    width: 44;
+    height: auto;
+    max-height: 90%;
+    padding: 0 1;
+    border: round #0f6db8;
+    background: #101820;
+    overflow-y: auto;
+}
+
+#composer-choice-title {
+    height: 1;
+    text-style: bold;
+    color: #80d0ff;
+}
+
+#composer-choice-options {
+    height: auto;
+    max-height: 10;
+}
+
+.composer-choice-option {
+    width: 100%;
+    height: 1;
+    min-height: 1;
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: #d9e2ec;
+    content-align: left middle;
+    text-align: left;
+}
+
+.composer-choice-option:hover,
+.composer-choice-option:focus {
+    background: #0f4d78;
+    color: #f5f7fa;
+}
+
+.composer-choice-note {
+    height: auto;
+    color: #7f8c98;
+}
+
+#composer-choice-custom-row {
+    height: 3;
+    margin-top: 1;
+}
+
+#composer-choice-custom {
+    width: 1fr;
+}
+
+#composer-choice-apply {
+    width: 9;
+    min-width: 7;
+    margin-left: 1;
+}
+
+#composer-choice-error {
+    height: auto;
+    color: #ff8a80;
+}
+
 Select > SelectOverlay {
     border: none;
     background: #101820;

@@ -137,6 +137,7 @@ async def refresh_model_switcher_snapshot(app: AgentZeroCLI, *, silent: bool = T
 async def refresh_state_snapshot(app: AgentZeroCLI, *, silent: bool = True) -> None:
     settings_changed = await refresh_settings_snapshot(app, silent=silent)
     model_changed = await refresh_model_switcher_snapshot(app, silent=silent)
+    await app._refresh_composer_controls(silent=silent)
     await app._refresh_goal_bar(silent=silent)
     if settings_changed or model_changed:
         await app._refresh_token_usage()

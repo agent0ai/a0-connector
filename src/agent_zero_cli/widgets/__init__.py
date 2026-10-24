@@ -1,5 +1,6 @@
 from agent_zero_cli.widgets.chat_input import ChatInput
 from agent_zero_cli.widgets.computer_use_banner import ComputerUseBanner
+from agent_zero_cli.widgets.composer_controls import ComposerControls
 from agent_zero_cli.widgets.connection_status import ConnectionStatus
 from agent_zero_cli.widgets.context_tabs import ContextTab, ContextTabs, context_tab_from_metadata
 from agent_zero_cli.widgets.dynamic_footer import DynamicFooter
@@ -25,6 +26,7 @@ from agent_zero_cli.widgets.splash_view import (
 __all__ = [
     "ChatInput",
     "ComputerUseBanner",
+    "ComposerControls",
     "ConnectionStatus",
     "ContextTab",
     "ContextTabs",

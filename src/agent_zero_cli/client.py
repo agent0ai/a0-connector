@@ -2408,6 +2408,23 @@ class A0Client:
             data["ok"] = True
         return data
 
+    async def composer_controls_action(
+        self, action: str, context_id: str, **payload: Any,
+    ) -> dict[str, Any]:
+        body = {"action": action, "context_id": context_id, **payload}
+        url = self._api_url("composer_controls")
+        response = await self.http.post(url, json=body, headers=await self._csrf_headers())
+        if response.status_code == 403:
+            self._csrf_token = None
+            response = await self.http.post(url, json=body, headers=await self._csrf_headers())
+        if self._is_login_redirect(response):
+            raise A0ProtocolError("Composer controls require an authenticated Agent Zero session.")
+        if response.status_code >= 400:
+            return {"ok": False, "status_code": response.status_code, "message": self._response_message(response)}
+        data = self._json(response)
+        data.setdefault("ok", True)
+        return data
+
     async def get_model_switcher(self, context_id: str) -> dict[str, Any]:
         response = await self._post(
             "model_switcher",

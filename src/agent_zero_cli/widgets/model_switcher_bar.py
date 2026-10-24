@@ -10,6 +10,7 @@ from textual.message import Message
 from textual.widgets import Button, Select
 
 from agent_zero_cli.model_config import format_model_label, format_settings_preset_label
+from agent_zero_cli.widgets.composer_controls import ComposerControls
 
 _CUSTOM_OVERRIDE_VALUE = "__custom_override__"
 _PRESET_MIN_VISIBLE_WIDTH = 82
@@ -126,6 +127,8 @@ class ModelSwitcherBar(Horizontal):
         super().__init__(id=id)
         self._summary = Horizontal(id="model-switcher-summary")
         self._main_button = Button("", id="model-switcher-main", classes="model-switcher-chip")
+        self._controls = ComposerControls(id="model-switcher-controls")
+        self._controls.display = False
         self._preset = Select(
             [(format_settings_preset_label(""), "")],
             prompt="Preset",
@@ -145,6 +148,7 @@ class ModelSwitcherBar(Horizontal):
     def compose(self) -> ComposeResult:
         with self._summary:
             yield self._main_button
+            yield self._controls
         yield self._preset
 
     def on_mount(self) -> None:
@@ -159,6 +163,7 @@ class ModelSwitcherBar(Horizontal):
         self._switch_allowed = False
         self._option_count = 1
         self._selected_value = ""
+        self._controls.set_controls([])
         self._suppress_events = True
         try:
             self._main_model_text = "—"
@@ -172,6 +177,10 @@ class ModelSwitcherBar(Horizontal):
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
         self._update_select_state()
+
+    def set_composer_controls(self, controls: list[dict]) -> None:
+        self._controls.set_controls(controls)
+        self.call_after_refresh(self._sync_layout)
 
     def set_state(
         self,
@@ -224,6 +233,13 @@ class ModelSwitcherBar(Horizontal):
 
     def _sync_layout(self) -> None:
         self._preset.display = _show_preset_for_width(self.size.width)
+        if self._summary.size.width:
+            controls_width = self._controls.outer_size.width if self._controls.display else 0
+            self._main_button.styles.max_width = max(1, self._summary.size.width - controls_width - 1)
+
+    def on_composer_controls_resized(self, event: ComposerControls.Resized) -> None:
+        event.stop()
+        self._sync_layout()
 
     def _update_select_state(self) -> None:
         self._preset.disabled = self._busy or not self._switch_allowed or self._option_count <= 1

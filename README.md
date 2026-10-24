@@ -11,6 +11,8 @@ Terminal connector for [Agent Zero](https://github.com/frdel/agent-zero). It pai
 
 The CLI requires an Agent Zero build that includes the builtin `_a0_connector` plugin.
 
+Core builds advertising `composer_controls` can supply plugin-defined controls beside the provider/model bar. The connector renders choice popovers with optional custom input; labels, values, defaults, validation, and persistence belong to the server. Escape or clicking outside cancels. Older Core builds and chats without controls keep the existing bar unchanged.
+
 ## Install
 
 ### 1. Install on macOS / Linux

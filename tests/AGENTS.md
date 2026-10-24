@@ -10,6 +10,7 @@
 - Tests may import package sources and package backend `src/` directories directly when validating local package contracts.
 - `test_computer_use_contract.py` checks macOS and Windows backend imports and boolean payload behavior in fresh interpreters, both with the current CLI and with `agent_zero_cli.text_utils` unavailable as in older releases.
 - `test_plugin_backend.py` exercises Core's first-action session startup through the shared `ComputerUseManager` with fake platform helpers: chat isolation/reuse, no input before startup, existing silent approval, screenshot delivery, and bounded failures without permission retries.
+- `test_composer_controls.py` covers generic optional controls, two unrelated descriptors, older Core, stale host/chat/revision work, CSRF/base paths, and anchored choice popovers using fake clients and Textual pilots. Fixtures must not depend on any particular optional plugin.
 
 ## Local Contracts
 

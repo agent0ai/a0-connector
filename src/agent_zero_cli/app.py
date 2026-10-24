@@ -21,6 +21,7 @@ from agent_zero_cli import (
     browser_commands,
     chat_commands,
     compaction,
+    composer_controls,
     connection,
     event_handlers,
     goal_commands,
@@ -66,6 +67,7 @@ from agent_zero_cli.widgets.command_palette import (
 from agent_zero_cli.widgets import (
     ChatInput,
     ComputerUseBanner,
+    ComposerControls,
     ConnectionStatus,
     ContextTab,
     ContextTabs,
@@ -268,6 +270,10 @@ class AgentZeroCLI(App):
         self._last_remote_tree_hash = ""
         self._last_remote_tree_published_at = 0.0
         self._model_switch_allowed = False
+        self.composer_controls: dict[str, dict[str, Any]] = {}
+        self._composer_controls_scope: tuple[str, str] | None = None
+        self._composer_controls_generation = 0
+        self._composer_controls_saving = False
         self._settings_snapshot_signature = ""
         self._model_switcher_signature = ""
         self._model_switcher_signature_pending = ""
@@ -1445,6 +1451,9 @@ class AgentZeroCLI(App):
     async def _refresh_model_switcher(self, *, silent: bool = True) -> None:
         await refresh_model_switcher(self, silent=silent)
 
+    async def _refresh_composer_controls(self, *, silent: bool = True) -> None:
+        await composer_controls.refresh_controls(self, silent=silent)
+
     def _command_display(self, spec: CommandSpec) -> str:
         if not spec.aliases:
             return spec.canonical_name
@@ -2440,6 +2449,14 @@ class AgentZeroCLI(App):
 
     async def on_model_switcher_bar_preset_changed(self, event: ModelSwitcherBar.PresetChanged) -> None:
         await self._set_model_preset(event.value or None, bar=event.bar)
+
+    def on_composer_controls_requested(self, event: ComposerControls.Requested) -> None:
+        event.stop()
+        if not self._composer_controls_saving:
+            self.run_worker(
+                composer_controls.choose_control(self, event.control_id, event.anchor_id),
+                exclusive=True, group="composer-control-picker", name="composer-control-picker",
+            )
 
     def on_goal_bar_update_requested(self, event: GoalBar.UpdateRequested) -> None:
         event.stop()

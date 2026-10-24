@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
 import pytest
@@ -329,6 +330,10 @@ class FakeModelSwitcher:
         self.cleared = False
         self.classes: set[str] = set()
         self.state_calls: list[dict[str, object]] = []
+        self.composer_controls = []
+
+    def set_composer_controls(self, controls) -> None:
+        self.composer_controls = controls
 
     def clear(self) -> None:
         self.cleared = True
@@ -670,6 +675,7 @@ class ContextTabsRenderApp(App[None]):
 @pytest.fixture
 def dummy_app(monkeypatch: pytest.MonkeyPatch) -> DummyAgentZeroCLI:
     app = DummyAgentZeroCLI()
+    monkeypatch.setattr(app.client, "composer_controls_action", AsyncMock(return_value={}))
     app._computer_use = FakeComputerUseManager()
     app._host_browser = FakeHostBrowserManager()
     widgets = {
@@ -2266,7 +2272,7 @@ async def test_message_queue_bar_sits_directly_below_model_switcher() -> None:
         await pilot.pause(0.5)
 
         queue_bar = app.query_one("#message-queue-bar", MessageQueueBar)
-        assert len(model_bar.query(".model-switcher-chip")) == 1
+        assert len([chip for chip in model_bar.query(".model-switcher-chip") if chip.display]) == 1
         assert str(model_bar._main_button.label) == "codex/gpt-5.5"
         assert queue_bar.region.y == model_bar.region.y + model_bar.region.height
 
