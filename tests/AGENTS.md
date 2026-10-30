@@ -17,6 +17,8 @@
 - Async tests use pytest/anyio with asyncio-compatible fixtures; many files set `pytestmark = pytest.mark.anyio`.
 - Prefer `tmp_path`, `monkeypatch`, and local fake classes over real user config or live services.
 - `tests/test_app.py` fake widgets mirror the widget API used by `AgentZeroCLI`. When app code calls a new widget method, update the fake.
+- Splash layout tests load the real stylesheet and echo host-state messages like the app. Check complete rendered button labels, heading/Refresh alignment and spacing, the bottom manual-URL toggle, absence of splash workspace paths, visible connection controls at compact sizes, stable selection/focus, and manual-input preservation across resize.
+- `test_banner.py` checks the shared splash/chat logo at width boundaries and through resize, including full lettering in short wide windows and the symbol-only fallback in narrow ones.
 - Image-rendering tests use `ImageRenderer.for_test()` or a fake renderer; they must not probe a developer terminal, import native terminal backends for headless/gateway tests, or require a live Agent Zero image endpoint.
 - Connector/plugin tests should not require a live Agent Zero server unless a test is explicitly designed as live/integration coverage.
 - Instance-discovery scenarios must stub every competing runtime path they do not exercise, including Docker CLI, local sockets, HTTP APIs, and WSL, so a developer's running containers cannot change expected results.

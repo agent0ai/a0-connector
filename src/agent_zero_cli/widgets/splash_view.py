@@ -89,17 +89,14 @@ def _validate_connection_target(host: str) -> tuple[bool, str]:
         return False, "Invalid URL format. Include a hostname or IP."
 
     try:
-        port = parsed.port
+        _ = parsed.port
     except ValueError:
         return False, "Invalid URL format. Port must be numeric."
 
     if normalized_host != raw_host:
-        return True, f"URL format looks valid. Using {normalized_host}."
+        return True, f"Will connect to {normalized_host}"
 
-    if port is None:
-        return True, "URL format looks valid. Standard ports 80/443 are optional."
-
-    return True, "URL format looks valid."
+    return True, ""
 
 
 @dataclass(frozen=True)
@@ -147,12 +144,12 @@ class SplashHostRow(Vertical):
     def __init__(self, instance: DiscoveredInstance) -> None:
         super().__init__(classes="splash-host-row")
         self._instance = instance
+        self.tooltip = Text(instance.status_text or instance.url)
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="splash-host-row-body"):
-            yield Static(self._instance.url, classes="splash-host-row-title")
-            detail = self._instance.status_text or self._instance.name or "Docker"
-            yield Static(detail, classes="splash-host-row-meta")
+            yield Static(self._instance.name or "Agent Zero", classes="splash-host-row-title", markup=False)
+            yield Static(self._instance.url, classes="splash-host-row-meta", markup=False)
 
     @property
     def host(self) -> str:
@@ -197,11 +194,8 @@ class SplashHostPanel(Vertical):
     def __init__(self) -> None:
         super().__init__(id="splash-host-panel")
         self._state = SplashState(stage="host")
-        self._title = Static("Local Agent Zero instances", classes="splash-panel-title")
-        self._copy = Static(
-            "Detected Agent Zero WebUI endpoints. Manual URL entry is available below.",
-            classes="splash-panel-copy",
-        )
+        self._title = Static("Choose a host", classes="splash-panel-title")
+        self._rendered_instances: tuple[DiscoveredInstance, ...] | None = None
         self._host_valid = True
         self._loading = LoadingIndicator(id="splash-host-loading")
         self._status = Static("", id="splash-host-status")
@@ -210,36 +204,29 @@ class SplashHostPanel(Vertical):
         self._validation = Static("", id="splash-host-validation")
         self._button = Button("Connect", id="splash-host-submit", variant="primary")
         self._remember_host = Checkbox("Remember this host", id="splash-host-remember")
-        self._refresh = Button("Refresh list", id="splash-host-refresh")
-        self._manual_toggle = Button("Enter URL manually", id="splash-host-toggle-manual")
-        self._manual_title = Static("Manual URL", classes="splash-panel-title", id="splash-manual-title")
-        self._manual_copy = Static(
-            "Use this for remote Agent Zero hosts or anything Docker cannot see. Standard ports are optional.",
-            classes="splash-panel-copy",
-        )
+        self._refresh = Button("Refresh", id="splash-host-refresh")
+        self._manual_toggle = Button("Enter a URL", id="splash-host-toggle-manual")
         self._hint = Static(
-            "Press Enter on a selected instance, or use the URL field below when manual entry is open.",
+            "↑ ↓ Select   Enter Connect   Tab Move",
             classes="splash-panel-hint",
         )
         self._manual_section = Vertical(id="splash-manual-section")
 
     def compose(self) -> ComposeResult:
-        yield self._title
-        yield self._copy
+        with Horizontal(id="splash-host-header"):
+            yield self._title
+            yield self._refresh
         yield self._loading
         yield self._status
         yield self._instances_mount
-        yield self._button
-        yield self._remember_host
-        with Horizontal(id="splash-host-secondary-actions"):
-            yield self._refresh
-            yield self._manual_toggle
         with self._manual_section:
-            yield self._manual_title
-            yield self._manual_copy
             yield self._host
             yield self._validation
-            yield self._hint
+        with Horizontal(id="splash-host-primary-actions"):
+            yield self._remember_host
+            yield self._button
+        yield self._hint
+        yield self._manual_toggle
 
     def on_mount(self) -> None:
         self._sync_ui()
@@ -250,12 +237,17 @@ class SplashHostPanel(Vertical):
             self._sync_ui()
 
     def _sync_ui(self) -> None:
+        self._title.update("Connect by URL" if self._state.manual_entry_expanded else "Choose a host")
         self.set_host(self._state.host)
         self._remember_host.value = bool(self._state.remember_host)
         self._sync_discovery_status()
         self._rebuild_instance_list()
         self._manual_section.display = bool(self._state.manual_entry_expanded)
-        self._manual_toggle.label = "Hide manual URL entry" if self._state.manual_entry_expanded else "Enter URL manually"
+        self._manual_toggle.label = "Choose a local host" if self._state.manual_entry_expanded else "Enter a URL"
+        self._hint.update(
+            "Enter Connect   Tab Move" if self._state.manual_entry_expanded
+            else "↑ ↓ Select   Enter Connect   Tab Move"
+        )
         self.refresh_validation()
         self._sync_connect_button()
 
@@ -281,19 +273,19 @@ class SplashHostPanel(Vertical):
 
     def _sync_discovery_status(self) -> None:
         status = self._state.discovery_status
-        self._loading.display = status == "loading"
+        self._loading.display = status == "loading" and not self._state.manual_entry_expanded
         self._safe_update(self._status, self._status_message())
-        self._status.display = True
+        self._status.display = status != "ready" and (
+            not self._state.manual_entry_expanded or status in {"empty", "unavailable", "error"}
+        )
 
     def _status_message(self) -> Text | str:
         status = self._state.discovery_status
         detail = self._state.discovery_detail.strip()
-        count = len(self._state.discovered_instances)
         if status == "loading":
-            return Text("Checking Docker for local Agent Zero instances...", style="#9aa7b4")
+            return Text("Looking for local instances…", style="#9aa7b4")
         if status == "ready":
-            noun = "endpoint" if count == 1 else "endpoints"
-            return Text(f"{count} Detected A0 {noun} ready to connect.", style="#79d18a")
+            return ""
         if status == "empty":
             message = detail or "No local Agent Zero Docker instances were found."
             return Text(f"{message} Install Agent Zero: http://agent-zero.ai", style="#9aa7b4")
@@ -302,21 +294,19 @@ class SplashHostPanel(Vertical):
         return Text(detail or "Docker discovery failed. Enter a URL manually.", style="#ff8b6b")
 
     def _rebuild_instance_list(self) -> None:
-        for child in list(self._instances_mount.children):
-            child.remove()
-        self._instances_mount.display = bool(self._state.discovered_instances)
-        if not self._state.discovered_instances:
-            self._instances_mount.styles.height = 0
-            return
-
-        for instance in self._state.discovered_instances:
-            row = SplashHostRow(instance)
-            if instance.url == self._state.selected_host_url:
-                row.add_class("-highlight")
-            self._instances_mount.mount(row)
-        # Give each discovered host row a fixed 4-cell lane so browser-preview
-        # repaints can't collapse the text out of view after the initial frame.
-        self._instances_mount.styles.height = min(max(len(self._state.discovered_instances) * 4 + 1, 6), 12)
+        instances = tuple(self._state.discovered_instances)
+        self._instances_mount.display = bool(instances) and not self._state.manual_entry_expanded
+        if instances != self._rendered_instances:
+            self._rendered_instances = instances
+            for child in list(self._instances_mount.children):
+                child.remove()
+            for instance in instances:
+                row = SplashHostRow(instance)
+                row.set_class(instance.url == self.selected_host_url, "-selected")
+                self._instances_mount.mount(row)
+        for row in self._instances_mount.query(SplashHostRow):
+            row.set_class(row.host == self.selected_host_url, "-selected")
+        self._instances_mount.styles.height = min(len(instances), 3) * 3
 
     def _sync_connect_button(self) -> None:
         if self._state.manual_entry_expanded:
@@ -332,9 +322,11 @@ class SplashHostPanel(Vertical):
         self._host_valid = valid
 
         if message.strip():
-            color = "#79d18a" if valid else "#ff8b6b"
+            color = "#9aa7b4" if valid else "#ff8b6b"
             self._safe_update(self._validation, Text(message, style=color))
-        self._validation.display = bool(self._state.manual_entry_expanded and message.strip())
+        else:
+            self._safe_update(self._validation, "Local or remote URL · port optional")
+        self._validation.display = self._state.manual_entry_expanded
         self._sync_connect_button()
 
     def focus_input(self) -> None:
@@ -726,7 +718,6 @@ class SplashView(VerticalScroll):
     def __init__(self) -> None:
         super().__init__(id="splash-view")
         self._hero = build_agent_zero_banner_widget(id="splash-hero")
-        self._workspace = Static("", id="splash-workspace")
         self._stage_label = Static("", id="splash-stage-label")
         self._message = Static("", id="splash-message")
         self._detail = Static("", id="splash-detail")
@@ -738,15 +729,18 @@ class SplashView(VerticalScroll):
         self._suppress_host_state_events = False
 
     def compose(self) -> ComposeResult:
-        yield self._hero
-        yield self._workspace
-        yield self._stage_label
-        yield self._message
-        yield self._detail
-        yield self._host_panel
-        yield self._login_panel
-        yield self._status_panel
-        yield self._actions
+        with Vertical(id="splash-content"):
+            yield self._hero
+            yield self._stage_label
+            yield self._message
+            yield self._detail
+            yield self._host_panel
+            yield self._login_panel
+            yield self._status_panel
+            yield self._actions
+
+    def on_resize(self, event: events.Resize) -> None:
+        self.update_classes({"compact": event.size.height < 28, "narrow": event.size.width < 56})
 
     def on_mount(self) -> None:
         self._sync_state()
@@ -769,20 +763,6 @@ class SplashView(VerticalScroll):
         stage_label_text = _STAGE_LABELS.get(self._state.stage, self._state.stage.title())
         self._stage_label.update(Text(stage_label_text, style="bold"))
         self._stage_label.display = show_header_copy and bool(stage_label_text.strip())
-
-        local_workspace = self._state.local_workspace.strip()
-        remote_workspace = self._state.remote_workspace.strip()
-        if local_workspace or remote_workspace:
-            fragments: list[str] = []
-            if local_workspace:
-                fragments.append(f"Local {local_workspace}")
-            if remote_workspace:
-                fragments.append(f"Remote {remote_workspace}")
-            self._workspace.update(Text("  |  ".join(fragments), style="#7f8c98"))
-            self._workspace.display = True
-        else:
-            self._workspace.update("")
-            self._workspace.display = False
 
         self._message.update(self._state.message)
         self._message.display = show_header_copy and bool(self._state.message.strip())
@@ -821,10 +801,15 @@ class SplashView(VerticalScroll):
         )
 
     def set_state(self, state: SplashState) -> None:
+        refocus = (
+            state.stage != self._state.stage
+            or state.manual_entry_expanded != self._state.manual_entry_expanded
+            or state.discovered_instances != self._state.discovered_instances
+        )
         self._state = state
         if self.is_mounted:
             self._sync_state()
-            if state.stage in {"host", "login", "error"}:
+            if refocus and state.stage in {"host", "login", "error"}:
                 self.focus_primary()
 
     def set_stage(
@@ -1068,6 +1053,7 @@ class SplashView(VerticalScroll):
         if next_state == self._state:
             return
         self._state = next_state
+        self._host_panel.set_state(next_state)
         self.post_message(
             self.HostStateChanged(
                 host=self._state.host,

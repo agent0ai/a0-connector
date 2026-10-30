@@ -63,14 +63,20 @@ _MEDIA_META_KEYS = frozenset(
     }
 )
 
-_AGENT_ZERO_BANNER = """ █████╗   ██████╗ ███████╗███╗   ██╗████████╗   ███████╗███████╗██████╗  ██████╗
-██╔══██╗ ██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝   ╚══███╔╝██╔════╝██╔══██╗██╔═══██╗
-███████║ ██║  ███╗█████╗  ██╔██╗ ██║   ██║        ███╔╝ █████╗  ██████╔╝██║   ██║
-██╔══██║ ██║   ██║██╔══╝  ██║╚██╗██║   ██║       ███╔╝  ██╔══╝  ██╔══██╗██║   ██║
-██║  ██║ ╚██████╔╝███████╗██║ ╚████║   ██║      ███████╗███████╗██║  ██║╚██████╔╝
-╚═╝  ╚═╝  ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝      ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝"""
-_AGENT_ZERO_BANNER_COMPACT = "Agent Zero"
-_AGENT_ZERO_BANNER_TINY = "A0"
+_AGENT_ZERO_BANNER = (
+    "              ▄▀▀▀▄ ▄▀▀▀▀ ▄▀▀▀▀ ▀▄  ▄ ▀▀█▀▀\n"
+    "     ▄█▄      ▄▀▀▀█ ▄ ▀▀█ █▀▀ ▄ █ ▀▄█   █\n"
+    "   ▄█▀ ▀█▄    ▀   ▀  ▀▀▀▀  ▀▀▀▀ ▀   ▀   ▀\n"
+    " ▄█▀     ▀█▄     ▀▀▀▀▄ ▄▀▀▀▀ █▀▀▀▄ ▄▀▀▀▄\n"
+    "▀▀  ▀▀▀▀▀  ▀▀     ▄▀▀  █▀▀   █▀▀▀▄ █   █\n"
+    "                 ▀▀▀▀▀  ▀▀▀▀ ▀   ▀  ▀▀▀"
+)
+_AGENT_ZERO_BANNER_COMPACT = (
+    "      ▄\n"
+    "    ▄█▀█▄\n"
+    "  ▄█▀   ▀█▄\n"
+    "▄█▀ ▄▄▄▄▄ ▀█▄"
+)
 
 
 def _banner_width(banner: str) -> int:
@@ -80,7 +86,6 @@ def _banner_width(banner: str) -> int:
 _BANNER_VARIANTS: tuple[str, ...] = (
     _AGENT_ZERO_BANNER,
     _AGENT_ZERO_BANNER_COMPACT,
-    _AGENT_ZERO_BANNER_TINY,
 )
 
 
@@ -89,7 +94,7 @@ def _select_agent_zero_banner(available_width: int) -> str:
     for banner in _BANNER_VARIANTS:
         if width >= _banner_width(banner):
             return banner
-    return _AGENT_ZERO_BANNER_TINY
+    return ""
 
 
 def _build_banner_text(banner: str) -> Text:

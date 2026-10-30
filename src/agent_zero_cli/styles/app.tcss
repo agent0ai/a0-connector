@@ -45,12 +45,12 @@ TranscriptEntry > CodeEntry {
     background: #1b232d;
 }
 
-.agent-zero-banner {
-    margin-top: 0;
+#chat-log > .agent-zero-banner,
+#chat-log > .workspace-context {
+    margin: 1 2 0 2;
 }
 
 .workspace-context {
-    margin-top: 1;
     color: #7f8c98;
 }
 
@@ -1334,17 +1334,20 @@ ProjectInstructionsScreen {
 
 SplashView {
     height: 1fr;
-    padding: 1;
+    padding: 1 2;
     background: #17181a;
+    align: center top;
+    scrollbar-size: 1 1;
+}
+
+#splash-content {
+    width: 100%;
+    max-width: 82;
+    height: auto;
 }
 
 #splash-hero {
     margin-bottom: 0;
-}
-
-#splash-workspace {
-    margin-top: 1;
-    color: #7f8c98;
 }
 
 #splash-stage-label {
@@ -1395,6 +1398,21 @@ SplashStatusPanel {
     margin-top: 1;
 }
 
+#splash-host-panel {
+    padding: 0;
+}
+
+#splash-host-panel .splash-panel-title {
+    width: 1fr;
+    margin-bottom: 0;
+}
+
+#splash-host-header {
+    width: 100%;
+    height: 1;
+    margin-bottom: 1;
+}
+
 .splash-panel-title {
     text-style: bold;
     margin-bottom: 1;
@@ -1430,44 +1448,55 @@ SplashStatusPanel {
     align: left middle;
 }
 
-#splash-host-loading,
-#splash-host-status,
-#splash-host-list-mount {
-    margin-top: 1;
+#splash-host-loading {
+    height: 1;
 }
 
 #splash-host-status {
     color: #9aa7b4;
+    margin-bottom: 1;
 }
 
 #splash-host-list-mount {
     width: 100%;
-    border: round #2a3a4a;
-    background: #111820;
-    padding: 0 1;
+    background: transparent;
+    padding: 0;
     overflow-y: auto;
+    scrollbar-size: 1 1;
 }
 
 .splash-host-row {
     width: 100%;
-    height: 4;
-    min-height: 4;
+    height: 3;
+    min-height: 3;
     margin: 0;
-    padding: 0;
-    border-bottom: solid #1d2a36;
+    padding: 0 1;
+    border-left: solid #2a3a4a;
     overflow: hidden;
 }
 
-.splash-host-row.-highlight,
-.splash-host-row:hover {
+.splash-host-row.-selected,
+.splash-host-row.-highlight {
     background: #172533;
+}
+
+.splash-host-row:hover {
+    background: #141d26;
+}
+
+.splash-host-row.-selected {
+    border-left: thick #00b4ff;
+}
+
+.splash-host-row:focus .splash-host-row-title {
+    text-style: bold underline;
 }
 
 .splash-host-row-body {
     width: 100%;
-    height: 4;
-    min-height: 4;
-    padding: 1 1 0 1;
+    height: 3;
+    min-height: 3;
+    padding: 0;
     background: transparent;
     overflow: hidden;
 }
@@ -1477,63 +1506,103 @@ SplashStatusPanel {
     color: #d9e2ec;
     text-style: bold;
     overflow-x: hidden;
+    text-wrap: nowrap;
     text-overflow: ellipsis;
 }
 
 .splash-host-row-meta {
     width: 100%;
-    margin-bottom: 1;
-    color: #7f8c98;
+    color: #9aa7b4;
     overflow-x: hidden;
+    text-wrap: nowrap;
     text-overflow: ellipsis;
 }
 
-.splash-host-row.-highlight .splash-host-row-title,
+.splash-host-row.-selected .splash-host-row-title,
 .splash-host-row:focus .splash-host-row-title {
     color: #f5f7fa;
 }
 
-.splash-host-row.-highlight .splash-host-row-meta,
+.splash-host-row.-selected .splash-host-row-meta,
 .splash-host-row:focus .splash-host-row-meta {
     color: #9ecfff;
 }
 
 #splash-host-validation {
-    margin-top: 1;
+    margin-top: 0;
     min-height: 1;
+    color: #9aa7b4;
 }
 
-#splash-host-secondary-actions {
-    width: 100%;
+#splash-host-primary-actions {
     height: auto;
-    layout: horizontal;
     margin-top: 1;
+    align-vertical: middle;
+}
+
+#splash-host-primary-actions #splash-host-submit {
+    width: 16;
+    margin-top: 0;
+}
+
+#splash-host-remember {
+    width: 1fr;
+    height: 3;
+    background: transparent;
+    border: none;
+    padding: 1 0;
+    color: #9aa7b4;
+}
+
+#splash-host-remember:focus {
+    color: #f5f7fa;
+    text-style: underline;
+}
+
+#splash-host-remember > .toggle--button {
+    color: #7f8c98;
+    background: #22303d;
+}
+
+#splash-host-remember.-on > .toggle--button {
+    color: #00b4ff;
 }
 
 #splash-host-refresh,
 #splash-host-toggle-manual {
-    width: 1fr;
+    width: auto;
+    min-width: 0;
+    height: 1;
+    min-height: 1;
+    padding: 0;
+    text-wrap: nowrap;
+    text-align: left;
+    content-align: left middle;
     background: transparent;
     color: #80d0ff;
-    border: round #2a3a4a;
-    text-style: bold;
+    border: none;
+}
+
+#splash-host-toggle-manual {
+    width: 22;
+    margin-top: 2;
 }
 
 #splash-host-refresh {
-    margin-right: 1;
+    text-align: right;
+    content-align: right middle;
 }
 
 #splash-host-refresh:focus,
 #splash-host-toggle-manual:focus {
     background: #172533;
     color: #f5f7fa;
-    border: round #00b4ff;
+    text-style: underline;
 }
 
 #splash-host-refresh:disabled,
 #splash-host-toggle-manual:disabled {
     color: #7f8b97;
-    border: round #2a3a4a;
 }
 
 #splash-login-back {
@@ -1634,13 +1703,27 @@ SplashStatusPanel {
 #splash-manual-section {
     width: 100%;
     height: auto;
-    margin-top: 1;
-    padding-top: 1;
-    border-top: solid #1d2a36;
 }
 
-#splash-manual-title {
-    margin-bottom: 0;
+#splash-host-input {
+    margin-top: 0;
+}
+
+SplashView.compact #splash-host-primary-actions,
+SplashView.compact .splash-panel-hint {
+    margin-top: 0;
+}
+
+SplashView.compact #splash-host-toggle-manual {
+    margin-top: 1;
+}
+
+SplashView.narrow #splash-host-primary-actions {
+    layout: vertical;
+}
+
+SplashView.narrow #splash-host-primary-actions #splash-host-submit {
+    width: 100%;
 }
 
 #splash-save-credentials {
