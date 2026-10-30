@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import builtins
 import inspect
+import json
+import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -48,6 +50,75 @@ def test_non_tty_disables_images() -> None:
     ).mode == "off"
 
 
+@pytest.mark.parametrize(
+    ("requested", "supported", "expected_mode", "expected_probes"),
+    [
+        ("auto", "none", "off", ["tgp", "sixel"]),
+        ("auto", "tgp", "tgp", ["tgp"]),
+        ("auto", "sixel", "sixel", ["tgp", "sixel"]),
+        ("tgp", "tgp", "tgp", ["tgp"]),
+        ("tgp", "sixel", "off", ["tgp"]),
+        ("sixel", "sixel", "sixel", ["sixel"]),
+        ("sixel", "tgp", "off", ["sixel"]),
+    ],
+)
+def test_fresh_native_renderer_probes_only_required_protocols(
+    requested: str,
+    supported: str,
+    expected_mode: str,
+    expected_probes: list[str],
+) -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", r'''
+from contextlib import contextmanager
+import io
+import json
+import sys
+from types import SimpleNamespace
+
+from agent_zero_cli.image_render import initialize_image_renderer
+from textual_image import _terminal
+
+class Terminal(io.StringIO):
+    def isatty(self):
+        return True
+
+terminal = Terminal()
+sys.__stdout__ = terminal
+probes = []
+
+@contextmanager
+def capture_terminal_response(start_marker, end_marker, timeout):
+    assert sys.__stdout__ is terminal
+    protocol = "tgp" if start_marker == "\x1b_G" else "sixel"
+    probes.append(protocol)
+    supported = sys.argv[2] == protocol
+    if protocol == "tgp":
+        payload = "i=1;OK" if supported else "i=1;ENOTSUP"
+    else:
+        payload = "1;4" if supported else "1;2"
+    yield SimpleNamespace(sequence=start_marker + payload + end_marker)
+
+_terminal.capture_terminal_response = capture_terminal_response
+_terminal.get_cell_size._result = _terminal.CellSize(10, 20)
+renderer = initialize_image_renderer(environ={"A0_CLI_IMAGE_MODE": sys.argv[1]})
+assert sys.__stdout__ is terminal
+if renderer.mode != "off":
+    from PIL import Image
+    from agent_zero_cli.image_render import CellBox
+    from textual_image.widget import SixelImage, TGPImage
+    widget = renderer.create_widget(Image.new("RGB", (4, 4)), CellBox(4, 2))
+    assert isinstance(widget, TGPImage if renderer.mode == "tgp" else SixelImage)
+print(json.dumps({"mode": renderer.mode, "probes": probes}))
+''', requested, supported],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"mode": expected_mode, "probes": expected_probes}
+
+
 def test_pytest_context_forces_library_free_halfcell_before_native_probes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -75,6 +146,33 @@ def test_pytest_context_forces_library_free_halfcell_before_native_probes(
     assert renderer.mode == "halfcell"
     assert renderer._widget_factory is None
     assert probes == []
+
+
+@pytest.mark.parametrize("requested", ["auto", "halfcell"])
+def test_image_import_failure_restores_terminal_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+    requested: str,
+) -> None:
+    from textual_image._terminal import CellSize, get_cell_size
+
+    tty_stdout = SimpleNamespace(isatty=lambda: True)
+    monkeypatch.setattr(sys, "__stdout__", tty_stdout)
+    monkeypatch.setattr(get_cell_size, "_result", CellSize(10, 20), raising=False)
+    real_import = builtins.__import__
+    import_name = "textual_image.widget" if requested == "halfcell" else "textual_image.renderable"
+
+    def fail_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == import_name:
+            assert not sys.__stdout__.isatty()
+            raise ImportError("Image library unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_import)
+    renderer = initialize_image_renderer(environ={"A0_CLI_IMAGE_MODE": requested})
+
+    assert sys.__stdout__ is tty_stdout
+    assert renderer.mode == ("halfcell" if requested == "halfcell" else "off")
+    assert renderer._widget_factory is None
 
 
 def test_explicit_halfcell_skips_native_probes_and_constructs_renderer(
@@ -195,15 +293,16 @@ def test_iterm_sixel_capability_requires_an_exact_token(
 
 
 @pytest.mark.parametrize(
-    "environment_override",
+    ("environment_override", "expected_probes"),
     [
-        {"TMUX": "/private/tmp/tmux/default,1,0"},
-        {"A0_CLI_IMAGE_MODE": "sixel"},
+        ({"TMUX": "/private/tmp/tmux/default,1,0"}, ["tgp", "sixel"]),
+        ({"A0_CLI_IMAGE_MODE": "sixel"}, ["sixel"]),
     ],
 )
 def test_iterm_sixel_capability_only_overrides_auto_outside_tmux(
     monkeypatch: pytest.MonkeyPatch,
     environment_override: dict[str, str],
+    expected_probes: list[str],
 ) -> None:
     from textual_image._terminal import CellSize, get_cell_size
     from textual_image.renderable import sixel, tgp
@@ -223,7 +322,7 @@ def test_iterm_sixel_capability_only_overrides_auto_outside_tmux(
     renderer = initialize_image_renderer(environ=environment)
 
     assert renderer.mode == "off"
-    assert probes == ["tgp", "sixel"]
+    assert probes == expected_probes
 
 
 def test_non_iterm_terminal_still_uses_native_probes(

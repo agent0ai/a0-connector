@@ -20,6 +20,29 @@ class SplashViewHarness(App[None]):
         yield SplashView()
 
 
+def test_splash_stage_updates_styles_only_when_stage_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    view = SplashView()
+    view.add_class("custom-splash")
+    updates: list[bool] = []
+    monkeypatch.setattr(view, "update_node_styles", lambda **_: updates.append(True))
+
+    for stage in ("host", "login", "connecting", "ready", "error", "host"):
+        updates.clear()
+        view._apply_stage(stage)
+        assert view.classes == {"custom-splash", f"stage-{stage}"}
+        assert updates == [True]
+        assert view._host_panel.display is (stage == "host")
+        assert view._login_panel.display is (stage == "login")
+        assert view._status_panel.display is (stage in {"connecting", "error"})
+        assert view._actions.display is (stage == "ready")
+
+        updates.clear()
+        view._apply_stage(stage)
+        assert updates == []
+
+
 @pytest.mark.parametrize(
     "host",
     [

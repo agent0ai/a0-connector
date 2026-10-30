@@ -10,7 +10,6 @@ from typing import Any
 from rich.align import Align
 from rich import box
 from rich.console import Group
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.padding import Padding
 from rich.text import Text
@@ -303,6 +302,8 @@ def render_connector_event(
 
     if category == "response":
         if text:
+            from rich.markdown import Markdown
+
             if seq == 1:
                 log.mark_intro_message(seq)
             # Add markdown render inside Left aligned or normal layout

@@ -16,6 +16,7 @@
 - `ChatInput` is the single source for composer behavior: Enter submits, `Ctrl+J` inserts a newline, `Ctrl+A` selects the full draft, history is scoped by chat context, `@` opens reference completion, and content grows to four lines before internal scrolling.
 - Reference completion inserts prompt text only: `@[./path]`, `@[./folder/]`, `@[/container/path]`, `@[agent/profile]`, `@[skill/name]`, or `@[mcp/server]`. It must not activate skills or delegate work.
 - Discovered host rows use Up/Down to move the active selection and Enter or Space to connect.
+- Splash stage classes update in one atomic batch. Repeated state updates within the same stage must not remove/re-add the class and restyle the whole splash; preserve unrelated classes and continue refreshing panel contents.
 - In-input activity must use the WebUI-style `|>  ` placeholder prefix, add the `progress-active` class, and escape detail text before putting it into Rich/Textual markup.
 - `ChatInput.set_idle()` must clear activity state and restore the normal placeholder without losing attachment or queue placeholder state.
 - Do not reintroduce `ActivityBar` or `#status-bar`. Activity belongs in `#message-input`.

@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Literal
 
@@ -187,15 +188,9 @@ class ImageRenderer:
             owned_widget.refresh()
 
 
-def _create_halfcell_renderer(selection: RendererSelection) -> ImageRenderer:
-    """Build the real Unicode fallback without probing native protocols."""
-    try:
-        from textual_image._terminal import get_cell_size
-
-        cell_size = get_cell_size()
-    except ImportError:
-        return ImageRenderer(selection, cell_pixels=(1, 2))
-
+@contextmanager
+def _without_image_autodetection() -> Iterator[None]:
+    """Suppress import-time probes; explicit factories use our own selection."""
     original_stdout = sys.__stdout__
 
     class _NonTtyStdout:
@@ -208,11 +203,21 @@ def _create_halfcell_renderer(selection: RendererSelection) -> ImageRenderer:
     try:
         if original_stdout is not None:
             sys.__stdout__ = _NonTtyStdout()  # type: ignore[assignment]
-        from textual_image.widget import HalfcellImage
-    except ImportError:
-        return ImageRenderer(selection, cell_pixels=(1, 2))
+        yield
     finally:
         sys.__stdout__ = original_stdout
+
+
+def _create_halfcell_renderer(selection: RendererSelection) -> ImageRenderer:
+    """Build the real Unicode fallback without probing native protocols."""
+    try:
+        from textual_image._terminal import get_cell_size
+
+        cell_size = get_cell_size()
+        with _without_image_autodetection():
+            from textual_image.widget import HalfcellImage
+    except ImportError:
+        return ImageRenderer(selection, cell_pixels=(1, 2))
     return ImageRenderer(
         selection,
         cell_pixels=(cell_size.width, cell_size.height),
@@ -264,9 +269,10 @@ def initialize_image_renderer(
         return ImageRenderer(selection, cell_pixels=(1, 1))
 
     try:
-        from textual_image.renderable import tgp, sixel
+        with _without_image_autodetection():
+            from textual_image.renderable import tgp, sixel
 
-        tgp_supported = bool(tgp.query_terminal_support()) if is_tty else False
+        tgp_supported = normalized != "sixel" and bool(tgp.query_terminal_support())
         direct_iterm_reports_sixel = (
             normalized == "auto"
             and term_program == "iterm.app"
@@ -276,7 +282,11 @@ def initialize_image_renderer(
         if direct_iterm_reports_sixel:
             sixel_supported = True
         else:
-            sixel_supported = bool(sixel.query_terminal_support()) if is_tty else False
+            sixel_supported = (
+                normalized != "tgp"
+                and not tgp_supported
+                and bool(sixel.query_terminal_support())
+            )
         selection = select_image_mode(
             requested,
             is_tty=is_tty,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -13,6 +14,30 @@ from agent_zero_cli import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_markdown_loads_only_when_rendering_an_assistant_response() -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", """
+import sys
+from types import SimpleNamespace
+import agent_zero_cli.app
+from agent_zero_cli.rendering import render_connector_event
+
+assert 'rich.markdown' not in sys.modules
+panels = []
+log = SimpleNamespace(append_or_update=lambda seq, panel, **kwargs: panels.append(panel))
+assert render_connector_event(log, {
+    'event': 'assistant_message', 'sequence': 2, 'data': {'text': '**Hello**'},
+})
+from rich.markdown import Markdown
+assert isinstance(panels[0].renderable, Markdown)
+"""],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_windows_machine_stdio_preserves_exact_unicode(

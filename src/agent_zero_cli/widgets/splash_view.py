@@ -753,9 +753,7 @@ class SplashView(VerticalScroll):
         self.focus_primary()
 
     def _apply_stage(self, stage: SplashStage) -> None:
-        for value in _STAGE_ORDER:
-            self.remove_class(f"stage-{value}")
-        self.add_class(f"stage-{stage}")
+        self.update_classes({f"stage-{value}": value == stage for value in _STAGE_ORDER})
 
         self._host_panel.display = stage == "host"
         self._login_panel.display = stage == "login"
