@@ -32,19 +32,23 @@ def test_snapshot_uses_current_cli_config_shape() -> None:
     assert config.instance_url == "http://127.0.0.1:19999"
 
 
-def test_preview_launcher_forces_halfcell(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preview_launcher_forces_colour_and_halfcell(monkeypatch: pytest.MonkeyPatch) -> None:
     preview = _load_module("preview_launcher_images", "devtools/preview_launcher.py")
-    called: list[tuple[str, list[str]]] = []
+    called: list[tuple[str, list[str], dict[str, str]]] = []
     monkeypatch.setenv("A0_CLI_IMAGE_MODE", "auto")
+    monkeypatch.setenv("NO_COLOR", "1")
     monkeypatch.setattr(
         preview.os,
-        "execv",
-        lambda executable, argv: called.append((executable, argv)),
+        "execve",
+        lambda executable, argv, env: called.append((executable, argv, env)),
     )
 
     preview.main()
 
-    assert preview.os.environ["A0_CLI_IMAGE_MODE"] == "halfcell"
+    assert called[0][2]["A0_CLI_IMAGE_MODE"] == "halfcell"
+    assert "NO_COLOR" not in called[0][2]
+    assert preview.os.environ["NO_COLOR"] == "1"
+    assert preview.os.environ["A0_CLI_IMAGE_MODE"] == "auto"
     assert called[0][1][-2:] == ["-m", "agent_zero_cli"]
 
 
@@ -63,6 +67,26 @@ def test_snapshot_uses_forced_halfcell_renderer(monkeypatch: pytest.MonkeyPatch)
 
     assert renderer.mode == "halfcell"
     assert isinstance(widget, HalfcellImage)
+
+
+@pytest.mark.anyio
+async def test_snapshot_keeps_theme_colour_from_no_colour_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_zero_cli.app import AgentZeroCLI
+
+    snapshot = _load_module("snapshot_colour", "devtools/snapshot.py")
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
+    monkeypatch.setattr(AgentZeroCLI, "_start_instance_discovery", lambda *a, **kw: None)
+    monkeypatch.setattr(AgentZeroCLI, "_start_cli_update_check", lambda *a, **kw: None)
+    output = tmp_path / "colour.svg"
+
+    await snapshot._capture(output, width=100, height=32, wait=0)
+
+    assert "fill: #00b4ff" in output.read_text(encoding="utf-8")
+    assert snapshot.os.environ["NO_COLOR"] == "1"
+    assert AgentZeroCLI(config=snapshot._snapshot_config()).no_color
 
 
 @pytest.mark.parametrize(

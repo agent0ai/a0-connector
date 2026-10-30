@@ -2,6 +2,8 @@
 
 Terminal connector for [Agent Zero](https://github.com/frdel/agent-zero). It pairs a Textual CLI with a small Agent Zero plugin so you can chat from the terminal, follow streaming events, and use the connector-specific remote editing/runtime features.
 
+![Agent Zero CLI with its cyan logo, chat tabs, model controls, and message composer](docs/res/usage/a0-cli/a0-cli-start.png)
+
 ## Components
 
 | Component | Location | Purpose |

@@ -34,9 +34,30 @@ Runs the full TUI inside a browser tab — the closest thing to "inspect element
 
 On Linux, the preview launcher now arms a parent-death signal so browser-preview CLI sessions shut down with the serving process instead of lingering under `systemd --user`.
 
+Browser previews retain the full-colour CLI theme, including when launched from an automation shell with `NO_COLOR=1`. The preview launcher removes that inherited flag; `textual-serve` already requests true colour. Reload the browser tab after code or stylesheet changes to start a fresh TUI process.
+
 The launcher deliberately sets `A0_CLI_IMAGE_MODE=halfcell` for its child. xterm.js previews the portable, bounded fallback and do not exercise TGP/Sixel protocol bytes or native-surface cleanup. Use a separately verified capable terminal for native TGP/Sixel acceptance; do not assume Apple Terminal supports either protocol.
 
 > **Tip:** Append `?fontsize=14` to the URL to tweak the rendered font size.
+
+### Public documentation captures
+
+Launch from a neutral demo directory so the workspace line does not expose a
+personal username or project path. From the connector repo:
+
+```bash
+connector_repo="$PWD"
+mkdir -p /tmp/a0-cli-demo
+cd /tmp/a0-cli-demo
+"$connector_repo/.venv/bin/python" "$connector_repo/devtools/serve.py"
+```
+
+Use a fresh demo chat and inspect the capture for personal paths, browser debug
+URLs, credentials, and unrelated content before copying it into documentation.
+For general CLI docs, disable community composer additions such as Reasoning
+Effort in the capture instance so the images show the vanilla Core controls.
+Keep the same optimized image bytes in the Core and website docs when they show
+the same state.
 
 ## 2. SVG Snapshot (`snapshot.py`)
 
@@ -54,7 +75,7 @@ Captures a pixel-perfect SVG of the TUI's initial screen (no live backend needed
 
 Output lands in `devtools/snapshots/` by default.
 
-Snapshots initialize and inject the same forced half-cell renderer, so capture is deterministic and library-free. SVG output is layout evidence only; it does not prove native terminal-protocol rendering or cleanup.
+Snapshots also remove inherited `NO_COLOR` and initialize the same real half-cell renderer for deterministic layout without native protocol probes. SVG output is layout evidence only; it does not prove native terminal-protocol rendering or cleanup. These devtools overrides do not change colour preferences for ordinary `a0` sessions.
 
 ## 3. AI Agent Runbook: Send Text Through the Textual Wrapper
 
@@ -63,6 +84,7 @@ When the app is served via `devtools/serve.py`, Textual is rendered through an `
 - Selector: `#terminal .xterm-helper-textarea`
 - Model: click/focus terminal helper -> type keys -> press Enter
 - Multiline composer input: use `Ctrl+J` to insert a newline. Some browser/xterm paths collapse `Shift+Enter` into plain `Enter`.
+- To automate slash commands, type `/`, wait for the palette to open, then type the rest and press Enter. Use `/clear` instead of `F5`, which the browser may handle as a page reload.
 
 ### Why this matters
 

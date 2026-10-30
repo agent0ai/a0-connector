@@ -8,6 +8,7 @@
 
 - `README.md` in this folder, architecture, configuration, development, headless mode, and TUI frontend docs are owned here.
 - Root `README.md` remains root-owned, but docs here must stay consistent with it.
+- `res/usage/a0-cli/a0-cli-start.png` is the connected-terminal image used by the root README. Keep product captures real, in colour, optimized, and free of personal paths; use devtools from a neutral demo directory for workflow screenshots.
 
 ## Local Contracts
 

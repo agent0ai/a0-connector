@@ -31,10 +31,13 @@ def _arm_parent_death_signal() -> None:
 
 def main() -> None:
     _arm_parent_death_signal()
+    # Browser captures should retain the theme even in a no-colour automation shell.
+    environment = dict(os.environ)
+    environment.pop("NO_COLOR", None)
     # xterm.js does not exercise terminal image protocols. Keep the browser
     # preview deterministic and representative of the universal fallback.
-    os.environ["A0_CLI_IMAGE_MODE"] = "halfcell"
-    os.execv(sys.executable, [sys.executable, "-m", "agent_zero_cli"])
+    environment["A0_CLI_IMAGE_MODE"] = "halfcell"
+    os.execve(sys.executable, [sys.executable, "-m", "agent_zero_cli"], environment)
 
 
 if __name__ == "__main__":

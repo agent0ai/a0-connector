@@ -38,10 +38,16 @@ def _snapshot_renderer():
 async def _capture(output: Path, width: int, height: int, wait: float) -> None:
     from agent_zero_cli.app import AgentZeroCLI
 
-    app = AgentZeroCLI(
-        config=_snapshot_config(),
-        image_renderer=_snapshot_renderer(),
-    )
+    # SVG captures should retain the theme even in a no-colour automation shell.
+    no_color = os.environ.pop("NO_COLOR", None)
+    try:
+        app = AgentZeroCLI(
+            config=_snapshot_config(),
+            image_renderer=_snapshot_renderer(),
+        )
+    finally:
+        if no_color is not None:
+            os.environ["NO_COLOR"] = no_color
 
     async with app.run_test(size=(width, height)) as pilot:
         # Give the app time to mount and render initial frame.
