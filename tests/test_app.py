@@ -2544,6 +2544,72 @@ async def test_switch_context_persists_last_context(
     assert dummy_app.agent_active is False
 
 
+@pytest.mark.parametrize("greeting_delivery", ["snapshot", "live"])
+async def test_new_chat_and_returning_tab_restore_intro_banner(
+    monkeypatch: pytest.MonkeyPatch,
+    greeting_delivery: str,
+) -> None:
+    app = AgentZeroCLI(config=CLIConfig(instance_url="http://example.test"), discover_instances=False)
+    for method in (
+        "_startup",
+        "_refresh_context_tab_metadata",
+        "_refresh_remote_tool_metadata",
+        "_publish_remote_tree_snapshot",
+        "_refresh_projects",
+        "_refresh_goal_bar",
+        "_refresh_model_switcher",
+        "_refresh_token_usage",
+    ):
+        monkeypatch.setattr(app, method, AsyncMock())
+    monkeypatch.setattr(app, "_start_cli_update_check", lambda: None)
+    monkeypatch.setattr(app, "_start_token_refresh", lambda: None)
+    monkeypatch.setattr(app, "_remember_context", lambda _context_id: None)
+    monkeypatch.setattr(app.client, "create_chat", AsyncMock(return_value="ctx-new"))
+    monkeypatch.setattr(app.client, "unsubscribe_context", AsyncMock())
+
+    async def subscribe(context_id: str, **_kwargs: object) -> None:
+        greeting = {
+            "context_id": context_id,
+            "event": "assistant_message",
+            "sequence": 1,
+            "data": {"text": f"Hello from {context_id}"},
+        }
+        if greeting_delivery == "live" and context_id == "ctx-new":
+            app._handle_context_event(greeting)
+        else:
+            app._handle_context_snapshot({"context_id": context_id, "events": [greeting]})
+
+    monkeypatch.setattr(app.client, "subscribe_context", subscribe)
+
+    async with app.run_test(size=(80, 30)) as pilot:
+        app.connected = True
+        app.connector_features = {"chat_create"}
+        app.current_context = "ctx-first"
+        app._remember_context_tab("ctx-first")
+        await subscribe("ctx-first")
+        await pilot.pause()
+        log = app.query_one(ChatLog)
+        assert len(log.query(".agent-zero-banner")) == 1
+
+        tabs = app.query_one(ContextTabs)
+        assert tabs._new_span is not None
+        await pilot.click(tabs, offset=(tabs._new_span[0] + tabs.styles.padding.left + 2, 0))
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.current_context == "ctx-new"
+        assert len(log.query(".agent-zero-banner")) == 1
+        assert "Hello from ctx-new" in log.copyable_text(visible_only=False)
+        assert "Hello from ctx-first" not in log.copyable_text(visible_only=False)
+
+        await pilot.click(tabs, offset=(tabs.styles.padding.left + 2, 0))
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.current_context == "ctx-first"
+        assert len(log.query(".agent-zero-banner")) == 1
+        assert "Hello from ctx-first" in log.copyable_text(visible_only=False)
+        assert "Hello from ctx-new" not in log.copyable_text(visible_only=False)
+
+
 def test_context_tab_metadata_updates_active_tab(dummy_app: DummyAgentZeroCLI) -> None:
     dummy_app.connected = True
     dummy_app.connector_features = {"chat_create"}

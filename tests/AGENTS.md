@@ -20,6 +20,7 @@
 - Connection-header coverage checks initial host selection and manual entry stay quiet, while connection attempts, errors, and connected chats restore the status row.
 - Splash layout tests load the real stylesheet and echo host-state messages like the app. Check complete rendered button labels, heading/Refresh alignment and spacing, the bottom manual-URL toggle, absence of splash workspace paths, visible connection controls at compact sizes, stable selection/focus, and manual-input preservation across resize.
 - `test_banner.py` checks the shared splash/chat logo at width boundaries and through resize, including full lettering in short wide windows and the symbol-only fallback in narrow ones.
+- Chat-tab regression coverage clicks `+` and returns to the original tab using real widgets, checking one banner per transcript with both live and replayed greetings.
 - Image-rendering tests use `ImageRenderer.for_test()` or a fake renderer; they must not probe a developer terminal, import native terminal backends for headless/gateway tests, or require a live Agent Zero image endpoint.
 - Connector/plugin tests should not require a live Agent Zero server unless a test is explicitly designed as live/integration coverage.
 - Instance-discovery scenarios must stub every competing runtime path they do not exercise, including Docker CLI, local sockets, HTTP APIs, and WSL, so a developer's running containers cannot change expected results.
