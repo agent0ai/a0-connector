@@ -206,7 +206,6 @@ TranscriptEntry > CodeEntry {
 .composer-control {
     max-width: 26;
     margin-right: 0;
-    color: #80d0ff;
 }
 
 ComposerChoiceScreen {

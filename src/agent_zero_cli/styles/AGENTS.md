@@ -17,6 +17,7 @@
 - Do not reintroduce `#status-bar`; the status-bar surface was removed.
 - Footer styling must not depend on duplicate command palette bindings.
 - Visible composer bars and anchored popovers must not leave blank rows between adjoining surfaces.
+- Plugin composer labels share the provider/model chip's text colour and keyboard-focus styling.
 - Keep UI text and controls from overlapping in browser preview and terminal-size snapshots.
 - The model editor scrolls only its fields; keep the title, status, and Apply/Cancel outside that scroll area. Vision checkboxes use a visible checked-state accent and retain keyboard focus styling.
 
