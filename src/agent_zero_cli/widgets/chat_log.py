@@ -919,9 +919,9 @@ class ChatLog(VerticalScroll):
     def _workspace_line(self) -> str:
         parts: list[str] = []
         if self._local_workspace:
-            parts.append(f"Local {self._local_workspace}")
+            parts.append(f"Host {self._local_workspace}")
         if self._remote_workspace:
-            parts.append(f"Remote {self._remote_workspace}")
+            parts.append(f"Container {self._remote_workspace}")
         return "  |  ".join(parts)
 
     def _sync_workspace_widget(self) -> None:
