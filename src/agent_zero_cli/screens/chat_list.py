@@ -5,10 +5,12 @@ from datetime import datetime, timedelta
 import re
 from typing import Any, Mapping
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Center, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import ListItem, ListView, Static
+from textual.widgets import OptionList, Static
+from textual.widgets.option_list import Option
 
 from agent_zero_cli.text_utils import collapse_whitespace
 
@@ -134,23 +136,6 @@ def _build_entry(context: Mapping[str, object], index: int, *, now: datetime | N
     )
 
 
-class ChatListRow(ListItem):
-    def __init__(self, entry: ChatListEntry, *, item_id: str) -> None:
-        super().__init__(id=item_id, classes="chat-list-item")
-        self._entry = entry
-
-    def compose(self) -> ComposeResult:
-        # Server-provided chat names and message previews are literal display
-        # content; markup=False keeps path-like text such as
-        # [/a0/usr/chats/<id>/chat.json] from being parsed as Rich/Textual
-        # markup closing tags (MarkupError crash).
-        with Vertical(classes="chat-list-item-body"):
-            yield Static(self._entry.title, classes="chat-list-item-title", markup=False)
-            yield Static(self._entry.meta, classes="chat-list-item-meta", markup=False)
-            if self._entry.preview:
-                yield Static(self._entry.preview, classes="chat-list-item-preview", markup=False)
-
-
 class ChatListScreen(ModalScreen[str | None]):
     """Modal showing previous chats. Returns selected context ID or None."""
 
@@ -174,22 +159,26 @@ class ChatListScreen(ModalScreen[str | None]):
                     yield Static("No previous chats found.", id="chat-list-empty")
                     return
 
-                items: list[ListItem] = []
+                options: list[Option] = []
                 for index, context in enumerate(self.contexts, start=1):
                     entry = _build_entry(context, index)
                     context_id = entry.context_id
-                    item_id = f"ctx-{context_id}" if context_id else f"ctx-missing-{index}"
+                    item_id = f"ctx-{index}"
                     self._item_contexts[item_id] = context_id
-                    items.append(ChatListRow(entry, item_id=item_id))
-                yield ListView(*items, id="chat-list")
+                    prompt = Text(entry.title, style="bold")
+                    prompt.append(f"\n{entry.meta}", style="not bold dim")
+                    if entry.preview:
+                        prompt.append(f"\n{entry.preview}", style="not bold")
+                    options.append(Option(prompt, id=item_id))
+                yield OptionList(*options, id="chat-list", markup=False)
 
     def on_mount(self) -> None:
         if self.contexts:
-            self.query_one("#chat-list", ListView).focus()
+            self.query_one("#chat-list", OptionList).focus()
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        item_id = event.item.id or ""
-        context_id = self._item_contexts.get(item_id, "")
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        context_id = self._item_contexts.get(event.option_id or "", "")
         self.dismiss(context_id if context_id else None)
 
     def action_cancel(self) -> None:

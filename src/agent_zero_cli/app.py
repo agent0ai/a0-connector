@@ -2793,7 +2793,9 @@ class AgentZeroCLI(App):
             )
 
     async def action_list_chats(self) -> None:
-        self.run_worker(self._cmd_chats(), exclusive=True, name="cmd-chats")
+        if self.screen.is_modal or any(worker.name == "cmd-chats" for worker in self.workers):
+            return
+        self.run_worker(self._cmd_chats(), exclusive=True, group="chat-list", name="cmd-chats")
 
     async def action_nudge_agent(self) -> None:
         await self._cmd_nudge()

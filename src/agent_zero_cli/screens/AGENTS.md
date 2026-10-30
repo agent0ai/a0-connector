@@ -11,7 +11,7 @@
 
 ## Local Contracts
 
-- `ChatListScreen` returns a context ID string or `None`.
+- `ChatListScreen` returns a context ID string or `None` and dismisses immediately on Enter or a row click, before chat loading. Render chats as literal-text `OptionList` options rather than per-chat widget trees so long lists remain responsive to keyboard navigation.
 - Modal screens should expose clear cancel/apply paths, usually with Escape and an explicit Apply/Cancel action.
 - Textual `Select` widgets may emit duplicate `Changed` events while overlays close or while options refresh. Treat selection as user intent only when the screen is not suppressing events, the widget is not busy, and the value differs from the last committed value.
 - When refreshing `Select` state programmatically, update cached selection inside the suppression window to prevent render loops.
@@ -32,7 +32,7 @@
 
 ## Verification
 
-- `./.venv/bin/python -m pytest tests/test_model_presets.py tests/test_installed_plugins_screen.py tests/test_app.py -v`
+- `./.venv/bin/python -m pytest tests/test_chat_list.py tests/test_popover_surfaces.py tests/test_model_presets.py tests/test_installed_plugins_screen.py tests/test_app.py -v`
 
 ## Child DOX Index
 

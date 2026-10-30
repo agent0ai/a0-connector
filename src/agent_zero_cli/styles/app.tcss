@@ -742,56 +742,23 @@ ChatListScreen > Center {
     max-height: 13;
     border: none;
     background: #101820;
-    padding: 0;
-}
-
-#chat-list > ListItem {
-    margin: 0;
-    padding: 0;
-    border-bottom: none;
-}
-
-#chat-list > ListItem.-highlight,
-#chat-list > ListItem.-hovered {
-    background: #0f4d78;
-}
-
-.chat-list-item-body {
-    width: 100%;
-    height: auto;
-    padding: 0 1;
-    background: transparent;
-}
-
-.chat-list-item-title {
-    width: 100%;
+    background-tint: transparent;
     color: #d9e2ec;
-    text-style: bold;
-    overflow-x: hidden;
-    text-overflow: ellipsis;
+    padding: 0;
 }
 
-.chat-list-item-meta {
-    width: 100%;
-    color: #7f8c98;
-    overflow-x: hidden;
-    text-overflow: ellipsis;
+#chat-list > .option-list--option {
+    padding: 0 1;
 }
 
-.chat-list-item-preview {
-    width: 100%;
-    color: #b8c4cf;
-    overflow-x: hidden;
-    text-overflow: ellipsis;
+#chat-list > .option-list--option-highlighted,
+#chat-list > .option-list--option-hover {
+    background: #0f4d78;
+    text-style: none;
 }
 
-#chat-list > ListItem.-highlight .chat-list-item-title {
+#chat-list > .option-list--option-highlighted {
     color: #f5f7fa;
-}
-
-#chat-list > ListItem.-highlight .chat-list-item-meta,
-#chat-list > ListItem.-highlight .chat-list-item-preview {
-    color: #9ecfff;
 }
 
 InstalledPluginsScreen {

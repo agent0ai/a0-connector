@@ -247,6 +247,8 @@ async def cmd_chats(
 
     contexts = _sort_contexts(contexts, sort_by=sort_by)
 
+    if any(isinstance(screen, ChatListScreen) for screen in app.screen_stack):
+        return
     result = await app.push_screen_wait(ChatListScreen(contexts))
     if not result:
         return
