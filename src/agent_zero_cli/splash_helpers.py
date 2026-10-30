@@ -10,6 +10,7 @@ from agent_zero_cli.client import DEFAULT_HOST, normalize_host
 from agent_zero_cli.widgets import (
     ChatInput,
     ComputerUseBanner,
+    ConnectionStatus,
     DynamicFooter,
     MessageQueueBar,
     SplashAction,
@@ -135,6 +136,12 @@ def sync_body_mode(app: AgentZeroCLI) -> None:
 
 def sync_composer_visibility(app: AgentZeroCLI) -> None:
     show_composer = app.connected and (app.current_context_has_messages or app._splash_state.stage == "ready")
+    try:
+        status = app.query_one("#connection-status", ConnectionStatus)
+        status.display = app.connected or app._splash_state.stage != "host"
+    except Exception:
+        pass
+
     try:
         input_widget = app.query_one("#message-input", ChatInput)
         input_widget.display = show_composer

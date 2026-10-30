@@ -244,6 +244,7 @@ class FakeSplash:
 
 class FakeConnectionStatus:
     def __init__(self) -> None:
+        self.display = True
         self.status = "disconnected"
         self.url = ""
         self.project_enabled = False
@@ -2249,6 +2250,37 @@ def test_message_queue_update_ignores_other_context(
     )
 
     assert dummy_app.message_queue == []
+
+
+async def test_connection_header_is_hidden_while_choosing_a_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = AgentZeroCLI(config=CLIConfig(instance_url="http://example.test"), discover_instances=False)
+    monkeypatch.setattr(app, "_startup", AsyncMock())
+    monkeypatch.setattr(app, "_start_cli_update_check", lambda: None)
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        status = app.query_one("#connection-status", ConnectionStatus)
+        assert not status.display
+
+        app._set_splash_state(manual_entry_expanded=True)
+        assert not status.display
+
+        for stage, connection_status, visible in (
+            ("connecting", "connecting", True),
+            ("error", "disconnected", True),
+            ("host", "disconnected", False),
+        ):
+            app._sync_connection_status(connection_status)
+            app._set_splash_state(stage=stage)
+            assert status.display is visible
+
+        app.connected = True
+        app.current_context_has_messages = True
+        app._sync_connection_status("connected")
+        app._sync_body_mode()
+        assert status.display
 
 
 async def test_message_queue_bar_sits_directly_below_model_switcher() -> None:
