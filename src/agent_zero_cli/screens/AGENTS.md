@@ -12,6 +12,7 @@
 ## Local Contracts
 
 - `ChatListScreen` returns a context ID string or `None` and dismisses immediately on Enter or a row click, before chat loading. Render chats as literal-text `OptionList` options rather than per-chat widget trees so long lists remain responsive to keyboard navigation.
+- Its Search input sits between the count/hint and the list and receives initial focus. Up/Down/Page keys and Enter operate the results from the input; Ctrl+F returns focus, typing from the list starts searching, and Escape clears before cancelling. Search is debounced and bounded to 200 characters. Clear old rows while pending, reject stale results/errors, and cancel timers/workers on clear or unmount. Merge title hits with callback message matches only within the original candidate list and ordering. Render server text literally with Rich `Text`, emphasizing matched parts; `_SearchExcerpt` reflows to at most two lines as the terminal resizes. Never parse search text as markup.
 - Modal screens should expose clear cancel/apply paths, usually with Escape and an explicit Apply/Cancel action.
 - Textual `Select` widgets may emit duplicate `Changed` events while overlays close or while options refresh. Treat selection as user intent only when the screen is not suppressing events, the widget is not busy, and the value differs from the last committed value.
 - When refreshing `Select` state programmatically, update cached selection inside the suppression window to prevent render loops.

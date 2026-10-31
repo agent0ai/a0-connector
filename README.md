@@ -128,10 +128,12 @@ Active TUI and headless terminal sessions send one ready-for-input notification 
 
 | Shortcut | Action |
 |----------|--------|
-| `F6` | List chats |
+| `F6` | Search and resume chats |
 | `F7` | Nudge agent |
 | `F8` | Pause / resume |
 | `Ctrl+P` | Command palette |
+
+In **F6 Chats**, type in **Search** to find chat titles or message text. Matching messages show a short excerpt with the matching words emphasized. Up/Down and Enter resume a result while the search field stays focused; Ctrl+F returns to the field. Escape clears a search, then closes the panel. Message search requires a current Agent Zero Core; the query is temporary and respects the selected chat-list project filter and ordering.
 
 ### Slash commands
 

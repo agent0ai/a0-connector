@@ -144,6 +144,35 @@ class FakeResponse:
             raise httpx.HTTPStatusError("error", request=request, response=response)
 
 
+async def test_chat_search_uses_the_existing_authenticated_client_and_preserves_base_path() -> None:
+    client = A0Client("http://agent.test/prefix")
+    matches = [{"id": "chat-1", "parts": [{"text": "Straße", "match": True}]}]
+    client.http.post = AsyncMock(return_value=FakeResponse(json_data={"matches": matches}))
+    try:
+        assert await client.search_chats("STRASSE") == matches
+        client.http.post.assert_awaited_once_with(
+            "http://agent.test/prefix/api/plugins/_a0_connector/v1/chats_list",
+            json={"query": "STRASSE"},
+        )
+    finally:
+        await client.http.aclose()
+
+
+@pytest.mark.parametrize("payload,message", [
+    ({"contexts": []}, "Update Agent Zero"),
+    ({"matches": {}}, "Invalid chat search response"),
+    ({"matches": [None]}, "Invalid chat search response"),
+])
+async def test_chat_search_rejects_unsupported_or_malformed_responses(payload, message) -> None:
+    client = A0Client("http://agent.test")
+    client.http.post = AsyncMock(return_value=FakeResponse(json_data=payload))
+    try:
+        with pytest.raises(A0ProtocolError, match=message):
+            await client.search_chats("needle")
+    finally:
+        await client.http.aclose()
+
+
 async def test_acp_session_posts_to_the_bundled_plugin_endpoint() -> None:
     client = A0Client("http://agent.test")
     client.http = Mock()

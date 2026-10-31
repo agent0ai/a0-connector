@@ -249,7 +249,7 @@ async def cmd_chats(
 
     if any(isinstance(screen, ChatListScreen) for screen in app.screen_stack):
         return
-    result = await app.push_screen_wait(ChatListScreen(contexts))
+    result = await app.push_screen_wait(ChatListScreen(contexts, search=app.client.search_chats))
     if not result:
         return
 

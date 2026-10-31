@@ -2027,6 +2027,17 @@ class A0Client:
         data = self._json(response)
         return data.get("contexts", data.get("chats", []))
 
+    async def search_chats(self, query: str) -> list[dict[str, Any]]:
+        response = await self._post("chats_list", {"query": query})
+        response.raise_for_status()
+        data = self._json(response)
+        if "matches" not in data:
+            raise A0ProtocolError("Update Agent Zero to search chat messages from the CLI.")
+        matches = data["matches"]
+        if not isinstance(matches, list) or any(not isinstance(match, dict) for match in matches):
+            raise A0ProtocolError("Invalid chat search response.")
+        return matches
+
     async def get_chat(self, context_id: str) -> dict[str, Any]:
         response = await self._post(
             "chat_get",

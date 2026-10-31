@@ -22,6 +22,7 @@
 - `test_banner.py` checks the shared splash/chat logo at width boundaries and through resize, including full lettering in short wide windows and the symbol-only fallback in narrow ones.
 - Chat-tab regression coverage clicks `+` and returns to the original tab using real widgets, checking one banner per transcript with both live and replayed greetings.
 - `test_chat_list.py` covers repeated F6 during loading/selection, immediate dismissal before a slow chat switch, mouse/keyboard selection, cancellation, and long-list navigation without per-chat widget trees.
+- Chat search coverage retains literal highlighted snippets, local title hits, candidate scope/order, keyboard focus/selection, pending-result guards, stale cancellation, empty/error recovery, and short-terminal bounds. `test_client.py` checks the query request and older/malformed Core replies; Core owns search validation and matching tests.
 - Image-rendering tests use `ImageRenderer.for_test()` or a fake renderer; they must not probe a developer terminal, import native terminal backends for headless/gateway tests, or require a live Agent Zero image endpoint.
 - Connector/plugin tests should not require a live Agent Zero server unless a test is explicitly designed as live/integration coverage.
 - Instance-discovery scenarios must stub every competing runtime path they do not exercise, including Docker CLI, local sockets, HTTP APIs, and WSL, so a developer's running containers cannot change expected results.
