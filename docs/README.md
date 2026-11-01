@@ -4,6 +4,7 @@
 |----------|--------|
 | [Architecture](architecture.md) | Protocol, HTTP/WebSocket surfaces, event model, remote file ops, security |
 | [Configuration](configuration.md) | Environment variables, dotenv, first-run behavior, login |
+| [Durable host operations](durability.md) | Encrypted receipts, browser reattachment/profile transfer, desktop uncertainty |
 | [Headless mode](headless.md) | Plain stdin/stdout connector mode, JSONL output, slash commands, exit codes |
 | [Development](development.md) | Repo layout, local setup, tests, import gotchas |
 | [TUI frontend](tui-frontend.md) | Which files define the Textual UI (widgets, styles, screens) |

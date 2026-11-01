@@ -13,6 +13,8 @@
 
 ## Local Contracts
 
+- `host_browser_durable.py` owns the encrypted bounded SQLite receipt journal, kernel single-owner lock, immutable request/target binding and atomic agent-only profile archive import. `host_browser_durable_runtime.py` owns detached agent Chromium brokers, exact CDP instance pinning, permission rechecks, explicit attach/export/import and expired refs. `computer_use_durable.py` reuses receipt custody while retaining native desktop approval/rearm/session checks. Never resend an existing uncertain intent or transplant personal desktop/browser state. Durable key material stays out of child environments and connector settings; native working profiles are private, while receipt values/profile exports are encrypted. The wire contract and limits live in `docs/durability.md`.
+
 - `A0Client` owns HTTP, login/session cookies, Socket.IO setup, connector event registration, and the `a0-connector.v1` protocol constants.
 - Keep `aiohttp.ClientWSTimeout` compatibility in `client.py` unless all supported aiohttp versions have been verified.
 - `A0Client` advertises its effective `A0_WS_MAX_PAYLOAD_BYTES` receive ceiling and consumes the Core ceiling from HTTP capabilities and `connector_hello`. Missing or invalid peer data must fall back to 4 MiB. Measure the complete encoded Socket.IO event before every call or result emit; oversized calls fail locally and oversized operation results become one structured `PAYLOAD_TOO_LARGE` result without disconnecting.

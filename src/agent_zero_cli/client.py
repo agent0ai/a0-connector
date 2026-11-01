@@ -1498,6 +1498,9 @@ class A0Client:
             }
 
         if isinstance(result, dict):
+            if "durable" in data and "data" in result and "result" not in result:
+                result = {**result, "result": result["data"]}
+                result.pop("data")
             return result
 
         return {
@@ -1531,6 +1534,9 @@ class A0Client:
             }
 
         if isinstance(result, dict):
+            if "durable" in data and "data" in result and "result" not in result:
+                result = {**result, "result": result["data"]}
+                result.pop("data")
             return result
 
         return {

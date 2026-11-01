@@ -67,6 +67,7 @@
 - Allowed without asking: read files, edit repo source/docs/tests/devtools/requirements/constraints/AGENTS docs, run devtools scripts, and run pytest.
 - Ask before installing new dependencies, editing external Agent Zero plugin/backend files, deleting files outside normal generated outputs, or making git commits/pushes.
 - Never hardcode API keys, tokens, passwords, cookies, or connector secrets.
+- Explicit durable agent-browser sessions may persist encrypted operation receipts and profile exports using `A0_CONNECTOR_DURABILITY_KEY`; isolated native working profiles remain private. Do not export personal profiles or store the encryption key in settings. See `docs/durability.md`.
 - Do not persist usernames, passwords, connector tokens, or API keys. Protected Agent Zero web sessions may persist browser-style session cookies only through the existing remembered-host/session flow.
 - Never use destructive git commands such as `git reset --hard` or `git checkout --` unless the user explicitly asks.
 - Preserve user work. If the worktree contains unrelated changes, leave them alone.
