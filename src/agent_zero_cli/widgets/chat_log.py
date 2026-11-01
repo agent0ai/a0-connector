@@ -12,7 +12,7 @@ from textual import events
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.content import Content
-from textual.geometry import Region
+from textual.geometry import Region, Size
 from textual.message import Message
 from textual.style import Style
 from textual.widget import Widget
@@ -288,7 +288,9 @@ def _segments_to_content(
     return Content.assemble(*parts, strip_control_codes=False).simplify()
 
 
-def _renderable_to_content(widget: Static, renderable: RenderableType) -> Content:
+def _renderable_to_content(
+    widget: Static, renderable: RenderableType, *, width: int | None = None
+) -> Content:
     if isinstance(renderable, Content):
         return renderable
     if isinstance(renderable, Text):
@@ -297,31 +299,14 @@ def _renderable_to_content(widget: Static, renderable: RenderableType) -> Conten
         return Content.from_text(renderable)
 
     ansi_theme = None
-    # Child width already accounts for scrollbars; app width can clip panel borders.
-    width = max(widget.content_region.width, widget.size.width, 0)
     try:
         app = widget.app
         ansi_theme = app.ansi_theme
     except Exception:
         app = None
 
-    if width <= 1:
-        try:
-            parent = widget.parent
-            gutter = parent.scrollbar_gutter if parent is not None else None
-            gutter_right = gutter.right if gutter is not None else 0
-            parent_width = (
-                max(parent.content_region.width, parent.size.width)
-                if parent is not None
-                else 0
-            )
-            width = max(width, parent_width - gutter_right)
-        except Exception:
-            pass
-
-    if width <= 1 and app is not None:
-        width = app.size.width
-
+    if width is None:
+        width = widget.content_region.width or (app.size.width if app is not None else 1)
     width = max(width, 1)
 
     console = Console(
@@ -397,40 +382,44 @@ class SelectableStatic(Static):
             disabled=disabled,
         )
         self._renderable = content
-        self._a0_content_cache: tuple[tuple[int, int, int], Content] | None = None
+        self._a0_render_width = 0
+        self._a0_content_cache: tuple[int, Content] | None = None
 
     def render(self) -> Content:
-        cache_key = self._render_cache_key()
-        if self._a0_content_cache is not None and self._a0_content_cache[0] == cache_key:
+        width = self._a0_render_width
+        if not width:
+            try:
+                width = self.app.size.width
+            except Exception:
+                width = 1
+        if self._a0_content_cache is not None and self._a0_content_cache[0] == width:
             return self._a0_content_cache[1]
 
-        content = _renderable_to_content(self, self._renderable)
-        self._a0_content_cache = (cache_key, content)
+        content = _renderable_to_content(self, self._renderable, width=width)
+        self._a0_content_cache = (width, content)
         return content
+
+    def get_content_width(self, container: Size, viewport: Size) -> int:
+        self._a0_render_width = container.width
+        width = self.render().get_optimal_width(self.styles, container.width)
+        if self.expand:
+            width = max(container.width, width)
+        if self.shrink:
+            width = min(width, container.width)
+        return width
+
+    def get_content_height(self, container: Size, viewport: Size, width: int) -> int:
+        # Use Textual's measurement width; querying geometry here can re-enter layout.
+        self._a0_render_width = width
+        return self.render().get_height(self.styles, width) if width else 0
 
     def update(self, content: RenderableType = "", *, layout: bool = True) -> None:
         self._renderable = content
         self._a0_content_cache = None
         self.refresh(layout=layout)
 
-    def _render_cache_key(self) -> tuple[int, int, int]:
-        parent_width = 0
-        if self.parent is not None:
-            parent_width = max(self.parent.content_region.width, self.parent.size.width)
-        app_width = 0
-        try:
-            app_width = self.app.size.width
-        except Exception:
-            pass
-        return (
-            max(self.content_region.width, self.size.width),
-            parent_width,
-            app_width,
-        )
-
     def on_resize(self, event: events.Resize) -> None:
-        del event
-        self._a0_content_cache = None
+        self._a0_render_width = max(0, event.size.width - self.styles.gutter.width)
 
     def notify_style_update(self) -> None:
         self._a0_content_cache = None
@@ -457,7 +446,7 @@ class StatusEntry(SelectableStatic):
         super().__init__("", id=id, classes=classes)
         self._label = ""
         self._detail = ""
-        self._meta: dict[str, Any] = {}
+        self._body: Padding | None = None
         self._active = False
         self._expanded = False
         self._phase = 0.0
@@ -475,7 +464,7 @@ class StatusEntry(SelectableStatic):
     ) -> None:
         self._label = label
         self._detail = detail
-        self._meta = meta if isinstance(meta, dict) else {}
+        self._body = _build_status_body(meta)
         self._active = active
         self._phase = shimmer_phase
         self._frame = shimmer_frame
@@ -485,8 +474,12 @@ class StatusEntry(SelectableStatic):
 
     @property
     def has_details(self) -> bool:
-        body = _build_status_body(self._meta)
-        return body is not None
+        return self._body is not None
+
+    def update_shimmer(self, phase: float, frame: int) -> None:
+        self._phase = phase
+        self._frame = frame
+        self._refresh_content(layout=False)
 
     def action_toggle(self) -> None:
         if not self.has_details:
@@ -515,10 +508,8 @@ class StatusEntry(SelectableStatic):
         header.append_text(status_text)
 
         renderables: list[RenderableType] = [header]
-        if self._expanded:
-            body = _build_status_body(self._meta)
-            if body is not None:
-                renderables.append(body)
+        if self._expanded and self._body is not None:
+            renderables.append(self._body)
 
         self.update(Padding(Group(*renderables), _STATUS_HISTORY_PADDING), layout=layout)
 
@@ -717,6 +708,7 @@ class ChatLog(VerticalScroll):
         self._history_before = 0
         self._has_more_history = False
         self._history_load_pending = False
+        self._scroll_end_pending = False
 
         # Shimmer state
         self._active_seq: int | None = None
@@ -843,9 +835,13 @@ class ChatLog(VerticalScroll):
 
     def _schedule_scroll_end(self) -> None:
         # Defer until after refresh so long/tall renderables are measured first.
+        if self._scroll_end_pending:
+            return
+        self._scroll_end_pending = True
         self.call_after_refresh(self._scroll_end_if_auto_follow)
 
     def _scroll_end_if_auto_follow(self) -> None:
+        self._scroll_end_pending = False
         if self._auto_follow:
             self.scroll_end(animate=False, immediate=True)
 
@@ -1185,7 +1181,9 @@ class ChatLog(VerticalScroll):
             return
         self._shimmer_phase = (self._shimmer_phase + 0.1) % 1.0
         self._shimmer_frame = (self._shimmer_frame + 1) % 10
-        self.refresh_active_status()
+        entry = self._seq_to_widget.get(self._active_seq)
+        if entry is not None and isinstance(entry.primary, StatusEntry):
+            entry.primary.update_shimmer(self._shimmer_phase, self._shimmer_frame)
 
     def refresh_active_status(self) -> None:
         """Re-render the active status line with current animation state."""

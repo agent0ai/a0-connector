@@ -28,6 +28,9 @@
 - `ChatLog` status metadata must stay concise and must redact or summarize large/sensitive fields such as code, prompt text, stdout, stderr, markdown, HTML, and raw content. Media-bearing keys consumed by image extraction and direct `img://`, `data:image/`, or `/api/image_get` values must never render or enter transcript copy text.
 - A display-only clear may preserve the Agent Zero banner, workspace line, and sequence-1 assistant greeting; ordinary lifecycle clears remove every transcript and intro element.
 - Transcript renderable caches must use A0-owned attribute names and must not shadow Textual's internal widget render cache.
+- `SelectableStatic` measures Rich content at the width supplied by Textual's layout hooks, including the scrollbar gutter. Never query widget or parent geometry while measuring/rendering; that can re-enter the compositor. Reuse converted content until its width, source, or style changes.
+- `StatusEntry` builds its sanitized detail body when metadata changes. Shimmer frames only repaint the existing row without rebuilding details or requesting transcript layout; expanding, replacing, or updating content still requests layout.
+- `ChatLog` coalesces bottom-follow requests to one pending callback per refresh and checks auto-follow again when it executes.
 - Footer/command palette behavior must not duplicate the command palette entry. The `ctrl+p` binding remains `show=False` in `app.py`.
 - The compact model switcher bar shows the effective model pill without a `Main` role prefix. Its preset selector shows the effective preset and uses `Use preset from settings (<name>)` when a chat override can be cleared.
 - `ComposerControls` renders server-provided labels beside the model summary and posts control IDs/anchor IDs only. Reactive recomposition owns button replacement; hiding or clearing the model bar also clears its controls. Keep multiple controls keyboard-accessible in narrow bars.
@@ -47,7 +50,7 @@
 
 ## Verification
 
-- `./.venv/bin/python -m pytest tests/test_chat_input.py tests/test_app.py tests/test_splash_view.py -v`
+- `./.venv/bin/python -m pytest tests/test_chat_log.py tests/test_chat_log_images.py tests/test_chat_input.py tests/test_app.py tests/test_splash_view.py -v`
 
 ## Child DOX Index
 
