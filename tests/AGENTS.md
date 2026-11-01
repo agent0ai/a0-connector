@@ -28,6 +28,7 @@
 - Connector/plugin tests should not require a live Agent Zero server unless a test is explicitly designed as live/integration coverage.
 - Instance-discovery scenarios must stub every competing runtime path they do not exercise, including Docker CLI, local sockets, HTTP APIs, and WSL, so a developer's running containers cannot change expected results.
 - `tests/test_plugin_backend.py` may resolve a plugin root from `A0_CONNECTOR_PLUGIN_ROOT`, a local `plugin/`, or a sibling Agent Zero checkout. Keep fake Agent Zero helper modules isolated and reset between tests.
+- Its `helpers.tool` stub includes Core's boolean argument parsing, preserving caller defaults for missing or unrecognized values.
 - Certificate fixtures are test assets only; do not replace them with real secrets.
 - Transcript image widget tests use fake renderers backed by ordinary Textual widgets; focused tests must not instantiate native terminal-image controls or emit terminal graphics sequences.
 

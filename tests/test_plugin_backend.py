@@ -129,6 +129,17 @@ def _install_fake_helpers(
             self.break_loop = break_loop
             self.additional = additional
 
+    def _coerce_bool(value: object, default: bool) -> bool:
+        if isinstance(value, (bool, int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return default
+
     class PrintStyle:
         def __init__(self, *args, **kwargs) -> None:
             del args, kwargs
@@ -426,6 +437,7 @@ def _install_fake_helpers(
     print_style_mod.PrintStyle = PrintStyle
     tool_mod.Response = ToolResponse
     tool_mod.Tool = Tool
+    tool_mod.coerce_bool = _coerce_bool
     ws_mod.NAMESPACE = "/ws"
     ws_mod.WsHandler = WsHandler
     ws_limits_mod.A0_WS_MAX_PAYLOAD_BYTES = 50 * 1024 * 1024
