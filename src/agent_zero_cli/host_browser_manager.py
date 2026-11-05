@@ -98,6 +98,7 @@ class HostBrowserManager:
         self._playwright_starter = playwright_starter
         self._playwright_installer = playwright_installer or _run_install_command
         self._sessions: dict[str, HostBrowserSession] = {}
+        self._session_lock = asyncio.Lock()
         self._evaluate_ops: dict[str, tuple[str, asyncio.Task]] = {}
         self._dom_helper_source: str | None = None
         self._dom_helper_sha256 = ""
@@ -523,24 +524,25 @@ class HostBrowserManager:
         support_reason = self._support_reason(profile)
         if support_reason:
             raise RuntimeError(support_reason)
-        lock = profile_lock_state_for_profile(profile)
-        active_context = await self._live_context_for_profile(profile)
-        if active_context:
+        async with self._session_lock:
+            lock = profile_lock_state_for_profile(profile)
+            active_context = await self._live_context_for_profile(profile)
+            if active_context:
+                self.set_enabled(True)
+                return self.status_snapshot(
+                    profile=profile,
+                    profile_mode=mode,
+                    browser_selection=selection,
+                )
+            if lock.locked:
+                raise ProfileLockedError(
+                    "The selected profile is still locked. Close the normal browser window first, "
+                    "then run /browser relaunch again.",
+                    lock_state=lock,
+                )
             self.set_enabled(True)
-            return self.status_snapshot(
-                profile=profile,
-                profile_mode=mode,
-                browser_selection=selection,
-            )
-        if lock.locked:
-            raise ProfileLockedError(
-                "The selected profile is still locked. Close the normal browser window first, "
-                "then run /browser relaunch again.",
-                lock_state=lock,
-            )
-        self.set_enabled(True)
-        session = await self._session(RELAUNCH_CONTEXT_ID, profile=profile)
-        await session.ensure_started()
+            session = await self._session(RELAUNCH_CONTEXT_ID, profile=profile)
+            await session.ensure_started()
         profile = session.profile
         return self.status_snapshot(
             profile=profile,
@@ -554,11 +556,12 @@ class HostBrowserManager:
             task.cancel()
         await asyncio.gather(*operations, return_exceptions=True)
         self._evaluate_ops.clear()
-        sessions = list(self._sessions.values())
-        self._sessions.clear()
-        for session in sessions:
-            with contextlib.suppress(Exception):
-                await session.close()
+        async with self._session_lock:
+            sessions = list(self._sessions.values())
+            self._sessions.clear()
+            for session in sessions:
+                with contextlib.suppress(Exception):
+                    await session.close()
 
     async def disconnect(self) -> None:
         await self.close()
@@ -676,46 +679,35 @@ class HostBrowserManager:
         if profile is None:
             return self._error(op_id, "HOST_BROWSER_NO_PROFILE", "No supported host browser was found.")
 
-        lock = profile_lock_state_for_profile(profile)
-        active_context = await self._live_context_for_profile(profile)
-        if (
-            profile.is_safari
-            and active_context
-            and context_id not in self._sessions
-            and active_context != RELAUNCH_CONTEXT_ID
-        ):
-            return self._error(
-                op_id,
-                "HOST_BROWSER_CONTEXT_ACTIVE",
-                (
-                    "Safari is already controlled by another Agent Zero browser context. "
-                    "Close that browser context before starting another one."
-                ),
-                result={"active_context": active_context, "profile": profile.as_dict()},
-            )
-        if lock.locked and context_id not in self._sessions and active_context != RELAUNCH_CONTEXT_ID:
-            if active_context:
-                return self._error(
-                    op_id,
-                    "HOST_BROWSER_CONTEXT_ACTIVE",
-                    (
-                        "Host browser is already controlled by another Agent Zero browser context. "
-                        "Close that browser context before starting a new host-browser context."
-                    ),
-                    result={"active_context": active_context, "profile": profile.as_dict()},
-                )
-            return self._error(
-                op_id,
-                "HOST_BROWSER_RELAUNCH_REQUIRED",
-                (
-                    "The selected Chromium-family profile is already open. "
-                    "Run /browser relaunch after closing that browser to give A0 explicit control."
-                ),
-                result={"lock": lock.as_dict(), "profile": profile.as_dict()},
-            )
-
         try:
-            session = await self._session(context_id, profile=profile)
+            async with self._session_lock:
+                lock = profile_lock_state_for_profile(profile)
+                active_context = await self._live_context_for_profile(profile)
+                current_session = self._sessions.get(context_id)
+                owns_profile = current_session is not None and current_session.profile == profile
+                if not owns_profile and active_context != RELAUNCH_CONTEXT_ID:
+                    if active_context and not profile.is_remote_debugging:
+                        return self._error(
+                            op_id,
+                            "HOST_BROWSER_CONTEXT_ACTIVE",
+                            (
+                                "Host browser is already controlled by another Agent Zero browser context. "
+                                "Close that browser context before starting a new host-browser context."
+                            ),
+                            result={"active_context": active_context, "profile": profile.as_dict()},
+                        )
+                    if lock.locked:
+                        return self._error(
+                            op_id,
+                            "HOST_BROWSER_RELAUNCH_REQUIRED",
+                            (
+                                "The selected Chromium-family profile is already open. "
+                                "Run /browser relaunch after closing that browser to give A0 explicit control."
+                            ),
+                            result={"lock": lock.as_dict(), "profile": profile.as_dict()},
+                        )
+                session = await self._session(context_id, profile=profile)
+                await session.ensure_started()
             result = await session.dispatch(payload)
         except ProfileLockedError as exc:
             self.last_error = str(exc)

@@ -252,6 +252,7 @@ class HostBrowserSession:
     _content_helper_sha256: str = ""
     _start_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _registry_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _bootstrap_page: Any = None
     _closing: bool = False
 
     @property
@@ -494,8 +495,6 @@ class HostBrowserSession:
         return await self._runtime.is_started(self)
 
     async def ensure_started(self) -> None:
-        if await self.is_started():
-            return
         async with self._start_lock:
             runtime = self._runtime
             if await self.is_started():
@@ -533,6 +532,8 @@ class HostBrowserSession:
 
         for page in list(getattr(self.context, "pages", []) or []):
             if getattr(page, "url", "") == "about:blank":
+                if not self.profile.is_remote_debugging and not self.profile.is_safari and self._bootstrap_page is None:
+                    self._bootstrap_page = page
                 continue
             await self._register_page(page)
 
@@ -551,7 +552,10 @@ class HostBrowserSession:
                     "state": await self._state(existing_id),
                 }
 
-        page = await self.context.new_page()
+        page = self._bootstrap_page
+        self._bootstrap_page = None
+        if page is None or page.is_closed():
+            page = await self.context.new_page()
         browser_page = await self._register_page(page)
         self.last_interacted_browser_id = browser_page.id
         if target_url != "about:blank":
@@ -1238,6 +1242,7 @@ class HostBrowserSession:
 
     async def close(self) -> None:
         self._closing = True
+        self._bootstrap_page = None
         await self._runtime.close_runtime(self)
 
     def _maybe_promote(self, resolved_id: int) -> None:
@@ -1394,6 +1399,7 @@ class HostBrowserSession:
     def _on_context_closed(self) -> None:
         if self._closing:
             return
+        self._bootstrap_page = None
         self.context = None
         self.pages.clear()
         self.last_interacted_browser_id = None

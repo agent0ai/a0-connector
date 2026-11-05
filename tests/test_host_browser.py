@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import sys
@@ -155,6 +156,7 @@ class FakePage:
         self.mouse = FakeMouse()
         self.viewport_size = {"width": 1280, "height": 800}
         self.handlers = {}
+        self.closed = False
 
     def on(self, event: str, callback) -> None:
         self.handlers[event] = callback
@@ -184,7 +186,10 @@ class FakePage:
         return payload
 
     async def close(self) -> None:
-        return None
+        self.closed = True
+
+    def is_closed(self) -> bool:
+        return self.closed
 
     async def set_viewport_size(self, viewport: dict[str, int]) -> None:
         self.viewport_size = dict(viewport)
@@ -1371,6 +1376,56 @@ async def test_host_browser_manager_dispatches_open_and_screenshot_artifact(tmp_
     assert playwright.chromium.launch_kwargs["user_data_dir"] == str(root)
 
 
+async def test_parallel_host_browser_open_reuses_startup_blank_page(tmp_path: Path) -> None:
+    playwright = FakePlaywright()
+    initial_page = FakePage()
+    playwright.chromium.context.pages.append(initial_page)
+    session = HostBrowserSession(
+        context_id="chat-1",
+        profile=BrowserProfile("chrome-a0", "Chrome", "/bin/chrome", tmp_path, "Default", "Default"),
+        playwright_starter=lambda: FakeStarter(playwright),
+    )
+    urls = ["https://example.com/", "https://example.org/"]
+    try:
+        results = await asyncio.gather(*(session.open(url) for url in urls))
+
+        assert len({result["id"] for result in results}) == 2
+        assert len(playwright.chromium.context.pages) == 2
+        assert {page.url for page in playwright.chromium.context.pages} == set(urls)
+        assert session.pages[results[0]["id"]].page is initial_page
+    finally:
+        await session.close()
+
+
+async def test_host_browser_readiness_waits_for_helper_installation(tmp_path: Path) -> None:
+    installing = asyncio.Event()
+    release = asyncio.Event()
+    playwright = FakePlaywright()
+
+    async def install_helper(**kwargs):
+        installing.set()
+        await release.wait()
+
+    playwright.chromium.context.add_init_script = install_helper
+    session = HostBrowserSession(
+        context_id="chat-1",
+        profile=BrowserProfile("chrome-a0", "Chrome", "/bin/chrome", tmp_path, "Default", "Default"),
+        playwright_starter=lambda: FakeStarter(playwright),
+    )
+    await session.set_dom_helper_source(MINIMAL_DOM_HELPER_SOURCE)
+    first = asyncio.create_task(session.ensure_started())
+    second = None
+    try:
+        await asyncio.wait_for(installing.wait(), timeout=2)
+        second = asyncio.create_task(session.ensure_started())
+        await asyncio.sleep(0)
+        assert not second.done()
+    finally:
+        release.set()
+        await asyncio.gather(first, *([second] if second else []))
+        await session.close()
+
+
 async def test_host_browser_rejects_oversized_screenshot_before_base64(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1504,6 +1559,87 @@ async def test_relaunch_session_is_adopted_by_first_browser_context(
     assert RELAUNCH_CONTEXT_ID not in manager._sessions
     assert "chat-1" in manager._sessions
     assert manager._sessions["chat-1"].context_id == "chat-1"
+
+
+@pytest.mark.parametrize(
+    ("first_action", "second_action", "second_context"),
+    [
+        ("open", "open", "chat-1"),
+        ("ensure", "open", "chat-1"),
+        ("open", "ensure", "chat-1"),
+        ("ensure", "ensure", "chat-1"),
+        ("open", "open", "chat-2"),
+        ("open", "shutdown", "chat-1"),
+    ],
+)
+async def test_parallel_host_browser_startup_uses_one_profile_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    first_action: str,
+    second_action: str,
+    second_context: str,
+) -> None:
+    launched = asyncio.Event()
+    release = asyncio.Event()
+    launches = []
+    drivers = []
+
+    class SlowChromium(FakeChromium):
+        async def launch_persistent_context(self, **kwargs: object) -> FakeContext:
+            launches.append(kwargs)
+            launched.set()
+            await release.wait()
+            return await super().launch_persistent_context(**kwargs)
+
+    def starter():
+        playwright = FakePlaywright()
+        playwright.chromium = SlowChromium()
+        drivers.append(playwright)
+        return FakeStarter(playwright)
+
+    executable = tmp_path / "chrome"
+    executable.touch()
+    profile = BrowserProfile("chrome-a0", "Chrome", str(executable), tmp_path, "Default", "Default")
+    manager = HostBrowserManager(
+        CLIConfig(host_browser_enabled=True),
+        persist_enabled=False,
+        candidate_provider=lambda: [],
+        playwright_available=True,
+        playwright_starter=starter,
+    )
+    monkeypatch.setattr(manager, "selected_profile", lambda *args, **kwargs: profile)
+    monkeypatch.setattr(manager, "_auto_start_profile", lambda **kwargs: profile)
+    payload = {"context_id": "chat-1", "action": "open", "url": "https://example.com/"}
+    first = asyncio.create_task(manager.handle_op({**payload, "op_id": "first", "action": first_action}))
+    second = None
+    try:
+        await asyncio.wait_for(launched.wait(), timeout=2)
+        second = asyncio.create_task(
+            manager.close() if second_action == "shutdown" else manager.handle_op({
+                **payload, "op_id": "second", "action": second_action, "context_id": second_context,
+            })
+        )
+        await asyncio.sleep(0)
+        release.set()
+        first_result, second_result = await asyncio.wait_for(asyncio.gather(first, second), timeout=2)
+
+        assert len(launches) == 1
+        if second_action == "shutdown":
+            assert manager._sessions == {}
+            assert all(driver.stopped and driver.chromium.context.closed for driver in drivers)
+            return
+        assert first_result["ok"] is True
+        if second_context == "chat-1":
+            assert second_result["ok"] is True
+            if second_action == "open":
+                assert second_result["result"]["state"]["currentUrl"] == payload["url"]
+        else:
+            assert second_result["code"] == "HOST_BROWSER_CONTEXT_ACTIVE"
+            assert second_context not in manager._sessions
+    finally:
+        release.set()
+        await asyncio.gather(first, *([second] if second else []), return_exceptions=True)
+        await manager.close()
 
 
 async def test_remote_debugging_session_attaches_without_closing_user_context(
@@ -1929,9 +2065,11 @@ async def test_ensure_agent_mode_auto_selects_supported_managed_profile(
     assert manager.config.host_browser_profile_path == str(managed_root)
 
 
+@pytest.mark.parametrize("has_other_profile", [False, True])
 async def test_locked_profile_owned_by_active_context_reports_context_conflict(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    has_other_profile: bool,
 ) -> None:
     import agent_zero_cli.host_browser_common as host_browser_common_module
 
@@ -1962,6 +2100,13 @@ async def test_locked_profile_owned_by_active_context_reports_context_conflict(
             "profile_mode": "agent",
         }
     )
+    other_context = FakeContext()
+    if has_other_profile:
+        manager._sessions["chat-2"] = HostBrowserSession(
+            context_id="chat-2",
+            profile=BrowserProfile("chrome-a0", "Chrome", str(executable), tmp_path / "other", "Default", "Default"),
+            context=other_context,
+        )
     monkeypatch.setattr(
         host_browser_common_module,
         "profile_lock_state",
@@ -1981,6 +2126,9 @@ async def test_locked_profile_owned_by_active_context_reports_context_conflict(
     assert result["ok"] is False
     assert result["code"] == "HOST_BROWSER_CONTEXT_ACTIVE"
     assert result["result"]["active_context"] == "chat-1"
+    if has_other_profile:
+        assert manager._sessions["chat-2"].context is other_context
+        assert other_context.closed is False
 
 
 async def test_host_browser_session_stops_playwright_after_launch_failure(tmp_path: Path) -> None:
