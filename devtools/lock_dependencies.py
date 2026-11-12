@@ -72,7 +72,7 @@ def _compile_requirements(source: Path, output: Path, *, upgrade: bool = False) 
             str(source.relative_to(ROOT)),
             "--universal",
             "--python-version",
-            "3.10",
+            "3.11",
             "--generate-hashes",
             *(["--upgrade"] if upgrade else []),
             "--custom-compile-command",

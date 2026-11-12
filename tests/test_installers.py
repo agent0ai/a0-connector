@@ -11,9 +11,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_package_keeps_python_floor_at_310() -> None:
+def test_package_keeps_python_floor_at_311() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'requires-python = ">=3.10"' in pyproject
+    assert 'requires-python = ">=3.11"' in pyproject
     assert '{ name = "agent0ai" }' in pyproject
 
 
@@ -155,7 +155,7 @@ def test_root_package_embeds_platform_backends() -> None:
     assert "pyobjc-framework-applicationservices==12.2.2 ; sys_platform == 'darwin'" in dependencies
     assert "pyobjc-framework-quartz==12.2.2 ; sys_platform == 'darwin'" in dependencies
     assert "dxcam==0.3.0 ; sys_platform == 'win32'" in dependencies
-    assert "pillow==12.3.0" in dependencies
+    assert "pillow==13.0.0" in dependencies
     assert "pywinauto==0.6.9 ; sys_platform == 'win32'" in dependencies
     assert "textual-serve==1.1.3" in dependencies
     assert any(requirement.startswith("playwright==") for requirement in dependencies)

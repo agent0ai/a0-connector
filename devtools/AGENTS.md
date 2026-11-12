@@ -22,7 +22,7 @@
 - Public documentation captures must run from a neutral working directory such as `/tmp/a0-cli-demo`, use demo chat state, and exclude personal paths and browser debug URLs. Inspect captures before copying identical assets to Core and website docs.
 - General CLI documentation shows the vanilla Core controls; disable community composer additions such as Reasoning Effort in the capture instance.
 - Snapshot output defaults to `devtools/snapshots/`, which is generated output.
-- `lock_dependencies.py` uses `uv pip compile` with Python 3.10 as the universal-resolution floor, writes `constraints/a0-runtime.txt` and `constraints/a0-build.txt`, and syncs pinned runtime/build dependencies into `pyproject.toml`.
+- `lock_dependencies.py` uses `uv pip compile` with Python 3.11 as the universal-resolution floor, writes `constraints/a0-runtime.txt` and `constraints/a0-build.txt`, and syncs pinned runtime/build dependencies into `pyproject.toml`.
 - Lock regeneration preserves compatible existing pins; `--upgrade` explicitly refreshes all dependencies. `--check` seeds temporary outputs from the saved locks and checks consistency without changing tracked files.
 
 ## Work Guidance

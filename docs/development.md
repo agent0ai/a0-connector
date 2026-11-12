@@ -37,7 +37,7 @@ The root editable install includes the embedded computer-use backends from `pack
 Windows PowerShell:
 
 ```powershell
-py -3.10 -m venv .venv
+py -3.11 -m venv .venv
 . .\.venv\Scripts\Activate.ps1
 pip install -e .
 $env:AGENT_ZERO_HOST = "http://localhost:50001"
@@ -76,7 +76,7 @@ The published `a0` wheel embeds the Wayland, macOS, and Windows remote computer-
 
 The sibling `packages/a0-computer-use-*` manifests remain useful for isolated backend package development, but end-user installs should use the root `a0` package.
 
-The standalone installers and `a0 update` default to a managed CPython 3.12 runtime via `uv`, so end users do not need a preinstalled Python 3.10+ on the host to get a consistent tool environment. The updater resolves the latest published GitHub release at runtime instead of baking the current tag into the installed CLI, then installs with the runtime and build constraints committed to that same release.
+The CLI requires Python 3.11 or later. The standalone installers and `a0 update` provision CPython 3.12 through `uv` by default. The updater resolves the latest published GitHub release at runtime and installs with that release's runtime and build constraints.
 
 Runtime dependencies are locked as release artifacts:
 
