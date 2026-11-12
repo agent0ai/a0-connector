@@ -449,7 +449,7 @@ def test_generated_updater_script_waits_then_runs_uv_on_success(
             return SimpleNamespace(returncode=0, stdout="--build-constraints", stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(namespace["os"], "kill", fake_kill)
+    monkeypatch.setitem(namespace, "os", SimpleNamespace(name="posix", kill=fake_kill))
     monkeypatch.setattr(namespace["time"], "sleep", lambda seconds: sleep_calls.append(seconds))
     monkeypatch.setattr(namespace["shutil"], "which", lambda name: "uv")
     monkeypatch.setattr(namespace["subprocess"], "run", fake_run)
@@ -461,7 +461,6 @@ def test_generated_updater_script_waits_then_runs_uv_on_success(
         build_constraints.write_text("hatchling==1.29.0\n", encoding="utf-8")
 
         package_spec = self_update.package_spec_for_release_tag("v9.8")
-        monkeypatch.setattr(namespace["os"], "name", "posix")
         exit_code = namespace["main"](
             [
                 "123",
@@ -561,8 +560,6 @@ def test_generated_updater_script_propagates_uv_exit_code_and_ignores_cleanup_fa
 ) -> None:
     script_source = self_update._build_updater_script()
 
-    monkeypatch.setattr(os, "name", "posix")
-    monkeypatch.setattr(os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr(shutil, "which", lambda name: "uv")
     def fake_run(
         argv: list[str],
@@ -581,7 +578,7 @@ def test_generated_updater_script_propagates_uv_exit_code_and_ignores_cleanup_fa
     monkeypatch.setattr(
         sys,
         "argv",
-        ["a0-update-temp.py", "321", "a0 @ https://example.invalid/fail.zip", "3.11", "", ""],
+        ["a0-update-temp.py", "0", "a0 @ https://example.invalid/fail.zip", "3.11", "", ""],
     )
 
     with pytest.raises(SystemExit) as exc_info:

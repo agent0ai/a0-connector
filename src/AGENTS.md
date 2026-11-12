@@ -13,7 +13,7 @@
 ## Local Contracts
 
 - The root `pyproject.toml` builds `src/agent_zero_cli` into the `a0` distribution.
-- Keep package imports compatible with Python 3.10+.
+- Keep CLI package imports compatible with Python 3.11+.
 - Do not add platform-specific desktop libraries to source-tree imports unless guarded so other platforms can still import the CLI.
 
 ## Work Guidance

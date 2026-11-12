@@ -1430,7 +1430,7 @@ async def test_host_browser_rejects_oversized_screenshot_before_base64(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    root = tmp_path / "Chrome"
+    root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")

@@ -4,7 +4,6 @@ requires = [
     "packaging==26.3",
     "pathspec==1.1.1",
     "pluggy==1.6.0",
-    "tomli==2.4.1 ; python_full_version < '3.11'",
     "tomlkit==0.15.1",
     "trove-classifiers==2026.6.1.19",
 ]
@@ -16,7 +15,7 @@ version = "2.15"
 description = "Terminal chat interface for Agent Zero"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "agent0ai" },
 ]
@@ -26,7 +25,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -35,18 +33,16 @@ classifiers = [
 dependencies = [
     "agent-client-protocol==0.10.1",
     "aiohappyeyeballs==2.7.1",
-    "aiohttp==3.14.3",
+    "aiohttp==3.14.5",
     "aiohttp-jinja2==1.6",
     "aiosignal==1.4.0",
     "annotated-types==0.8.0",
     "anyio==4.14.2",
-    "async-timeout==5.0.1 ; python_full_version < '3.11'",
     "attrs==26.1.0",
     "bidict==0.23.1",
-    "certifi==2026.7.22",
+    "certifi==2026.10.23",
     "comtypes==1.4.16 ; sys_platform == 'win32'",
     "dxcam==0.3.0 ; sys_platform == 'win32'",
-    "exceptiongroup==1.3.1 ; python_full_version < '3.11'",
     "frozenlist==1.8.0",
     "greenlet==3.5.5",
     "h11==0.16.0",
@@ -61,7 +57,7 @@ dependencies = [
     "mdurl==0.1.2",
     "multidict==6.9.1",
     "numpy==2.2.6 ; sys_platform == 'win32'",
-    "pillow==12.3.0",
+    "pillow==13.0.0",
     "platformdirs==4.11.3",
     "playwright==1.62.0",
     "propcache==0.5.2",
@@ -89,7 +85,7 @@ dependencies = [
     "typing-inspection==0.4.4",
     "uc-micro-py==2.0.0",
     "wsproto==1.3.2",
-    "yarl==1.24.5",
+    "yarl==1.25.1",
 ]
 
 [project.urls]
