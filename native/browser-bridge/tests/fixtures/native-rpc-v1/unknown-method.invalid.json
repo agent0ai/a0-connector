@@ -1,0 +1,6 @@
+{
+  "jsonrpc": "2.0",
+  "id": "unsafe-1",
+  "method": "shell.run",
+  "params": { "command": "echo forbidden" }
+}

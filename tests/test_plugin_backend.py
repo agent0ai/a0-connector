@@ -100,6 +100,7 @@ def _install_fake_helpers(
     tool_mod = types.ModuleType("helpers.tool")
     tool_policy_mod = types.ModuleType("helpers.tool_policy")
     tool_policy_mod.resolve_tool = lambda *args, **kwargs: types.SimpleNamespace(allowed=True)
+    tool_policy_mod.ensure_tool_allowed = tool_policy_mod.resolve_tool
     ws_mod = types.ModuleType("helpers.ws")
     ws_limits_mod = types.ModuleType("helpers.ws_limits")
     ws_manager_mod = types.ModuleType("helpers.ws_manager")
@@ -193,6 +194,9 @@ def _install_fake_helpers(
         @property
         def manager(self):
             return self._manager
+
+        def principal_for_sid(self, sid: str):
+            return None
 
         async def emit_to(
             self,

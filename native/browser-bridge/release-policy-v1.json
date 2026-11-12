@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "contract": "a0.browser-bridge.release-policy.v1",
+  "channel": "stable",
+  "native_host_name": "io.agentzero.browser_bridge",
+  "signature_verifier": "detached_ed25519_strict",
+  "trusted_release_keys": [{
+    "key_id": "publisher-2026",
+    "ed25519_public_key_base64": "GEOygP0rBYlVYZEx+bgDhUZ3sVpfVyedoI9Jo+bcYII="
+  }],
+  "trusted_build_provenance_roots": [{
+    "key_id": "builder-2026",
+    "ed25519_public_key_base64": "bgVolIrNPT7ijoUZHxBGYEDfE5eA6M5+VOojUjDIt1g=",
+    "builder_id": "agent-zero-local-macos-2026",
+    "source_repository": "https://github.com/TerminallyLazy/a0-connector",
+    "recipe_sha256": "f94eca3a0b05c7ea8fe3965c02bd6b31922c066535a2e30b8d2519d34e550dc7",
+    "rust_toolchain": "rustc 1.85.1 (4eb161250 2025-03-15)"
+  }],
+  "pinned_release_catalogs": [{
+    "release": "2.12.3",
+    "catalog_url": "https://raw.githubusercontent.com/TerminallyLazy/agent-zero-browser-releases/native-v2.12.3-macos/catalog.json",
+    "signature_url": "https://raw.githubusercontent.com/TerminallyLazy/agent-zero-browser-releases/native-v2.12.3-macos/catalog.sig"
+  }],
+  "pinned_build_provenance": [{
+    "release": "2.12.3",
+    "platform": "macos",
+    "artifact_arch": "universal2",
+    "statement_url": "https://raw.githubusercontent.com/TerminallyLazy/agent-zero-browser-releases/native-v2.12.3-macos/provenance-macos-universal2.json",
+    "signature_url": "https://raw.githubusercontent.com/TerminallyLazy/agent-zero-browser-releases/native-v2.12.3-macos/provenance-macos-universal2.sig"
+  }],
+  "production_extension_origins": ["chrome-extension://nhliclifilepdkoolioacpjpijomfplj/"],
+  "macos_release_identity": {
+    "team_id": "R2KNNFH5FC",
+    "signing_identifier": "io.agentzero.browser_bridge"
+  },
+  "activation": "requires_verified_artifact_platform_provenance_install_and_core_runtime_evidence"
+}

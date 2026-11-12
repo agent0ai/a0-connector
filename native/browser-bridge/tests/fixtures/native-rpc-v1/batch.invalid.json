@@ -1,0 +1,8 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "batch-1",
+    "method": "bridge.ping",
+    "params": {}
+  }
+]

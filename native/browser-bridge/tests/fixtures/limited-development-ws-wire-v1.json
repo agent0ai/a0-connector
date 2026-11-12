@@ -1,0 +1,94 @@
+{
+  "contract": "a0.browser-bridge.development-ws-wire.v1",
+  "provisional_reconcile_packet": [
+    "connector_browser_control",
+    {
+      "handlerId": "ws_browser_development.WsBrowserDevelopment",
+      "eventId": "00000000-0000-4000-8000-000000000001",
+      "correlationId": "reconcile-fixture",
+      "ts": "2026-09-05T12:00:00.000Z",
+      "data": {
+        "method": "browser.reconcile",
+        "contract_version": 1,
+        "bridge_id": "bridge-dev-fixture",
+        "load_generation_id": "load-dev-fixture",
+        "control_id": "reconcile-fixture",
+        "expected_contexts": [],
+        "event_cursors": [],
+        "known_control_ids": []
+      }
+    }
+  ],
+  "hello_ack_args": [
+    {
+      "correlationId": "bridge-hello",
+      "results": [
+        {
+          "handlerId": "ws_browser_development.WsBrowserDevelopment",
+          "ok": true,
+          "durationMs": 1.2346,
+          "correlationId": "bridge-hello",
+          "data": {
+            "protocol": "a0-connector.v1",
+            "principal_type": "browser_bridge_development",
+            "features": [
+              "browser_extension_bridge_v1",
+              "connector_browser_control",
+              "connector_browser_event"
+            ],
+            "connector_session_ready": true,
+            "browser_control_ready": true,
+            "development_admission": {
+              "contract": "a0.browser-bridge.development-runtime.v1",
+              "channel": "local-development",
+              "mode": "limited_runtime",
+              "transports": ["control", "critical_event", "operation"],
+              "selection_scope": "explicit_context_bridge",
+              "server_instance_id": "server-dev-fixture",
+              "bridge_id": "bridge-dev-fixture",
+              "key_generation": 1,
+              "extension_id": "paoagmddepkmonpeboobaijlenlcokpc",
+              "install_instance_id": "install-dev-fixture",
+              "load_generation_id": "load-dev-fixture"
+            },
+            "connector_binding": {
+              "server_instance_id": "server-dev-fixture",
+              "bridge_id": "bridge-dev-fixture",
+              "connector_sid": "sid-dev-fixture",
+              "key_generation": 1,
+              "load_generation_id": "load-dev-fixture"
+            },
+            "host_browser": {
+              "supported": true,
+              "enabled": true,
+              "status": "ready",
+              "backend_id": "chrome_extension",
+              "browser_id": "development-extension:bridge-dev-fixture",
+              "browser_label": "Chrome — Agent Zero Extension",
+              "contract_version": 1,
+              "features": ["browser_extension_bridge_v1"],
+              "capabilities": {
+                "actions": ["content", "ensure", "list", "navigate", "open", "scroll", "state", "status"],
+                "features": ["cursor_v1", "semantic_dom_v1", "tab_groups_v1", "tab_leases_v1"],
+                "limits": {"max_json_frame_bytes": 786432}
+              },
+              "extension": {
+                "id": "paoagmddepkmonpeboobaijlenlcokpc",
+                "version": "0.1.0",
+                "manifest_version": 3,
+                "install_instance_id": "install-dev-fixture",
+                "load_generation_id": "load-dev-fixture"
+              },
+              "companion": {
+                "instance_id": "companion-dev-fixture",
+                "version": "2.12.0",
+                "platform": "darwin",
+                "arch": "aarch64"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

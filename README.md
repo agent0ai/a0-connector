@@ -67,6 +67,94 @@ By default `a0 update` resolves the latest published GitHub release at runtime, 
 
 `a0 update` requires `uv` to be available on your `PATH`.
 
+## Browser extension companion
+
+> macOS 2.12.3 is published under the protected `native-v2.12.3-macos`
+> release tag with Developer ID signing, notarization and independently pinned
+> CLI bootstrap bytes. Native Chrome installation and independent CLI installed
+> status readback have passed on the signing host. Browser operations have also
+> been exercised with matching Core/extension builds. Chrome Web Store approval,
+> Linux delivery/acceptance, and
+> Windows candidate verification/installation remain incomplete.
+
+The Browser Bridge is a separate native companion installed for the current OS
+user on the computer that runs Chrome, Edge, Brave, Vivaldi, Opera, or Chromium.
+For Docker-based Agent Zero, run this lifecycle from a terminal on that browser
+computer; the container never installs files into the desktop browser.
+
+For a terminal-free setup, use the companion installer and supplied unpacked
+extension ZIP. Its `START-HERE.html` guide covers macOS, Windows, and Linux loading
+steps, but only macOS currently has a released native installer. WSL and Docker
+cannot register the companion for host Windows Chrome. See the
+[setup guide](https://github.com/TerminallyLazy/agent-zero-browser-support/blob/main/SETUP.md).
+Pair once in Options and choose the browser as Agent Zero's default across chats.
+Keep the same extension folder/profile and use Reload after updates.
+
+Extension 0.1.1 retains the production ID and uses companion 2.12.3 unchanged.
+Core must have a publisher-signed policy admitting that exact version tuple;
+updating only the extension against an old 0.1.0 policy will leave it inactive.
+The CLI must not relax verification or silently substitute another platform's
+binary to resolve that mismatch. The commands below install on macOS only until
+other platforms have released, verified companion packages.
+
+```bash
+a0 browser-extension install --host http://localhost:50080 --browser chrome
+a0 browser-extension status --host http://localhost:50080 --json
+a0 browser-extension doctor --json
+a0 browser-extension pair --host http://localhost:50080
+a0 browser-extension repair --browser chrome
+a0 browser-extension update
+a0 browser-extension uninstall --yes
+```
+
+Reviewed production identities, independent publisher/builder public roots and
+signed/notarized macOS artifacts are published. The
+fresh-host CLI bootstrap now acquires only independently pinned archive and
+executable bytes, then invokes the concrete macOS native verification/installer
+path. Linux and Windows still need their separate delivery/platform evidence.
+It never treats a
+same-name executable found on `PATH` as trusted and never falls back to an
+unchecked download. The native companion now owns transactional Ed25519 pairing
+against the exact Agent Zero Core exchange contract and keeps its private key in
+the operating-system credential store. Pairing alone does not enable browser
+control: signed challenge/proof authentication and exact activation codecs are
+implemented; browser control still requires separate exact Core admission and
+live end-to-end acceptance. No container-side installation substitutes for
+browser-host registration.
+
+Once installed, run `pair` in an interactive terminal. It prepares a five-minute
+code through the authenticated Agent Zero session and gives instructions for
+pasting it into Chrome Options once. Chrome then remembers the profile pairing
+and reconnects automatically. The command returns action-required until you
+complete that browser step; it does not claim pairing succeeded. JSON or
+redirected output never creates or reveals a pairing code. Browser settings
+remain the equivalent WebUI-first route for Docker users.
+
+### Local Browser Bridge development
+
+Use the production extension and installation commands above with the current
+Core integration. The historical `local-development` channel cannot pair or
+control a browser with that integration: Core has retired its server endpoints.
+Building it from source does not restore those endpoints. Do not copy its
+credentials into a production installation.
+
+If you already have a development installation, use your trusted development
+executable to inspect or remove it:
+
+```bash
+a0 browser-extension development status --source-binary \
+  /absolute/path/to/target/release/a0-browser-bridge --json
+a0 browser-extension development uninstall --source-binary \
+  /absolute/path/to/target/release/a0-browser-bridge --yes --json
+```
+
+Run these commands on the computer running Chrome, not inside Docker. A pending
+update blocks removal; recover it with the same trusted source build and
+`a0 browser-extension development update --source-binary /absolute/path/to/target/release/a0-browser-bridge --yes --json`.
+Never delete its journal or overwrite changed files to force recovery. Windows
+development installation and automatic credential cleanup remain unavailable;
+check the uninstall result for any remaining credential cleanup.
+
 ## Agent Zero Core
 
 No separate plugin install is required for users once Agent Zero Core ships `_a0_connector` as a builtin plugin.
