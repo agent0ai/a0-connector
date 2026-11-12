@@ -82,6 +82,8 @@ _COMPANION_ENV_ALLOWLIST = (
     "PATH",
     "HOME",
     "LOCALAPPDATA",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
     "XDG_DATA_HOME",
     "XDG_CONFIG_HOME",
     "XDG_RUNTIME_DIR",

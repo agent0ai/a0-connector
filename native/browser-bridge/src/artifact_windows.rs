@@ -83,6 +83,15 @@ extern "system" {
         sacl: *mut *mut Acl,
         descriptor: *mut *mut c_void,
     ) -> u32;
+    fn SetSecurityInfo(
+        handle: Handle,
+        kind: u32,
+        information: u32,
+        owner: *mut c_void,
+        group: *mut c_void,
+        dacl: *mut Acl,
+        sacl: *mut Acl,
+    ) -> u32;
     fn GetSecurityDescriptorControl(
         descriptor: *const c_void,
         control: *mut u16,
@@ -135,7 +144,7 @@ fn wide(path: &Path) -> Result<Vec<u16>, ArtifactError> {
 }
 
 /// Refuse UNC, device namespaces, stream names and normalization aliases.
-fn local_components(path: &Path) -> Result<Vec<PathBuf>, ArtifactError> {
+pub(super) fn local_components(path: &Path) -> Result<Vec<PathBuf>, ArtifactError> {
     let raw = path.as_os_str().encode_wide().collect::<Vec<_>>();
     if raw
         .split(|unit| *unit == 92 || *unit == 47)
@@ -192,7 +201,7 @@ fn open_existing(path: &Path, directory: bool) -> Result<File, ArtifactError> {
         CreateFileW(
             name.as_ptr(),
             READ_CONTROL | FILE_READ_ATTRIBUTES,
-            if directory { 1 } else { 3 },
+            if directory { 1 } else { 7 },
             null(),
             3,
             OPEN_REPARSE | if directory { BACKUP_SEMANTICS } else { 0 },
@@ -231,6 +240,10 @@ pub(super) fn parent(requested: Option<&Path>) -> Result<PathBuf, ArtifactError>
 }
 
 fn private_descriptor() -> Result<LocalAllocation, ArtifactError> {
+    private_descriptor_with_rights("FA")
+}
+
+fn private_descriptor_with_rights(rights: &str) -> Result<LocalAllocation, ArtifactError> {
     let mut token = null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), 8, &mut token) } == 0 {
         return denied();
@@ -273,7 +286,7 @@ fn private_descriptor() -> Result<LocalAllocation, ArtifactError> {
     {
         return denied();
     }
-    let sddl = format!("O:{sid_string}D:P(A;;FA;;;SY)(A;;FA;;;{sid_string})\0")
+    let sddl = format!("O:{sid_string}D:P(A;;{rights};;;SY)(A;;{rights};;;{sid_string})\0")
         .encode_utf16()
         .collect::<Vec<_>>();
     let mut descriptor = null_mut();
@@ -291,7 +304,7 @@ fn private_descriptor() -> Result<LocalAllocation, ArtifactError> {
     Ok(LocalAllocation(descriptor))
 }
 
-fn ace_sid(acl: *const Acl, index: u32) -> Result<*const c_void, ArtifactError> {
+fn ace_sid(acl: *const Acl, index: u32, rights: u32) -> Result<*const c_void, ArtifactError> {
     let mut ace = null_mut();
     if unsafe { GetAce(acl, index, &mut ace) } == 0 || ace.is_null() {
         return denied();
@@ -301,7 +314,7 @@ fn ace_sid(acl: *const Acl, index: u32) -> Result<*const c_void, ArtifactError> 
     if unsafe { *header } != 0
         || unsafe { *header.add(1) } != 0
         || unsafe { std::ptr::read_unaligned(header.add(2).cast::<u16>()) } < 20
-        || unsafe { std::ptr::read_unaligned(header.add(4).cast::<u32>()) } != FILE_ALL_ACCESS
+        || unsafe { std::ptr::read_unaligned(header.add(4).cast::<u32>()) } != rights
     {
         return denied();
     }
@@ -309,11 +322,95 @@ fn ace_sid(acl: *const Acl, index: u32) -> Result<*const c_void, ArtifactError> 
 }
 
 fn verify_private(file: &File, expected: &LocalAllocation) -> Result<(), ArtifactError> {
-    let (mut owner, mut acl, mut descriptor) = (null_mut(), null_mut(), null_mut());
+    verify_private_object(file.as_raw_handle(), 1, FILE_ALL_ACCESS, expected)
+}
+
+pub(super) fn with_registry_descriptor<T>(
+    action: impl FnOnce(*mut c_void) -> T,
+) -> Result<T, ArtifactError> {
+    let descriptor = private_descriptor_with_rights("KA")?;
+    Ok(action(descriptor.0))
+}
+
+pub(super) fn verify_registry(handle: Handle) -> Result<(), ArtifactError> {
+    verify_private_object(
+        handle,
+        4,
+        0x000f003f,
+        &private_descriptor_with_rights("KA")?,
+    )
+}
+pub(super) fn verify_private_handle(file: &File) -> Result<(), ArtifactError> {
+    verify_private(file, &private_descriptor()?)
+}
+
+fn verify_owner(file: &File, expected: &LocalAllocation) -> Result<(), ArtifactError> {
+    let (mut owner, mut descriptor, mut wanted, mut defaulted) =
+        (null_mut(), null_mut(), null_mut(), 0);
     if unsafe {
         GetSecurityInfo(
             file.as_raw_handle(),
             1,
+            1,
+            &mut owner,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            &mut descriptor,
+        )
+    } != 0
+    {
+        return denied();
+    }
+    let _actual = LocalAllocation(descriptor);
+    if owner.is_null()
+        || unsafe { GetSecurityDescriptorOwner(expected.0, &mut wanted, &mut defaulted) } == 0
+        || wanted.is_null()
+        || unsafe { EqualSid(owner, wanted) } == 0
+    {
+        return denied();
+    }
+    Ok(())
+}
+
+pub(super) fn secure_private_handle(file: &File) -> Result<(), ArtifactError> {
+    let expected = private_descriptor()?;
+    verify_owner(file, &expected)?;
+    let (mut present, mut acl, mut defaulted) = (0, null_mut(), 0);
+    if unsafe { GetSecurityDescriptorDacl(expected.0, &mut present, &mut acl, &mut defaulted) } == 0
+        || present == 0
+        || acl.is_null()
+    {
+        return denied();
+    }
+    if unsafe {
+        SetSecurityInfo(
+            file.as_raw_handle(),
+            1,
+            0x8000_0004,
+            null_mut(),
+            null_mut(),
+            acl,
+            null_mut(),
+        )
+    } != 0
+    {
+        return denied();
+    }
+    verify_private(file, &expected)
+}
+
+fn verify_private_object(
+    handle: Handle,
+    kind: u32,
+    rights: u32,
+    expected: &LocalAllocation,
+) -> Result<(), ArtifactError> {
+    let (mut owner, mut acl, mut descriptor) = (null_mut(), null_mut(), null_mut());
+    if unsafe {
+        GetSecurityInfo(
+            handle,
+            kind,
             5,
             &mut owner,
             null_mut(),
@@ -348,8 +445,11 @@ fn verify_private(file: &File, expected: &LocalAllocation) -> Result<(), Artifac
     {
         return denied();
     }
-    let actual_sids = [ace_sid(acl, 0)?, ace_sid(acl, 1)?];
-    let expected_sids = [ace_sid(expected_acl, 0)?, ace_sid(expected_acl, 1)?];
+    let actual_sids = [ace_sid(acl, 0, rights)?, ace_sid(acl, 1, rights)?];
+    let expected_sids = [
+        ace_sid(expected_acl, 0, rights)?,
+        ace_sid(expected_acl, 1, rights)?,
+    ];
     for (index, sid) in actual_sids.iter().enumerate() {
         if unsafe { EqualSid(*sid, expected_sids[index]) } == 0 {
             return denied();
@@ -379,6 +479,130 @@ pub(super) fn create_root(parent: &Path) -> Result<PathBuf, ArtifactError> {
         return Ok(path);
     }
     denied()
+}
+
+/// Create-only fixed names for the install owner, with the same staging DACL.
+pub(super) fn create_private_directory(path: &Path) -> Result<(), ArtifactError> {
+    local_components(path)?;
+    let _guards = guard_chain(
+        path.parent()
+            .ok_or(ArtifactError::PrivateSpoolUnavailable)?,
+    )?;
+    let descriptor = private_descriptor()?;
+    let attributes = SecurityAttributes {
+        length: size_of::<SecurityAttributes>() as u32,
+        descriptor: descriptor.0,
+        inherit: 0,
+    };
+    if unsafe { CreateDirectoryW(wide(path)?.as_ptr(), &attributes) } == 0 {
+        return denied();
+    }
+    verify_private(&open_existing(path, true)?, &descriptor)
+}
+
+pub(super) fn verify_private_directory(path: &Path) -> Result<Vec<File>, ArtifactError> {
+    let guards = guard_chain(path)?;
+    verify_private(
+        guards
+            .last()
+            .ok_or(ArtifactError::PrivateSpoolUnavailable)?,
+        &private_descriptor()?,
+    )?;
+    Ok(guards)
+}
+
+pub(super) fn create_private_file(path: &Path) -> Result<File, ArtifactError> {
+    local_components(path)?;
+    let _guards = verify_private_directory(
+        path.parent()
+            .ok_or(ArtifactError::PrivateSpoolUnavailable)?,
+    )?;
+    let descriptor = private_descriptor()?;
+    let attributes = SecurityAttributes {
+        length: size_of::<SecurityAttributes>() as u32,
+        descriptor: descriptor.0,
+        inherit: 0,
+    };
+    let handle = unsafe {
+        CreateFileW(
+            wide(path)?.as_ptr(),
+            0xc000_0000 | READ_CONTROL,
+            1,
+            &attributes,
+            1,
+            OPEN_REPARSE | 0x80,
+            null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE {
+        return denied();
+    }
+    let file = unsafe { File::from_raw_handle(handle) };
+    verify_private(&file, &descriptor)?;
+    let info = handle_info(&file)?;
+    if info[0] & DIRECTORY != 0 || info[10] != 1 {
+        return denied();
+    }
+    Ok(file)
+}
+
+pub(super) fn open_private_file(path: &Path) -> Result<File, ArtifactError> {
+    open_private_file_with_access(path, 0x8000_0000 | READ_CONTROL, 1)
+}
+
+pub(super) fn open_private_file_with_access(
+    path: &Path,
+    access: u32,
+    share: u32,
+) -> Result<File, ArtifactError> {
+    open_owned_file(path, access, share, false)
+}
+
+pub(super) fn open_repair_file(path: &Path, retained: bool) -> Result<File, ArtifactError> {
+    open_owned_file(
+        path,
+        if retained { 0x8007_0000 } else { 0x8002_0000 },
+        if retained { 1 } else { 5 },
+        true,
+    )
+}
+
+fn open_owned_file(
+    path: &Path,
+    access: u32,
+    share: u32,
+    repair: bool,
+) -> Result<File, ArtifactError> {
+    local_components(path)?;
+    let _guards = guard_chain(
+        path.parent()
+            .ok_or(ArtifactError::PrivateSpoolUnavailable)?,
+    )?;
+    let handle = unsafe {
+        CreateFileW(
+            wide(path)?.as_ptr(),
+            access,
+            share,
+            null(),
+            3,
+            OPEN_REPARSE,
+            null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE {
+        return denied();
+    }
+    let file = unsafe { File::from_raw_handle(handle) };
+    let info = handle_info(&file)?;
+    if repair {
+        verify_owner(&file, &private_descriptor()?)?;
+        let named = open_existing(path, false)?;
+        verify_owner(&named, &private_descriptor()?)?;
+        verify_identity(&file, &named, (info[8] as u64) << 32 | info[9] as u64)?;
+    } else {
+        verify_input(&file, path, (info[8] as u64) << 32 | info[9] as u64)?;
+    }
+    Ok(file)
 }
 
 pub(super) fn create_file(root: &Path, suffix: &str) -> Result<(PathBuf, File), ArtifactError> {
@@ -434,8 +658,12 @@ pub(super) fn verify_input(file: &File, path: &Path, byte_count: u64) -> Result<
     let expected = private_descriptor()?;
     verify_private(file, &expected)?;
     verify_private(&named, &expected)?;
+    verify_identity(file, &named, byte_count)
+}
+
+fn verify_identity(file: &File, named: &File, byte_count: u64) -> Result<(), ArtifactError> {
     let retained = handle_info(file)?;
-    let current = handle_info(&named)?;
+    let current = handle_info(named)?;
     if retained[7] != current[7]
         || retained[11..13] != current[11..13]
         || retained[10] != 1

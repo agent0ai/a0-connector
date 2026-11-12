@@ -207,7 +207,7 @@ fn run_install_command(args: &[String], json_mode: bool, operation: InstallOpera
         Ok(targets) => targets,
         Err(reason) => return usage_error(json_mode, reason),
     };
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     if !cfg!(feature = "local-development") && crate::release::release_trust_configured() {
         let result = crate::install::acquire_and_install(operation, targets.clone());
         let (state, reason, count, rollback, exit_code) = match &result {

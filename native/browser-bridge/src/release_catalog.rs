@@ -713,7 +713,7 @@ mod tests {
         }
         assert_eq!(
             verify_catalog(bytes.as_bytes(), &signature, "2.12.0").unwrap_err(),
-            CatalogError::Unavailable
+            CatalogError::InvalidSignature
         );
         assert_eq!(
             verify_with_policy(bytes.as_bytes(), &[0; 64], "2.12.0", &roots, &origins).unwrap_err(),

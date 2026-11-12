@@ -4,6 +4,7 @@ from dataclasses import replace
 import gzip
 import hashlib
 import io
+import os
 from pathlib import Path
 import tarfile
 
@@ -69,6 +70,8 @@ def fixture_payload(extra=False):
 
 
 def test_private_bootstrap_checks_final_bytes_and_retains_them_through_invocation(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("Unix staging fixture; native Windows bootstrap has its own tests")
     executable, data, pin = fixture_payload()
     monkeypatch.setattr(release, "_host_target", lambda: ("macos", "universal2"))
     monkeypatch.setattr(release, "APPROVED_COMPANION_RELEASES", (pin.companion,))

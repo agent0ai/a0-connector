@@ -83,7 +83,13 @@ where
         Platform::Windows => {
             let local_app_data = required_absolute("LOCALAPPDATA", &lookup, true)?;
             Ok(UserPaths {
-                install_root: local_app_data.join("Agent Zero").join("Browser Bridge"),
+                install_root: local_app_data.join("Agent Zero").join(
+                    if cfg!(feature = "local-development") {
+                        "Browser Bridge Development"
+                    } else {
+                        "Browser Bridge"
+                    },
+                ),
                 home_root: None,
                 config_root: None,
             })
@@ -203,6 +209,12 @@ mod tests {
             (name == "LOCALAPPDATA").then(|| OsString::from(r"C:\Users\fixture\AppData\Local"))
         })
         .expect("fixture path should resolve");
-        assert!(paths.install_root.ends_with("Agent Zero/Browser Bridge"));
+        assert!(paths
+            .install_root
+            .ends_with(if cfg!(feature = "local-development") {
+                "Agent Zero/Browser Bridge Development"
+            } else {
+                "Agent Zero/Browser Bridge"
+            }));
     }
 }

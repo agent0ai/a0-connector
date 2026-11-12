@@ -807,6 +807,24 @@ pub(crate) fn fixture_runtime_hello() -> ExtensionRuntimeHello {
 }
 
 #[cfg(test)]
+pub(crate) fn fixture_current_companion(host_browser: &mut Value) {
+    let Value::Object(host) = host_browser else {
+        panic!("fixture host must be an object")
+    };
+    let Value::Object(companion) = host.get_mut("companion").unwrap() else {
+        panic!("fixture companion must be an object")
+    };
+    // Frozen wire examples predate this build's version and host platform.
+    for (key, value) in [
+        ("version", COMPANION_VERSION),
+        ("platform", runtime_platform()),
+        ("arch", crate::platform::architecture()),
+    ] {
+        *companion.get_mut(key).unwrap() = text(value);
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn fixture_expectation() -> DevelopmentHelloExpectation {
     let hello = fixture_runtime_hello();
     DevelopmentHelloExpectation::from_credential(&hello, &CredentialRecord::fixture_development())
@@ -899,10 +917,15 @@ mod tests {
     }
 
     fn limited_runtime_fixture() -> Value {
-        crate::json::parse(include_bytes!(
+        let mut fixture = crate::json::parse(include_bytes!(
             "../tests/fixtures/limited-development-runtime-v1.json"
         ))
-        .unwrap()
+        .unwrap();
+        for key in ["candidate", "ack"] {
+            let fields = object_mut(object_mut(&mut fixture).get_mut(key).unwrap());
+            fixture_current_companion(fields.get_mut("host_browser").unwrap());
+        }
+        fixture
     }
 
     fn fixture_field<'a>(fixture: &'a Value, key: &str) -> &'a Value {

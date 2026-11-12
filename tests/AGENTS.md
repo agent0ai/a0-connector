@@ -51,6 +51,20 @@
   even when its local digest is updated. Empty production pins remain unable to
   trust PATH or an installed program's self-report; diagnostic errors are fixed
   and pathless. Fixture pins must never enter distributable registry source.
+  Create the synthetic manifest directory with explicit safe permissions,
+  independent of the test runner's umask, and separately reject writable parents.
+- `test_browser_extension_windows.py` exercises native private ACLs, retained
+  handles, hardlink/share-mode rejection, install locks and bootstrap cleanup.
+  Synthetic installed-state discovery substitutes only the registry read;
+  real HKCU and Credential Manager effects belong to separately approved native
+  opt-in tests. Skip Unix permission fixtures on Windows and Windows-only
+  imports elsewhere; neither skip set establishes the other platform's acceptance.
+- `test_browser_extension_linux_packaging.py` reads the candidate builder's
+  reproducible one-file archive through the independent CLI bootstrap extractor.
+  Use synthetic never-executed bytes; reject empty payloads and source symlinks.
+  The Linux bootstrap delegates arguments to a fake CLI and refuses root;
+  tests do not download a CLI or register a native host.
+  Real Secret Service and Chromium tests remain explicit opt-in host checks.
   `test_browser_extension_cli.py` also rejects incomplete successful native
   install results; accepting an installed result does not establish discovery
   trust or relax independent final-byte pins.
@@ -59,7 +73,10 @@
   Credential-inventory pending receipts must not imply registration retirement,
   zero registrations, completed cleanup, or successful uninstall.
 - `tests/test_plugin_backend.py` may resolve a plugin root from `A0_CONNECTOR_PLUGIN_ROOT`, a local `plugin/`, or a sibling Agent Zero checkout. Keep fake Agent Zero helper modules isolated and reset between tests.
-- Its `helpers.tool` stub includes Core's boolean argument parsing, preserving caller defaults for missing or unrecognized values.
+- Its legacy CLI fixtures expose no restricted principal and mirror Core's
+  boolean argument coercion; do not substitute the broader CLI flag parser.
+  The tool-policy stub supplies an allowed decision for transport tests. Core
+  owns verification of policy denial.
 - Certificate fixtures are test assets only; do not replace them with real secrets.
 - Transcript image widget tests use fake renderers backed by ordinary Textual widgets; focused tests must not instantiate native terminal-image controls or emit terminal graphics sequences.
 

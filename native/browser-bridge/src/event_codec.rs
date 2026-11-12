@@ -167,11 +167,12 @@ pub(crate) struct EventCodec {
 }
 
 impl EventCodec {
+    #[cfg(test)]
     pub(crate) fn new(load_generation_id: String, last_acknowledged_sequence: u64) -> Self {
         Self::with_profile(
             load_generation_id,
             last_acknowledged_sequence,
-            BrowserTransportProfile::compiled(),
+            BrowserTransportProfile::fixture_production(),
         )
     }
 

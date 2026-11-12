@@ -200,7 +200,11 @@ pub fn registration_location(
             manifest_path: paths
                 .install_root
                 .join("manifests")
-                .join(entry.id.as_str())
+                .join(if entry.windows_registry_key == CHROME_WINDOWS_KEY {
+                    "chrome"
+                } else {
+                    entry.id.as_str()
+                })
                 .join(format!("{NATIVE_HOST_NAME}.json")),
         }),
         Platform::Unsupported => None,
@@ -215,12 +219,66 @@ pub(crate) fn discover_stable_browsers(
     platform: Platform,
     paths: &UserPaths,
 ) -> Result<Vec<BrowserId>, BrowserDiscoveryError> {
+    #[cfg(target_os = "windows")]
+    if platform == Platform::Windows {
+        let roots = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+            .iter()
+            .filter_map(std::env::var_os)
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        return discover_windows(&roots);
+    }
     discover_stable_browsers_with(
         platform,
         paths,
         Path::new("/Applications"),
         &[PathBuf::from("/usr/bin")],
     )
+}
+
+#[cfg(target_os = "windows")]
+fn discover_windows(roots: &[PathBuf]) -> Result<Vec<BrowserId>, BrowserDiscoveryError> {
+    use std::os::windows::fs::MetadataExt;
+    if roots.is_empty() || roots.iter().any(|path| !path.is_absolute()) {
+        return Err(BrowserDiscoveryError::RequiredPathUnavailable);
+    }
+    let mut browsers = Vec::new();
+    for (browser, suffix) in [
+        (BrowserId::Chrome, r"Google\Chrome\Application\chrome.exe"),
+        (BrowserId::Edge, r"Microsoft\Edge\Application\msedge.exe"),
+        (
+            BrowserId::Brave,
+            r"BraveSoftware\Brave-Browser\Application\brave.exe",
+        ),
+        (BrowserId::Vivaldi, r"Vivaldi\Application\vivaldi.exe"),
+        (BrowserId::Opera, r"Programs\Opera\launcher.exe"),
+        (BrowserId::Chromium, r"Chromium\Application\chrome.exe"),
+    ] {
+        for root in roots {
+            let path = root.join(suffix);
+            match fs::symlink_metadata(&path) {
+                Ok(info) if info.is_file() && info.file_attributes() & 0x400 == 0 => {
+                    let mut safe = true;
+                    for parent in path.ancestors().skip(1) {
+                        let info = fs::symlink_metadata(parent)
+                            .map_err(|_| BrowserDiscoveryError::Filesystem)?;
+                        if !info.is_dir() || info.file_attributes() & 0x400 != 0 {
+                            safe = false;
+                            break;
+                        }
+                    }
+                    if safe {
+                        browsers.push(browser);
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(_) => return Err(BrowserDiscoveryError::Filesystem),
+            }
+        }
+    }
+    Ok(browsers)
 }
 
 fn discover_stable_browsers_with(
@@ -386,6 +444,25 @@ mod tests {
         assert!(BROWSERS
             .iter()
             .all(|entry| entry.windows_registry_key.starts_with("HKCU\\")));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_discovery_uses_stable_conventional_paths_and_shared_manifest() {
+        let fixture = FixtureRoot::new();
+        let root = fixture.0.join("Programs");
+        let stable = root.join(r"Google\Chrome\Application\chrome.exe");
+        fs::create_dir_all(stable.parent().unwrap()).unwrap();
+        fs::write(&stable, b"fixture").unwrap();
+        let beta = root.join(r"Microsoft\Edge Beta\Application\msedge.exe");
+        fs::create_dir_all(beta.parent().unwrap()).unwrap();
+        fs::write(beta, b"fixture").unwrap();
+        assert_eq!(discover_windows(&[root]).unwrap(), vec![BrowserId::Chrome]);
+        let paths = fixture.paths(Platform::Windows);
+        assert_eq!(
+            registration_location(BrowserId::Chrome, Platform::Windows, &paths),
+            registration_location(BrowserId::Brave, Platform::Windows, &paths)
+        );
     }
 
     #[test]

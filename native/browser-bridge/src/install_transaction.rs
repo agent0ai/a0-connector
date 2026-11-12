@@ -16,6 +16,10 @@ pub(crate) mod candidate;
 #[path = "install_lifecycle.rs"]
 pub(crate) mod lifecycle;
 
+#[cfg(target_os = "windows")]
+#[path = "install_windows.rs"]
+mod windows;
+
 use sha2::{Digest, Sha256};
 
 use super::{BrowserTarget, InstallOperation};
@@ -252,6 +256,10 @@ impl FullyVerifiedInstallCandidate {
         }
         match self.authority {
             CandidateAuthority::Production => {
+                #[cfg(target_os = "windows")]
+                if crate::release::WINDOWS_SIGNER_CERTIFICATES.is_empty() {
+                    return Err(InstallTransactionError::ReleaseEvidenceUnavailable);
+                }
                 let supplied = self
                     .allowed_origins
                     .iter()
@@ -331,7 +339,7 @@ pub fn install_verified_candidate(
     candidate: FullyVerifiedInstallCandidate,
 ) -> Result<InstallTransactionResult, InstallTransactionError> {
     let platform = Platform::current();
-    if platform == Platform::Windows {
+    if platform == Platform::Windows && !cfg!(target_os = "windows") {
         return Err(InstallTransactionError::WindowsAdapterUnavailable);
     }
     if platform == Platform::Unsupported {
@@ -354,11 +362,15 @@ pub fn install_verified_candidate(
 /// Concrete stable acquisition boundary used by the native installer command.
 /// All network locations and signer roots are compiled; no stable installation
 /// mutation occurs until the complete retained candidate has passed every gate.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn acquire_and_install(
     operation: InstallOperation,
     targets: Vec<BrowserTarget>,
 ) -> Result<InstallTransactionResult, InstallTransactionError> {
+    #[cfg(target_os = "windows")]
+    if crate::release::WINDOWS_SIGNER_CERTIFICATES.is_empty() {
+        return Err(InstallTransactionError::ReleaseEvidenceUnavailable);
+    }
     let paths = discover_user_paths().map_err(|_| InstallTransactionError::UserPathsUnavailable)?;
     let state = load_state(&paths.install_root.join("install-state.json"))?;
     let floor = state
@@ -367,12 +379,16 @@ pub(crate) fn acquire_and_install(
         .unwrap_or(crate::release::catalog::MINIMUM_SECURE_COMPANION);
     #[cfg(target_os = "macos")]
     let acquire = candidate::acquire_macos_production_candidate;
-    #[cfg(target_os = "linux")]
-    let acquire = candidate::acquire_linux_production_candidate;
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let acquire = candidate::acquire_platform_production_candidate;
     #[cfg(target_os = "macos")]
     let staging_parent = std::env::temp_dir();
     #[cfg(target_os = "linux")]
     let staging_parent = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .ok_or(InstallTransactionError::UserPathsUnavailable)?;
+    #[cfg(target_os = "windows")]
+    let staging_parent = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .ok_or(InstallTransactionError::UserPathsUnavailable)?;
     let candidate =
@@ -410,7 +426,14 @@ pub(crate) fn verify_installed_status(
         return Err(InstallTransactionError::ReleaseEvidenceUnavailable);
     }
     let platform = Platform::current();
-    if !matches!(platform, Platform::Macos | Platform::Linux) {
+    #[cfg(target_os = "windows")]
+    if crate::release::WINDOWS_SIGNER_CERTIFICATES.is_empty() {
+        return Err(InstallTransactionError::ReleaseEvidenceUnavailable);
+    }
+    if !matches!(
+        platform,
+        Platform::Macos | Platform::Linux | Platform::Windows
+    ) {
         return Err(InstallTransactionError::WindowsAdapterUnavailable);
     }
     verify_installed_at(
@@ -455,6 +478,13 @@ fn inspect_installed_at(
         return Err(InstallTransactionError::InstallRecoveryRequired);
     }
     let state_path = paths.install_root.join("install-state.json");
+    #[cfg(target_os = "windows")]
+    let mut state_file = if operation.is_some() {
+        windows::open_lifecycle(&state_path)?
+    } else {
+        open_owned_readonly(&state_path, true, false)?
+    };
+    #[cfg(not(target_os = "windows"))]
     let mut state_file = open_owned_readonly(&state_path, true, false)?;
     let state_identity = payload_identity(&state_file)?;
     let mut bytes = Vec::new();
@@ -508,6 +538,15 @@ fn inspect_installed_at(
         verify_private_directory(&directory)?;
     }
     let repair = operation == Some(lifecycle::Operation::Repair);
+    #[cfg(target_os = "windows")]
+    let mut executable = if repair {
+        windows::repair_file(&binary, true)?
+    } else if operation.is_some() {
+        windows::open_lifecycle(&binary)?
+    } else {
+        open_owned_readonly(&binary, true, true)?
+    };
+    #[cfg(not(target_os = "windows"))]
     let mut executable = open_owned_for_inspection(&binary, true, true, repair)?;
     let retained = payload_identity(&executable)?;
     let (digest, size) = hash_reader(&mut executable, MAX_PAYLOAD_BYTES)?;
@@ -543,8 +582,14 @@ fn inspect_installed_at(
     let manifest_digest = sha256(manifest.as_bytes());
     let mut registrations = Vec::new();
     for (path, recorded_digest) in owned_registration_paths(Some(&state), platform, paths)? {
+        #[cfg(target_os = "windows")]
+        if !windows::registry::present(&path, true)? && operation.is_none() {
+            return Err(InstallTransactionError::OwnedRegistrationChanged);
+        }
         let base = if platform == Platform::Macos {
             paths.home_root.as_ref()
+        } else if platform == Platform::Windows {
+            Some(&paths.install_root)
         } else {
             paths.config_root.as_ref()
         }
@@ -579,6 +624,15 @@ fn inspect_installed_at(
             });
             continue;
         }
+        #[cfg(target_os = "windows")]
+        let mut file = if repair {
+            windows::repair_file(&path, true)?
+        } else if operation.is_some() {
+            windows::open_lifecycle(&path)?
+        } else {
+            open_owned_readonly(&path, false, false)?
+        };
+        #[cfg(not(target_os = "windows"))]
         let mut file = open_owned_for_inspection(&path, false, false, repair)?;
         let identity = payload_identity(&file)?;
         let (digest, _) = hash_reader(&mut file, MAX_STATE_BYTES as u64)?;
@@ -596,10 +650,12 @@ fn inspect_installed_at(
         });
     }
     verify_payload_identity(
-        &open_owned_readonly(&state_path, true, false)?,
+        &open_owned_for_inspection(&state_path, true, false, false)?,
         &state_identity,
     )?;
-    if read_bounded(&state_path, MAX_STATE_BYTES)? != bytes {
+    let mut state_recheck = open_owned_for_inspection(&state_path, true, false, false)?;
+    let (state_digest, state_size) = hash_reader(&mut state_recheck, MAX_STATE_BYTES as u64)?;
+    if state_digest != sha256(&bytes) || state_size != bytes.len() as u64 {
         return Err(InstallTransactionError::OwnedStateInvalid);
     }
     if let Some(operation) = operation {
@@ -674,7 +730,15 @@ fn verify_registration_parents(path: &Path, base: &Path) -> Result<(), InstallTr
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn verify_registration_parents(path: &Path, base: &Path) -> Result<(), InstallTransactionError> {
+    if !path.starts_with(base) {
+        return Err(InstallTransactionError::OwnedStateInvalid);
+    }
+    windows::verify_directory(path)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn verify_registration_parents(_path: &Path, _base: &Path) -> Result<(), InstallTransactionError> {
     Err(InstallTransactionError::WindowsAdapterUnavailable)
 }
@@ -745,12 +809,26 @@ fn open_owned_for_inspection(
     Ok(file)
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn verify_private_directory(path: &Path) -> Result<(), InstallTransactionError> {
+    windows::verify_directory(path)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn verify_private_directory(_path: &Path) -> Result<(), InstallTransactionError> {
     Err(InstallTransactionError::WindowsAdapterUnavailable)
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn open_owned_readonly(
+    path: &Path,
+    _private: bool,
+    _executable: bool,
+) -> Result<File, InstallTransactionError> {
+    windows::open_file(path)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn open_owned_readonly(
     _path: &Path,
     _private: bool,
@@ -759,7 +837,21 @@ fn open_owned_readonly(
     Err(InstallTransactionError::WindowsAdapterUnavailable)
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn open_owned_for_inspection(
+    path: &Path,
+    _private: bool,
+    _executable: bool,
+    repair: bool,
+) -> Result<File, InstallTransactionError> {
+    if repair {
+        windows::repair_file(path, false)
+    } else {
+        windows::inspect_file(path)
+    }
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn open_owned_for_inspection(
     _path: &Path,
     _private: bool,
@@ -824,10 +916,13 @@ where
 {
     #[cfg(not(test))]
     let _ = fault;
-    if platform == Platform::Windows {
+    if platform == Platform::Windows && !cfg!(target_os = "windows") {
         return Err(InstallTransactionError::WindowsAdapterUnavailable);
     }
-    if !matches!(platform, Platform::Macos | Platform::Linux) {
+    if !matches!(
+        platform,
+        Platform::Macos | Platform::Linux | Platform::Windows
+    ) {
         return Err(InstallTransactionError::UnsupportedPlatform);
     }
     candidate.validate(platform, arch)?;
@@ -846,6 +941,8 @@ where
     let releases = paths.install_root.join("releases");
     ensure_private_dir(&transactions)?;
     ensure_private_dir(&releases)?;
+    #[cfg(target_os = "windows")]
+    ensure_private_dir(&paths.install_root.join("manifests"))?;
     let _lock = InstallLock::acquire(&paths.install_root.join("install.lock"))?;
     recover_interrupted(&paths, platform, &candidate.artifact_arch)?;
 
@@ -974,6 +1071,10 @@ where
             candidate.artifact_size,
         )?;
         for path in registrations.keys() {
+            #[cfg(target_os = "windows")]
+            if !windows::registry::present(path, true)? {
+                return Err(InstallTransactionError::OwnedRegistrationChanged);
+            }
             if hash_regular_file(path, MAX_STATE_BYTES as u64)?.as_deref()
                 != Some(manifest_digest.as_str())
             {
@@ -1144,10 +1245,13 @@ fn resolve_registration_paths(
 ) -> Result<BTreeMap<PathBuf, BTreeSet<BrowserId>>, InstallTransactionError> {
     let mut result = BTreeMap::<PathBuf, BTreeSet<BrowserId>>::new();
     for browser in browsers {
-        let Some(RegistrationLocation::ManifestFiles(files)) =
-            registration_location(*browser, platform, paths)
-        else {
-            return Err(InstallTransactionError::RegistrationUnavailable);
+        let files = match registration_location(*browser, platform, paths) {
+            Some(RegistrationLocation::ManifestFiles(files)) => files,
+            #[cfg(target_os = "windows")]
+            Some(RegistrationLocation::WindowsCurrentUser { manifest_path, .. }) => {
+                vec![manifest_path]
+            }
+            _ => return Err(InstallTransactionError::RegistrationUnavailable),
         };
         for path in files {
             let expected_file_name = format!("{NATIVE_HOST_NAME}.json");
@@ -1189,6 +1293,8 @@ fn validate_current_ownership(
     let mut candidates = desired.keys().cloned().collect::<BTreeSet<_>>();
     candidates.extend(owned.keys().cloned());
     for path in candidates {
+        #[cfg(target_os = "windows")]
+        windows::registry::present(&path, owned.contains_key(&path))?;
         let current = hash_regular_file(&path, MAX_STATE_BYTES as u64)?;
         match (current, owned.get(&path)) {
             (None, _) => {}
@@ -1299,6 +1405,9 @@ fn stage_release(
         .parent()
         .ok_or(InstallTransactionError::Filesystem)?;
     ensure_private_dir(parent)?;
+    #[cfg(target_os = "windows")]
+    windows::rename(&staged_dir, final_release_dir, false)?;
+    #[cfg(not(target_os = "windows"))]
     fs::rename(&staged_dir, final_release_dir).map_err(|_| InstallTransactionError::Filesystem)?;
     sync_dir(parent)?;
     verify_binary(
@@ -1346,6 +1455,7 @@ fn copy_verified_payload(
     output
         .sync_all()
         .map_err(|_| InstallTransactionError::Filesystem)?;
+    drop(output);
     set_mode(destination, 0o500)?;
     verify_payload_identity(&candidate.payload, &candidate.payload_identity)
 }
@@ -1380,12 +1490,16 @@ fn mutate_registration(
         None
     };
     let new_sha256 = desired.map(sha256);
+    #[cfg(target_os = "windows")]
+    let registry_present = windows::registry::present(target, expected_prior_digest.is_some())?;
     journal.registrations.push(JournalRegistration {
         target: target.to_path_buf(),
         prior_sha256: current,
         new_sha256,
         backup,
         parent_created,
+        #[cfg(target_os = "windows")]
+        registry_present,
     });
     write_journal(journal_path, journal)?;
 
@@ -1394,12 +1508,21 @@ fn mutate_registration(
     }
 
     match desired {
-        Some(bytes) => atomic_write(target, bytes, 0o600),
-        None => match fs::remove_file(target) {
-            Ok(()) => sync_dir(target.parent().ok_or(InstallTransactionError::Filesystem)?),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(_) => Err(InstallTransactionError::Filesystem),
-        },
+        Some(bytes) => {
+            atomic_write(target, bytes, 0o600)?;
+            #[cfg(target_os = "windows")]
+            windows::registry::publish(target, registry_present)?;
+            Ok(())
+        }
+        None => {
+            #[cfg(target_os = "windows")]
+            windows::registry::remove(target, false)?;
+            match fs::remove_file(target) {
+                Ok(()) => sync_dir(target.parent().ok_or(InstallTransactionError::Filesystem)?),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(_) => Err(InstallTransactionError::Filesystem),
+            }
+        }
     }
 }
 
@@ -1425,6 +1548,10 @@ fn verify_healthy_install(
         return Ok(false);
     }
     for (path, digest) in owned_registration_paths(Some(state), platform, paths)? {
+        #[cfg(target_os = "windows")]
+        if !windows::registry::present(&path, true)? {
+            return Ok(false);
+        }
         if hash_regular_file(&path, MAX_STATE_BYTES as u64)?.as_deref() != Some(digest.as_str()) {
             return Ok(false);
         }
@@ -1505,6 +1632,10 @@ fn verify_committed_journal(
         .map(|record| (record.path_sha256.as_str(), record.manifest_sha256.as_str()))
         .collect::<BTreeMap<_, _>>();
     for record in &journal.registrations {
+        #[cfg(target_os = "windows")]
+        if windows::registry::present(&record.target, true)? != record.new_sha256.is_some() {
+            return Err(InstallTransactionError::RecoveryConflict);
+        }
         let path_digest = path_sha256(&record.target);
         match record.new_sha256.as_deref() {
             Some(new_digest)
@@ -1543,6 +1674,10 @@ fn rollback(
             return Err(InstallTransactionError::JournalInvalid);
         }
         let current = hash_regular_file(&record.target, MAX_STATE_BYTES as u64)?;
+        #[cfg(target_os = "windows")]
+        if !record.registry_present {
+            windows::registry::remove(&record.target, true)?;
+        }
         match (&record.prior_sha256, &record.new_sha256, current.as_deref()) {
             (Some(prior), _, Some(current)) if current == prior => {}
             (None, _, None) => {}
@@ -1574,6 +1709,10 @@ fn rollback(
                     sync_dir(grandparent)?;
                 }
             }
+        }
+        #[cfg(target_os = "windows")]
+        if record.registry_present {
+            windows::registry::publish(&record.target, true)?;
         }
     }
     if journal.release_was_created && journal.release_dir.exists() {
@@ -1839,6 +1978,7 @@ fn parse_state(value: &Value) -> Result<InstallState, InstallTransactionError> {
     let platform = match text(object, "platform")? {
         "macos" => Platform::Macos,
         "linux" => Platform::Linux,
+        "windows" => Platform::Windows,
         _ => return Err(InstallTransactionError::OwnedStateInvalid),
     };
     let artifact_arch = text(object, "artifact_arch")?.to_owned();
@@ -1851,6 +1991,7 @@ fn parse_state(value: &Value) -> Result<InstallState, InstallTransactionError> {
             (Platform::Macos, "universal2")
                 | (Platform::Linux, "x86_64")
                 | (Platform::Linux, "aarch64")
+                | (Platform::Windows, "x86_64" | "arm64")
         )
     {
         return Err(InstallTransactionError::OwnedStateInvalid);
@@ -1953,6 +2094,8 @@ struct JournalRegistration {
     new_sha256: Option<String>,
     backup: Option<PathBuf>,
     parent_created: bool,
+    #[cfg(target_os = "windows")]
+    registry_present: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1983,6 +2126,8 @@ impl Journal {
                         optional_text(record.backup.as_deref().map(path_text).transpose()?),
                     ),
                     ("parent_created", record.parent_created.to_string()),
+                    #[cfg(target_os = "windows")]
+                    ("registry_present", record.registry_present.to_string()),
                 ]))
             })
             .collect::<Result<Vec<_>, InstallTransactionError>>()?
@@ -2092,6 +2237,8 @@ fn parse_journal_registration(
             "new_sha256",
             "backup",
             "parent_created",
+            #[cfg(target_os = "windows")]
+            "registry_present",
         ],
         InstallTransactionError::JournalInvalid,
     )?;
@@ -2123,6 +2270,11 @@ fn parse_journal_registration(
         new_sha256,
         backup,
         parent_created,
+        #[cfg(target_os = "windows")]
+        registry_present: match object.get("registry_present") {
+            Some(Value::Bool(value)) => *value,
+            _ => return Err(InstallTransactionError::JournalInvalid),
+        },
     })
 }
 
@@ -2140,28 +2292,57 @@ struct InstallLock {
 
 impl InstallLock {
     fn acquire(path: &Path) -> Result<Self, InstallTransactionError> {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(path)
-            .map_err(|_| InstallTransactionError::PrivateInstallRootUnavailable)?;
-        set_mode(path, 0o600)?;
-        for attempt in 0..LOCK_ATTEMPTS {
-            if try_flock_exclusive(&file)? {
-                file.set_len(0)
-                    .map_err(|_| InstallTransactionError::Filesystem)?;
-                file.write_all(b"a0-browser-bridge-install-lock-v1\n")
-                    .map_err(|_| InstallTransactionError::Filesystem)?;
-                file.sync_all()
-                    .map_err(|_| InstallTransactionError::Filesystem)?;
-                return Ok(Self { file });
+        #[cfg(target_os = "windows")]
+        {
+            if matches!(fs::symlink_metadata(path), Err(error) if error.kind() == io::ErrorKind::NotFound)
+            {
+                match create_new_file(path, 0o600) {
+                    Ok(mut file) => {
+                        file.write_all(b"a0-browser-bridge-install-lock-v1\n")
+                            .map_err(|_| InstallTransactionError::Filesystem)?;
+                        file.sync_all()
+                            .map_err(|_| InstallTransactionError::Filesystem)?;
+                    }
+                    Err(_) if path.exists() => {}
+                    Err(error) => return Err(error),
+                }
             }
-            if attempt + 1 < LOCK_ATTEMPTS {
-                thread::sleep(LOCK_WAIT);
+            let file = windows::open_file(path)?;
+            for attempt in 0..LOCK_ATTEMPTS {
+                if try_flock_exclusive(&file)? {
+                    return Ok(Self { file });
+                }
+                if attempt + 1 < LOCK_ATTEMPTS {
+                    thread::sleep(LOCK_WAIT);
+                }
             }
+            return Err(InstallTransactionError::InstallBusy);
         }
-        Err(InstallTransactionError::InstallBusy)
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(path)
+                .map_err(|_| InstallTransactionError::PrivateInstallRootUnavailable)?;
+            set_mode(path, 0o600)?;
+            for attempt in 0..LOCK_ATTEMPTS {
+                if try_flock_exclusive(&file)? {
+                    file.set_len(0)
+                        .map_err(|_| InstallTransactionError::Filesystem)?;
+                    file.write_all(b"a0-browser-bridge-install-lock-v1\n")
+                        .map_err(|_| InstallTransactionError::Filesystem)?;
+                    file.sync_all()
+                        .map_err(|_| InstallTransactionError::Filesystem)?;
+                    return Ok(Self { file });
+                }
+                if attempt + 1 < LOCK_ATTEMPTS {
+                    thread::sleep(LOCK_WAIT);
+                }
+            }
+            Err(InstallTransactionError::InstallBusy)
+        }
     }
 }
 
@@ -2203,12 +2384,22 @@ fn flock_unlock(file: &File) -> Result<(), InstallTransactionError> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn try_flock_exclusive(file: &File) -> Result<bool, InstallTransactionError> {
+    windows::lock(file)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn try_flock_exclusive(_file: &File) -> Result<bool, InstallTransactionError> {
     Err(InstallTransactionError::WindowsAdapterUnavailable)
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn flock_unlock(file: &File) -> Result<(), InstallTransactionError> {
+    windows::unlock(file)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn flock_unlock(_file: &File) -> Result<(), InstallTransactionError> {
     Ok(())
 }
@@ -2221,6 +2412,8 @@ fn validate_user_paths(
         return Err(InstallTransactionError::PrivateInstallRootUnavailable);
     }
     match platform {
+        #[cfg(target_os = "windows")]
+        Platform::Windows => windows::validate_path(&paths.install_root),
         Platform::Macos
             if paths
                 .home_root
@@ -2241,6 +2434,12 @@ fn validate_user_paths(
     }
 }
 
+#[cfg(target_os = "windows")]
+fn ensure_private_root(path: &Path) -> Result<(), InstallTransactionError> {
+    windows::ensure_root(path)
+}
+
+#[cfg(not(target_os = "windows"))]
 fn ensure_private_root(path: &Path) -> Result<(), InstallTransactionError> {
     if !path.is_absolute() {
         return Err(InstallTransactionError::PrivateInstallRootUnavailable);
@@ -2256,24 +2455,42 @@ fn ensure_private_root(path: &Path) -> Result<(), InstallTransactionError> {
 }
 
 fn ensure_private_dir(path: &Path) -> Result<(), InstallTransactionError> {
-    if path.exists() {
-        reject_symlink_or_non_directory(path)?;
-    } else {
-        fs::create_dir(path).map_err(|_| InstallTransactionError::Filesystem)?;
+    #[cfg(target_os = "windows")]
+    {
+        return if path.exists() {
+            windows::verify_directory(path)
+        } else {
+            windows::create_directory(path)
+        };
     }
-    set_mode(path, 0o700)?;
-    reject_symlink_or_non_directory(path)
+    #[cfg(not(target_os = "windows"))]
+    {
+        if path.exists() {
+            reject_symlink_or_non_directory(path)?;
+        } else {
+            fs::create_dir(path).map_err(|_| InstallTransactionError::Filesystem)?;
+        }
+        set_mode(path, 0o700)?;
+        reject_symlink_or_non_directory(path)
+    }
 }
 
 fn ensure_new_private_dir(path: &Path) -> Result<(), InstallTransactionError> {
-    fs::create_dir(path).map_err(|error| {
-        if error.kind() == io::ErrorKind::AlreadyExists {
-            InstallTransactionError::RecoveryConflict
-        } else {
-            InstallTransactionError::Filesystem
-        }
-    })?;
-    set_mode(path, 0o700)
+    #[cfg(target_os = "windows")]
+    {
+        return windows::create_directory(path);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::create_dir(path).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                InstallTransactionError::RecoveryConflict
+            } else {
+                InstallTransactionError::Filesystem
+            }
+        })?;
+        set_mode(path, 0o700)
+    }
 }
 
 fn reject_symlink_or_non_directory(path: &Path) -> Result<(), InstallTransactionError> {
@@ -2287,14 +2504,22 @@ fn reject_symlink_or_non_directory(path: &Path) -> Result<(), InstallTransaction
 }
 
 fn create_new_file(path: &Path, mode: u32) -> Result<File, InstallTransactionError> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|_| InstallTransactionError::Filesystem)?;
-    set_mode(path, mode)?;
-    Ok(file)
+    #[cfg(target_os = "windows")]
+    {
+        let _ = mode;
+        return windows::create_file(path);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|_| InstallTransactionError::Filesystem)?;
+        set_mode(path, mode)?;
+        Ok(file)
+    }
 }
 
 fn registration_parent_will_be_created(
@@ -2324,6 +2549,9 @@ fn registration_parent_will_be_created(
 
 fn create_registration_parent(target: &Path) -> Result<(), InstallTransactionError> {
     let parent = target.parent().ok_or(InstallTransactionError::Filesystem)?;
+    #[cfg(target_os = "windows")]
+    windows::create_directory(parent)?;
+    #[cfg(not(target_os = "windows"))]
     fs::create_dir(parent).map_err(|error| {
         if error.kind() == io::ErrorKind::AlreadyExists {
             InstallTransactionError::RegistrationConflict
@@ -2366,7 +2594,11 @@ fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<(), InstallTrans
                 .map_err(|_| InstallTransactionError::Filesystem)?;
             file.sync_all()
                 .map_err(|_| InstallTransactionError::Filesystem)?;
+            drop(file);
+            #[cfg(not(target_os = "windows"))]
             fs::rename(&temp, path).map_err(|_| InstallTransactionError::Filesystem)?;
+            #[cfg(target_os = "windows")]
+            windows::rename(&temp, path, true)?;
             sync_dir(parent)
         })();
         if result.is_err() {
@@ -2399,7 +2631,10 @@ fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, InstallTransac
     {
         return Err(InstallTransactionError::Filesystem);
     }
+    #[cfg(not(target_os = "windows"))]
     let file = File::open(path).map_err(|_| InstallTransactionError::Filesystem)?;
+    #[cfg(target_os = "windows")]
+    let file = windows::open_file(path)?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(max_bytes as u64 + 1)
         .read_to_end(&mut bytes)
@@ -2422,7 +2657,10 @@ fn hash_regular_file(
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes {
         return Err(InstallTransactionError::Filesystem);
     }
+    #[cfg(not(target_os = "windows"))]
     let mut file = File::open(path).map_err(|_| InstallTransactionError::Filesystem)?;
+    #[cfg(target_os = "windows")]
+    let mut file = windows::open_file(path)?;
     let (digest, size) = hash_reader(&mut file, max_bytes)?;
     if size != metadata.len() {
         return Err(InstallTransactionError::Filesystem);
@@ -2486,7 +2724,27 @@ fn payload_identity(file: &File) -> Result<PayloadIdentity, InstallTransactionEr
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn payload_identity(file: &File) -> Result<PayloadIdentity, InstallTransactionError> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+        || info.dwFileAttributes & 0x410 != 0
+        || info.nNumberOfLinks != 1
+    {
+        return Err(InstallTransactionError::CandidatePayloadChanged);
+    }
+    Ok(PayloadIdentity {
+        device: info.dwVolumeSerialNumber as u64,
+        inode: (info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64,
+        length: (info.nFileSizeHigh as u64) << 32 | info.nFileSizeLow as u64,
+    })
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn payload_identity(_file: &File) -> Result<PayloadIdentity, InstallTransactionError> {
     Err(InstallTransactionError::WindowsAdapterUnavailable)
 }
@@ -2509,7 +2767,12 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), InstallTransactionError> {
         .map_err(|_| InstallTransactionError::Filesystem)
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn set_mode(path: &Path, _mode: u32) -> Result<(), InstallTransactionError> {
+    windows::verify_mode(path)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn set_mode(_path: &Path, _mode: u32) -> Result<(), InstallTransactionError> {
     Err(InstallTransactionError::WindowsAdapterUnavailable)
 }
@@ -2522,13 +2785,20 @@ fn is_executable(metadata: &fs::Metadata) -> bool {
 
 #[cfg(not(unix))]
 fn is_executable(_metadata: &fs::Metadata) -> bool {
-    false
+    cfg!(target_os = "windows")
 }
 
 fn sync_dir(path: &Path) -> Result<(), InstallTransactionError> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| InstallTransactionError::Filesystem)
+    #[cfg(target_os = "windows")]
+    {
+        return windows::verify_directory(path);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        File::open(path)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| InstallTransactionError::Filesystem)
+    }
 }
 
 fn expected_artifact_arch(platform: Platform, arch: &str) -> &'static str {
@@ -2732,7 +3002,7 @@ fn now_ms() -> Result<u64, InstallTransactionError> {
     u64::try_from(millis).map_err(|_| InstallTransactionError::Filesystem)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -2824,7 +3094,7 @@ mod tests {
     }
 
     #[test]
-    fn read_only_installed_status_requires_signed_receipts_and_keeps_unpublished_trust_closed() {
+    fn read_only_installed_status_rejects_unsigned_fixture_without_changing_state() {
         let fixture = FixtureRoot::new();
         install(&fixture, "2.12.0", vec![BrowserId::Chrome], Fault::None).unwrap();
         let paths = fixture.paths(Platform::Linux);
@@ -2835,10 +3105,14 @@ mod tests {
         // release evidence. Unsigned state can never make status "installed".
         assert!(verify_installed_at(&paths, Platform::Linux, "x86_64", &origins).is_err());
         assert_eq!(fs::read(&state_path).unwrap(), before);
-        assert!(matches!(
-            verify_installed_status(&paths),
-            Err(InstallTransactionError::ReleaseEvidenceUnavailable)
-        ));
+        assert_eq!(
+            verify_installed_status(&paths).err(),
+            Some(if cfg!(feature = "local-development") {
+                InstallTransactionError::ReleaseEvidenceUnavailable
+            } else {
+                InstallTransactionError::OwnedStateInvalid
+            })
+        );
 
         let binary = release_binary_path(&paths.install_root, "2.12.0", Platform::Linux, "x86_64");
         set_mode(&binary, 0o700).unwrap();

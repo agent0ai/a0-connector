@@ -99,17 +99,19 @@ mod tests {
 
     #[test]
     fn exact_manifest_is_deterministic() {
-        let manifest = generate_exact_manifest(
-            Path::new("/opt/agent-zero/releases/0.0.0-test/a0-browser-bridge"),
-            &[FIXTURE_ORIGIN],
-        )
-        .expect("fixture manifest should generate");
+        let path = if cfg!(target_os = "windows") {
+            r"C:\Agent Zero\releases\0.0.0-test\a0-browser-bridge.exe"
+        } else {
+            "/opt/agent-zero/releases/0.0.0-test/a0-browser-bridge"
+        };
+        let manifest = generate_exact_manifest(Path::new(path), &[FIXTURE_ORIGIN])
+            .expect("fixture manifest should generate");
         let expected = format!(
             concat!(
                 "{{\n",
                 "  \"name\": {},\n",
                 "  \"description\": {},\n",
-                "  \"path\": \"/opt/agent-zero/releases/0.0.0-test/a0-browser-bridge\",\n",
+                "  \"path\": {},\n",
                 "  \"type\": \"stdio\",\n",
                 "  \"allowed_origins\": [\n",
                 "    \"chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/\"\n",
@@ -118,6 +120,7 @@ mod tests {
             ),
             json::quote(NATIVE_HOST_NAME),
             json::quote(DESCRIPTION),
+            json::quote(path),
         );
         assert_eq!(manifest, expected);
     }

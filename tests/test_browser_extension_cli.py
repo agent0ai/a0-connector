@@ -589,11 +589,15 @@ def test_process_environment_drops_credential_variables(
     monkeypatch.setenv("USERNAME", "private-user")
     monkeypatch.setenv("PATH", "/usr/bin")
     monkeypatch.setenv("HOME", "/Users/test")
+    monkeypatch.setenv("ProgramFiles", r"C:\Program Files")
+    monkeypatch.setenv("ProgramFiles(x86)", r"C:\Program Files (x86)")
     monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/dbus-test")
     environment = browser_extension._companion_environment()
 
     assert environment["PATH"] == "/usr/bin"
     assert environment["HOME"] == "/Users/test"
+    assert environment["ProgramFiles"] == r"C:\Program Files"
+    assert environment["ProgramFiles(x86)"] == r"C:\Program Files (x86)"
     assert environment["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/tmp/dbus-test"
     assert "A0_PASSWORD" not in environment
     assert "OPENAI_API_KEY" not in environment

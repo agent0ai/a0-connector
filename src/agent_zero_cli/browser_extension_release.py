@@ -114,6 +114,12 @@ class CompanionDiscoveryError(RuntimeError):
         self.code = code
 
 
+if os.name == "nt":
+    from pywintypes import error as _PlatformError
+else:
+    _PlatformError = OSError
+
+
 def _version(value: object) -> tuple[int, int, int]:
     if not isinstance(value, str) or len(value) > 32 or not _VERSION.fullmatch(value):
         raise CompanionDiscoveryError()
@@ -129,8 +135,11 @@ def _host_target() -> tuple[str, str] | None:
             return "linux", "x86_64"
         if machine in {"aarch64", "arm64"}:
             return "linux", "aarch64"
-    # Windows requires the native HKCU/DACL transaction before discovery can
-    # safely trust its install state. Do not emulate Unix ownership there.
+    if sys.platform == "win32":
+        if machine in {"x86_64", "amd64"}:
+            return "windows", "x86_64"
+        if machine in {"aarch64", "arm64"}:
+            return "windows", "arm64"
     return None
 
 
@@ -142,6 +151,12 @@ def _absolute(value: str) -> Path:
 
 
 def _paths(target: str) -> tuple[Path, Path, Path]:
+    if target == "windows":
+        from . import browser_extension_windows as windows
+        local = _absolute(os.environ.get("LOCALAPPDATA", ""))
+        windows.local_path(local)
+        root = local / "Agent Zero" / "Browser Bridge"
+        return local, root, root
     home = _absolute(os.environ.get("HOME", ""))
     if target == "macos":
         return home, home / "Library/Application Support/Agent Zero/Browser Bridge", home
@@ -151,13 +166,22 @@ def _paths(target: str) -> tuple[Path, Path, Path]:
 
 
 def _identity(info: os.stat_result) -> tuple[int, ...]:
+    if os.name == "nt":
+        # Windows path stat synthesizes executable mode from the suffix; fstat
+        # cannot. ACL and file type checks are performed on the retained handle.
+        return (info.st_dev, info.st_ino, info.st_nlink, info.st_size, info.st_mtime_ns)
     return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink,
             info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 @contextmanager
-def _directory(path: Path, *, private: bool = False) -> Iterator[int]:
+def _directory(path: Path, *, private: bool = False) -> Iterator[int | Path]:
     """Walk absolute directory components using retained no-follow handles."""
+    if os.name == "nt":
+        from . import browser_extension_windows as windows
+        with windows.directory(path, private=private) as handle:
+            yield handle
+        return
     descriptors: list[int] = []
     try:
         descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
@@ -178,6 +202,11 @@ def _directory(path: Path, *, private: bool = False) -> Iterator[int]:
 
 @contextmanager
 def _file(path: Path, *, private: bool, executable: bool = False) -> Iterator[int]:
+    if os.name == "nt":
+        from . import browser_extension_windows as windows
+        with windows.file(path) as descriptor:
+            yield descriptor
+        return
     with _directory(path.parent) as parent:
         descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
         try:
@@ -208,6 +237,24 @@ def _read(path: Path, *, private: bool = True) -> bytes:
         if len(chunks) != size:
             raise CompanionDiscoveryError()
         return bytes(chunks)
+
+
+@contextmanager
+def _install_lock(descriptor: int):
+    try:
+        if os.name == "nt":
+            from . import browser_extension_windows as windows
+            with windows.lock(descriptor):
+                yield
+        else:
+            import fcntl
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            try:
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+    except BlockingIOError:
+        raise CompanionDiscoveryError("COMPANION_INSTALL_BUSY") from None
 
 
 def _json(bytes_: bytes) -> dict[str, Any]:
@@ -279,6 +326,9 @@ def _registration_paths(state: dict[str, Any], home: Path, config: Path) -> set[
     for browser in browsers:
         if state["platform"] == "macos":
             paths.add(home / "Library/Application Support" / _MACOS_SUFFIXES[browser] / "NativeMessagingHosts" / f"{NATIVE_HOST}.json")
+        elif state["platform"] == "windows":
+            family = browser if browser in {"edge", "chromium"} else "chrome"
+            paths.add(config / "manifests" / family / f"{NATIVE_HOST}.json")
         else:
             paths.add(config / _LINUX_SUFFIXES[browser] / "NativeMessagingHosts" / f"{NATIVE_HOST}.json")
             if browser == "opera":
@@ -302,6 +352,9 @@ def _verify_registrations(state: dict[str, Any], pin: ApprovedCompanionRelease,
     if {hashlib.sha256(os.fsencode(path)).hexdigest() for path in paths} != set(records):
         raise CompanionDiscoveryError()
     for path in paths:
+        if state["platform"] == "windows":
+            from . import browser_extension_windows as windows
+            windows.verify_registration(path, NATIVE_HOST)
         raw = _read(path, private=False)
         if hashlib.sha256(raw).hexdigest() != records[hashlib.sha256(os.fsencode(path)).hexdigest()]:
             raise CompanionDiscoveryError()
@@ -322,25 +375,23 @@ def resolve_installed_companion() -> str | None:
     target = _host_target()
     if target is None:
         return None
+    if not any((pin.platform, pin.artifact_arch) == target for pin in APPROVED_COMPANION_RELEASES):
+        return None
     try:
         home, root, config = _paths(target[0])
         try:
             os.lstat(root)
         except FileNotFoundError:
             return None
-        with _directory(root, private=True), _file(root / "install.lock", private=True) as lock:
-            import fcntl
-            try:
-                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise CompanionDiscoveryError("COMPANION_INSTALL_BUSY") from None
+        with _directory(root, private=True), _file(root / "install.lock", private=True) as lock, _install_lock(lock):
             with _directory(root / "transactions", private=True) as transactions:
                 if os.listdir(transactions):
                     raise CompanionDiscoveryError("COMPANION_INSTALL_RECOVERY_REQUIRED")
             raw_state = _read(root / "install-state.json")
             state = _json(raw_state)
             pin = _validate_state(state, target)
-            binary = root / "releases" / pin.version / f"{pin.platform}-{pin.artifact_arch}" / "a0-browser-bridge"
+            name = "a0-browser-bridge.exe" if pin.platform == "windows" else "a0-browser-bridge"
+            binary = root / "releases" / pin.version / f"{pin.platform}-{pin.artifact_arch}" / name
             with _directory(root / "releases", private=True), _directory(binary.parent.parent, private=True), _directory(binary.parent, private=True):
                 with _file(binary, private=True, executable=True) as executable:
                     if os.fstat(executable).st_size != pin.executable_size:
@@ -363,5 +414,5 @@ def resolve_installed_companion() -> str | None:
             return str(binary)
     except CompanionDiscoveryError:
         raise
-    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+    except (OSError, _PlatformError, ValueError, TypeError, KeyError, RecursionError):
         raise CompanionDiscoveryError() from None

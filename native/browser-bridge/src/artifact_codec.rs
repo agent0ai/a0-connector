@@ -132,8 +132,9 @@ pub(crate) struct ArtifactCodec {
 }
 
 impl ArtifactCodec {
+    #[cfg(test)]
     pub(crate) fn new(started_at_ms: u64) -> Self {
-        Self::with_profile(started_at_ms, BrowserTransportProfile::compiled())
+        Self::with_profile(started_at_ms, BrowserTransportProfile::fixture_production())
     }
 
     pub(crate) fn with_profile(
@@ -1638,7 +1639,7 @@ mod tests {
     }
 
     fn operation_with_native_id(action: &str) -> (ConnectorCodec, String) {
-        operation_with_native_id_and_profile(action, BrowserTransportProfile::compiled())
+        operation_with_native_id_and_profile(action, BrowserTransportProfile::fixture_production())
     }
 
     fn operation(action: &str) -> ConnectorCodec {
@@ -2174,6 +2175,10 @@ mod tests {
                 ("op_id".into(), Value::String("op-1".into())),
                 ("action_id".into(), Value::String("action-1".into())),
                 ("status".into(), Value::String("succeeded".into())),
+                (
+                    "completed_at_ms".into(),
+                    Value::Number("1788492445123".into()),
+                ),
                 (
                     "result".into(),
                     Value::Object(BTreeMap::from([

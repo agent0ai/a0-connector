@@ -245,7 +245,10 @@ pub fn run_native_session<R: Read + Send + 'static, W: Write>(
         }
     })();
     if input_closed.load(Ordering::Acquire)
-        && matches!(&outcome, Err(FrameError::Protocol(SessionError::ConnectorUnavailable)))
+        && matches!(
+            &outcome,
+            Err(FrameError::Protocol(SessionError::ConnectorUnavailable))
+        )
     {
         session.close();
         return Ok(());
@@ -352,7 +355,14 @@ mod tests {
         let result = validate_invocation(&[
             "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/".to_owned()
         ]);
-        assert_eq!(result, Err(InvocationError::OriginNotAllowed));
+        assert_eq!(
+            result,
+            Err(if cfg!(target_os = "windows") {
+                InvocationError::RuntimeNotActivated
+            } else {
+                InvocationError::OriginNotAllowed
+            })
+        );
     }
 
     #[cfg(feature = "local-development")]

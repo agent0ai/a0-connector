@@ -23,6 +23,18 @@ impl LocalStatus {
     pub fn collect() -> Self {
         let platform = Platform::current();
         let trust_configured = release_trust_configured();
+        if !trust_configured {
+            return Self {
+                state: "blocked",
+                reason_code: "RELEASE_TRUST_NOT_CONFIGURED",
+                platform: platform.as_str(),
+                architecture: architecture(),
+                install_root: "unavailable",
+                release_trust: "not_configured",
+                native_host: "disabled",
+                registered_browser_count: 0,
+            };
+        }
         match discover_user_paths() {
             Ok(paths) => {
                 let (state, reason_code, registered_browser_count) =
@@ -193,18 +205,32 @@ mod tests {
     #[test]
     fn self_test_reports_compiled_trust_and_local_checks_not_installation() {
         let report = SelfTestReport::run();
-        assert!(release_trust_configured());
+        let trust_ready = release_trust_configured();
         assert_eq!(report.framing, "passed");
         assert_eq!(report.registry, "passed");
         let paths_ok = report.path_discovery == "passed";
-        assert_eq!(report.install_ready, paths_ok);
+        assert_eq!(report.install_ready, paths_ok && trust_ready);
         assert_eq!(
             report.reason_code,
-            if paths_ok {
+            if !trust_ready {
+                "RELEASE_TRUST_NOT_CONFIGURED"
+            } else if paths_ok {
                 "SELF_TEST_PASSED"
             } else {
                 "USER_ROOT_UNAVAILABLE"
             }
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_missing_publisher_identity_never_reports_host_readiness() {
+        assert!(crate::release::WINDOWS_SIGNER_CERTIFICATES.is_empty());
+        let status = LocalStatus::collect();
+        assert_eq!(status.state, "blocked");
+        assert_eq!(status.release_trust, "not_configured");
+        assert_eq!(status.native_host, "disabled");
+        assert_eq!(status.install_root, "unavailable");
+        assert!(!SelfTestReport::run().install_ready);
     }
 }

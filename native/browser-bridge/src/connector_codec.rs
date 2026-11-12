@@ -92,8 +92,12 @@ pub(crate) struct ConnectorCodec {
 }
 
 impl ConnectorCodec {
+    #[cfg(test)]
     pub(crate) fn new(load_generation_id: String) -> Self {
-        Self::with_profile(load_generation_id, BrowserTransportProfile::compiled())
+        Self::with_profile(
+            load_generation_id,
+            BrowserTransportProfile::fixture_production(),
+        )
     }
 
     pub(crate) fn with_profile(
@@ -887,6 +891,11 @@ mod tests {
                 Value::String("connector_browser_op".into()),
                 Value::Object(BTreeMap::from([
                     ("handlerId".into(), Value::String(HANDLER_ID.into())),
+                    ("eventId".into(), Value::String("event-operation-1".into())),
+                    (
+                        "ts".into(),
+                        Value::String("2026-09-05T12:00:00.000Z".into())
+                    ),
                     (
                         "correlationId".into(),
                         Value::String("correlation-1".into())
@@ -967,6 +976,7 @@ mod tests {
             concat!(
                 "42/ws,[\"connector_browser_control\",{{",
                 "\"handlerId\":\"{HANDLER_ID}\",\"correlationId\":\"correlation_2\",",
+                "\"eventId\":\"event-control-1\",\"ts\":\"2026-09-05T12:00:00.000Z\",",
                 "\"data\":{{\"method\":\"browser.resolve_challenge\",",
                 "\"contract_version\":1,\"bridge_id\":\"bridge-1\",",
                 "\"load_generation_id\":\"generation-1\",",
@@ -991,6 +1001,7 @@ mod tests {
         format!(
             concat!(
                 "42/ws,[\"connector_browser_control\",{{",
+                "\"eventId\":\"event-action-1\",\"ts\":\"2026-09-05T12:00:00.000Z\",",
                 "\"handlerId\":\"{HANDLER_ID}\",\"correlationId\":\"correlation_3\",",
                 "\"data\":{{\"method\":\"browser.resolve_challenge\",",
                 "\"contract_version\":1,\"bridge_id\":\"bridge-1\",",
@@ -1049,33 +1060,77 @@ mod tests {
 
     #[test]
     fn emitted_operation_success_requires_exact_completion_timestamp_envelope() {
-        let mut packet = json::parse(command("op-open").strip_prefix("42/ws,").unwrap().as_bytes()).unwrap();
-        let Value::Array(ref mut envelope) = packet else { panic!() };
-        let Value::Object(ref mut wrapper) = envelope[1] else { panic!() };
-        let Value::Object(ref mut params) = wrapper.get_mut("data").unwrap() else { panic!() };
+        let mut packet = json::parse(
+            command("op-open")
+                .strip_prefix("42/ws,")
+                .unwrap()
+                .as_bytes(),
+        )
+        .unwrap();
+        let Value::Array(ref mut envelope) = packet else {
+            panic!()
+        };
+        let Value::Object(ref mut wrapper) = envelope[1] else {
+            panic!()
+        };
+        let Value::Object(ref mut params) = wrapper.get_mut("data").unwrap() else {
+            panic!()
+        };
         params.insert("action".into(), Value::String("open".into()));
         params.insert("target".into(), Value::Null);
-        params.insert("args".into(), json::parse(br#"{"url":"https://example.test/"}"#).unwrap());
-        params.insert("required_capabilities".into(), json::parse(br#"["open","tab_leases_v1","tab_groups_v1"]"#).unwrap());
+        params.insert(
+            "args".into(),
+            json::parse(br#"{"url":"https://example.test/"}"#).unwrap(),
+        );
+        params.insert(
+            "required_capabilities".into(),
+            json::parse(br#"["open","tab_leases_v1","tab_groups_v1"]"#).unwrap(),
+        );
         let command = format!("42/ws,{}", packet.encode());
         let mut codec = ConnectorCodec::new("generation-1".into());
         let native = codec.command(&command, "bridge-1").unwrap();
-        let RpcMessage::Request(request) = rpc::parse_message(&native, Peer::Server).unwrap() else { panic!() };
+        let RpcMessage::Request(request) = rpc::parse_message(&native, Peer::Server).unwrap()
+        else {
+            panic!()
+        };
         // Exact operationSuccess envelope emitted by the extension after open.
         let valid = format!(
             r#"{{"jsonrpc":"2.0","id":"{}","result":{{"contract_version":1,"op_id":"op-open","action_id":"action-1","status":"succeeded","result":{{"lease_id":"lease-1","browser_id":"a0t1.generation-1.lease-1","tab_handle":"a0t1.generation-1.lease-1"}},"receipts":[],"artifacts":[],"completed_at_ms":1788492445123}}}}"#,
             request.id.unwrap()
         );
-        for invalid in ["0", "-1", "1.5", "1e3", "9007199254740992", "null", "true", "\"1788492445123\"", "{}"] {
-            assert_eq!(codec.response(valid.replace("1788492445123", invalid).as_bytes()), Err(CodecError::InvalidResponse), "accepted timestamp {invalid}");
+        for invalid in [
+            "0",
+            "-1",
+            "1.5",
+            "1e3",
+            "9007199254740992",
+            "null",
+            "true",
+            "\"1788492445123\"",
+            "{}",
+        ] {
+            assert_eq!(
+                codec.response(valid.replace("1788492445123", invalid).as_bytes()),
+                Err(CodecError::InvalidResponse),
+                "accepted timestamp {invalid}"
+            );
         }
         for invalid in [
             valid.replace(",\"completed_at_ms\":1788492445123", ""),
-            valid.replace("\"completed_at_ms\":1788492445123", "\"completed_at_ms\":1788492445123,\"unexpected\":true"),
+            valid.replace(
+                "\"completed_at_ms\":1788492445123",
+                "\"completed_at_ms\":1788492445123,\"unexpected\":true",
+            ),
             valid.replace("\"op_id\":\"op-open\"", "\"op_id\":\"other-op\""),
-            valid.replace("\"action_id\":\"action-1\"", "\"action_id\":\"other-action\""),
+            valid.replace(
+                "\"action_id\":\"action-1\"",
+                "\"action_id\":\"other-action\"",
+            ),
         ] {
-            assert_eq!(codec.response(invalid.as_bytes()), Err(CodecError::InvalidResponse));
+            assert_eq!(
+                codec.response(invalid.as_bytes()),
+                Err(CodecError::InvalidResponse)
+            );
         }
         let forwarded = codec.response(valid.as_bytes()).unwrap();
         assert!(forwarded.contains("connector_browser_op_result"));

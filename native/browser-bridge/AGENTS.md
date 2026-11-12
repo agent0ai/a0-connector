@@ -70,6 +70,19 @@
   HTTPS-or-loopback-HTTP boundary. An ambiguous transport or post-success local
   commit failure is an unknown outcome requiring server-side revocation before
   retry. Local disconnect must not claim that the server record was revoked.
+- Linux `credential_linux.rs` uses the existing encrypted Secret Service backend
+  with interactive prompt timeout zero. Locked items/default collections must
+  return credential-store unavailable, never block the native hello waiting for
+  an unlock dialog. Preserve keyring's service/username/target attributes, labels,
+  default-collection legacy lookup, exact single-item matching and DH encryption;
+  ambiguous items fail closed. Schema, profile mutation locks and seed handling
+  remain owned by `pairing.rs`. Users unlock their keyring through their desktop
+  and reconnect; no automatic credential migration or plaintext fallback exists.
+- Keep rustls at least 0.23.46, rustls-webpki at least 0.103.16, and the locked
+  webpki root bundles at least 1.0.10. Keep locked rustix at least 1.1.6 for
+  RUSTSEC-2026-0486's extended-attribute buffer correction. Source dependency fixes require a newly
+  signed native release and reviewed artifact pins; existing release bytes and
+  signatures must never be replaced or treated as containing these fixes.
 - Pairing success does not authorize browser control. For a paired profile,
   retain the initial native hello request while the signed challenge/proof
   WebSocket handshake completes, bounded by the same ten-second hello
@@ -332,6 +345,11 @@
   revocation or authorize deletion; only the existing exact per-profile admitted
   Core receipt path can delete that profile's credential under its mutation lock.
   No new receipt ingestion, CLI impersonation or unscoped key deletion exists.
+  `credential_cleanup_windows.rs` enumerates bounded exact production account
+  names and generic credential attributes, erases OS-returned blobs before
+  freeing them without decoding/copying/logging, and rejects malformed or
+  mismatched account/service records. Inventory alone never deletes credentials
+  or certifies server revocation. Development credentials remain excluded.
   `--yes --force-local` separately retires only exact owned
   registrations and install state to a private recoverable backup, retain
   executable releases, logs and every credential, and return cleanup-pending 6.
@@ -372,6 +390,22 @@
   one read-only PT_LOAD segment. The nine-field stable metadata must match
   version/platform/host/contracts. Pure fixtures run on macOS; actual Linux
   loader execution and installation remain platform acceptance checks.
+  `release_pe.rs` reads PE32+ x86-64/ARM64 without execution and requires one
+  read-only, non-executable `.a0meta` initialized-data section with exact stable
+  metadata. Bound headers/sections, reject overlapping raw/virtual ranges and
+  contradictory machine, padding, size or certificate-table placement. Parsing
+  alone supplies neither Authenticode trust nor installation authority.
+  `release_windows.rs` binds WinVerifyTrust to the sealed file handle, requires
+  exact success, a validated timestamp and exact compiled signer-certificate
+  SHA-256, and closes trust state on every outcome. Verification is noninteractive
+  with cache-only chain/revocation checks; absent cached evidence rejects.
+  Only then may the bounded, eight-second offline self-test execute retained
+  verified bytes. Windows signer pins remain empty until genuine publisher
+  evidence exists; parser and unsigned-negative tests do not open that gate.
+  The shared `release_trust_configured()` gate also requires those Windows
+  pins. Diagnostics must report disabled/not configured before installed-state
+  discovery, and production native invocation must reject before reading stdin.
+  Provisioned macOS catalog roots never enable Windows host readiness.
   macOS has no public fd-exec equivalent. `release_macos.rs` implements the
   documented Darwin-only private staged-path exception: one create-only locked
   verification lease, current-user private parent chain, no symlink/hardlink,
@@ -408,9 +442,15 @@
   private journals/backups, immutable version directories, exact ownership
   collision checks, atomic manifest/state replacement, readback, and
   conservative rollback/recovery. Test candidates and injected roots/failures
-  remain `cfg(test)` only. Windows returns
-  `WINDOWS_INSTALL_ADAPTER_UNAVAILABLE` until an explicit HKCU transaction with
-  private Windows ACL handling lands. On macOS/Linux, `auto` checks only the
+  remain `cfg(test)` only. Windows uses the same journal engine with
+  `install_windows.rs` and `registry_windows.rs`: protected current-user/SYSTEM
+  ACLs, retained lifecycle handles, nonblocking file locks, write-through
+  publication, and exact HKCU registration checks in both registry views.
+  Refuse foreign/default-value/subkey/ACL collisions before mutation. Registry
+  snapshots participate in rollback and committed-state readback; shared Chrome
+  family targets are deduplicated. Missing publisher certificate pins reject
+  acquisition, status and lifecycle before production state is touched.
+  On macOS/Linux, `auto` checks only the
   compiled stable application bundles and conventional vendor launchers; it
   never executes a browser, searches `PATH` or profiles, or selects
   prerelease/Snap/Flatpak locations. An update may union its previously
@@ -467,8 +507,11 @@
   archive cleanup ownership with that proof, and close owned handles before
   identity-checked cleanup. This staging adapter does not implement Authenticode,
   PE candidate verification or HKCU installation and cannot grant install
-  authority. Shared parser/identity fixtures run on macOS; the Windows-only
-  ACL/sealing test remains uncompiled and unexecuted without a Windows target.
+  authority. Native Windows tests cover ACLs, share modes, hardlinks, lifecycle
+  retention and journal recovery. Registry effects in ordinary tests use an
+  in-memory double. Real `.dev` HKCU and Credential Manager round trips are
+  ignored, opt-in tests requiring an explicitly approved isolated setup. They
+  never certify a signed production install or ARM64 hardware acceptance.
 - Signed catalog v1 covers all nine delivery artifacts; v2 may declare complete platform groups independently. Each included entry still requires its immutable HTTPS URL, exact size and digest; placeholder cross-platform records are not release evidence.
 - Do not invent production extension IDs, catalog signing keys, signatures, or artifact digests. Empty production trust arrays and a disabled signature verifier are an intentional activation block. Activation requires reviewed pinned public-key bytes and a functioning signature verifier; key identifiers alone are never readiness evidence.
 - A clean native-messaging EOF is a normal port close and exits successfully. Empty, truncated, oversized, or I/O-failed frames are integrity failures and exit with code `5`.
@@ -533,6 +576,33 @@
 
 ## Verification
 
+- `scripts/build-linux-candidate.py` builds the pinned, locked, offline stable
+  source on a native x86-64 or ARM64 Linux host, verifies metadata/self-test,
+  records required glibc symbols and shared libraries, and reads back a one-file
+  USTAR/gzip payload in a new output directory. Its unsigned receipt grants no
+  install/release authority. `scripts/Dockerfile.linux` provides the pinned
+  Ubuntu 22.04 build baseline; mount source/toolchain/registry read-only and
+  use separate writable target/cache/output directories, with network disabled
+  during compilation. Its explicit `CROSS_ARM64=1` build adds an x86-64-to-ARM64
+  compiler/sysroot and QEMU; `--target aarch64-unknown-linux-gnu` records emulated
+  self-test execution. Do not infer physical ARM64 acceptance from emulation.
+- Linux catalog bootstrap bytes come from `scripts/install-linux.sh`, a small
+  normal-user Linux entry point to the installed `a0 browser-extension install`
+  command. It never downloads/installs the CLI, selects a native URL or bypasses
+  pins. Candidate packaging records its exact hash beside each payload; both
+  architecture builds must agree on these same bootstrap bytes.
+- `tests/linux_native_smoke.py --binary /absolute/a0-browser-bridge` is opt-in
+  executable/Secret Service coverage. It creates its own D-Bus daemon, encrypted
+  temporary keyring, XDG directories and loopback pairing server. Check framed
+  hello, persistence across processes, profile isolation, local disconnect,
+  missing-store denial and wrong-origin denial; never use the desktop bus or
+  a real pairing code. Its synthetic Core exchange does not prove admission.
+  `--previous-binary` creates credentials with the earlier native build and
+  verifies the current build can read/delete them without migration. The private
+  `linux_locked_service.py` fixture requires an explicit bus address and leaves
+  an unlock prompt unanswered; hello must return repair-required without issuing
+  that prompt. OS Python D-Bus/GLib bindings are required for this opt-in check.
+
 - `scripts/macos-installer.swift` owns the host-side AppKit setup launcher.
   Only an explicit Install click runs the exact bundled
   `Contents/Resources/a0-browser-bridge install --browser auto --json` with
@@ -577,5 +647,17 @@
   installs toolchains, exports keys, invokes notarization or touches pairing.
 
 - Structural validation without Rust: `PYTHONDONTWRITEBYTECODE=1 python3 tests/validate_structure.py` from this directory.
+- Structural checks follow current release pins and distinguish OS credential
+  persistence from empty mutation-lock files. Process launch remains confined
+  to the platform-verification and verified-self-test adapters, without shell fallback.
 - When a pinned Rust toolchain is available: `cargo fmt --check` and `cargo test --locked`.
+- Native response fixtures include the required completion timestamp. Handshake
+  version fixtures derive the current version from `COMPANION_VERSION`; production
+  trust tests reject fixture signatures even when real release roots are configured.
+- Test both default and `local-development` feature builds while historical
+  cleanup/recovery remains. Codec fixtures select their wire profile explicitly;
+  development envelopes include Core event IDs/timestamps. Frozen wire examples
+  project only the current companion version/platform/architecture. Production
+  admission and artifact tests run in the default build; development tests assert
+  their exclusion. Neither suite establishes support for retired Core endpoints.
 - Do not install Rust or fetch dependencies merely to validate this subtree.

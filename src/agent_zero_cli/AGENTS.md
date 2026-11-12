@@ -82,8 +82,11 @@
   Use no-follow retained file/directory reads and before/after identity checks.
   Never execute a candidate just to discover its identity. Return paths only
   internally to process launch; errors and machine output remain pathless.
-  Windows discovery remains unavailable until its native DACL/HKCU transaction
-  exists. Local-development discovery never shares this registry.
+  Windows uses `browser_extension_windows.py` and the existing pywin32
+  dependency for retained private file/directory reads, protected current-user/
+  SYSTEM ACL checks, nonblocking shared install locks and exact read-only HKCU
+  checks in both registry views. Production discovery still returns no target
+  without compiled Windows pins. Local-development discovery never shares this registry.
   The independently distributed CLI may pin final companion/catalog bytes;
   the companion itself cannot embed its own final hashes. Native installed
   status instead verifies retained signed catalog/derivation sidecars. The
@@ -101,7 +104,9 @@
   temporary staging; reject traversal, links, additional entries, concatenated
   gzip streams, expansion excess and wrong final bytes. Retain a read-only
   descriptor, private mode/ownership/identity and digest through native launch;
-  Linux uses its inherited fd path, Darwin the bound private path. Verify again
+  Linux uses its inherited fd path, Darwin the bound private path. Windows
+  stages the fixed `.exe` member in a private generated LOCALAPPDATA directory
+  and denies write/delete sharing until the subprocess finishes. Verify again
   after launch and remove only temporary bootstrap staging. Native owns every
   registration/installation mutation. Empty bootstrap pins perform no network
   request. Timeouts report unknown final state, not successful rollback.

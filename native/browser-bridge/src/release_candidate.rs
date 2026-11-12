@@ -20,6 +20,13 @@ mod macho;
 #[path = "release_elf.rs"]
 mod elf;
 
+#[path = "release_pe.rs"]
+mod pe;
+
+#[cfg(target_os = "windows")]
+#[path = "release_windows.rs"]
+mod windows;
+
 #[cfg(any(target_os = "linux", test))]
 #[path = "release_linux.rs"]
 mod linux;
@@ -115,10 +122,10 @@ pub(crate) fn compose_macos_production_candidate(
     compose_production_candidate(catalog, payload, &mut verifier, provenance)
 }
 
-/// Stable Linux acquisition uses only the compiled immutable catalog and
+/// Stable platform acquisition uses only the compiled immutable catalog and
 /// detached provenance locations for this exact version/architecture.
-#[cfg(target_os = "linux")]
-pub(crate) fn acquire_linux_production_candidate(
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub(crate) fn acquire_platform_production_candidate(
     version: &str,
     known_floor: &str,
     private_parent: &std::path::Path,
@@ -126,7 +133,12 @@ pub(crate) fn acquire_linux_production_candidate(
     if cfg!(feature = "local-development") || !crate::release::release_trust_configured() {
         return Err(CompositionError::ReleaseTrustUnavailable);
     }
-    let arch = expected_artifact_arch(Platform::Linux, architecture());
+    #[cfg(target_os = "windows")]
+    if crate::release::WINDOWS_SIGNER_CERTIFICATES.is_empty() {
+        return Err(CompositionError::ReleaseTrustUnavailable);
+    }
+    let platform = Platform::current();
+    let arch = expected_artifact_arch(platform, architecture());
     if arch == "unsupported" {
         return Err(CompositionError::PlatformMismatch);
     }
@@ -136,13 +148,17 @@ pub(crate) fn acquire_linux_production_candidate(
         .artifacts()
         .iter()
         .filter(|artifact| {
-            artifact.kind == "payload" && artifact.platform == "linux" && artifact.arch == arch
+            artifact.kind == "payload"
+                && artifact.platform == platform.as_str()
+                && artifact.arch == arch
         })
         .collect();
     let sources: Vec<_> = crate::release::PINNED_BUILD_PROVENANCE
         .iter()
         .filter(|source| {
-            source.release == version && source.platform == "linux" && source.artifact_arch == arch
+            source.release == version
+                && source.platform == platform.as_str()
+                && source.artifact_arch == arch
         })
         .collect();
     if artifacts.len() != 1 || sources.len() != 1 {
@@ -166,13 +182,13 @@ pub(crate) fn acquire_linux_production_candidate(
         private_parent,
     )
     .map_err(|_| CompositionError::PayloadChanged)?;
-    compose_linux_production_candidate(&catalog, payload, &statement, &signature)
+    compose_platform_production_candidate(&catalog, payload, &statement, &signature)
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) fn compose_linux_production_candidate(
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub(crate) fn compose_platform_production_candidate(
     catalog: &VerifiedCatalog,
-    payload: VerifiedExecutablePayload,
+    mut payload: VerifiedExecutablePayload,
     statement: &[u8],
     signature: &[u8],
 ) -> Result<FullyVerifiedInstallCandidate, CompositionError> {
@@ -186,11 +202,15 @@ pub(crate) fn compose_linux_production_candidate(
         archive_sha256: &archive,
         executable_sha256: &executable,
         executable_size: payload.executable_size(),
-        platform: Platform::Linux,
+        platform: Platform::current(),
         artifact_arch: &arch,
     };
+    #[cfg(target_os = "linux")]
     let mut verifier =
         linux::LinuxCandidateVerifier::new(catalog, &expected, statement, signature)?;
+    #[cfg(target_os = "windows")]
+    let mut verifier =
+        windows::WindowsCandidateVerifier::new(&mut payload, &expected, statement, signature)?;
     let provenance = verifier.retained_provenance();
     compose_production_candidate(catalog, payload, &mut verifier, provenance)
 }
@@ -327,8 +347,8 @@ pub(super) fn verify_installed_evidence(
 /// executable to the approved build identity. Linux still requires its explicit
 /// release-signature policy, never an automatic platform-signature success.
 /// Self-test execution must be offline, bounded in time/output, and use the
-/// supplied file object. Darwin alone may use the generated private pathname
-/// under its retained-descriptor verification lease; no caller-selected path or
+/// supplied file object. Darwin and Windows use the generated private pathname
+/// under their retained-descriptor verification guards; no caller-selected path or
 /// unverified pathname substitution is allowed.
 pub(crate) trait ReleaseCandidateVerifier {
     fn platform_signature(

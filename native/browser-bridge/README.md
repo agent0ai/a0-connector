@@ -6,7 +6,7 @@ This subtree is the foundation for the standalone
 - Chromium native-host invocation and native-endian framed stdin/stdout;
 - redacted CLI `status`, `doctor`, and `self-test` output;
 - a Unix install/update transaction engine requiring an opaque verified
-  candidate, with concrete macOS acquisition and CLI installation composition.
+  candidate, with macOS and Linux acquisition and CLI installation composition.
 
 **macOS release status:** the corrected companion is published under protected
 immutable tag `native-v2.12.0-macos-r2`, with Developer ID signing, notarization
@@ -33,10 +33,74 @@ root is included in production policy.
 
 Signed release-catalog v1 requires all nine delivery artifacts; v2 permits
 complete declared platform groups. The current signed delivery is macOS-only.
-Linux delivery and platform acceptance remain pending. Windows still needs PE/
-Authenticode candidate verification, the private HKCU installation transaction,
-delivery and platform acceptance; its private staging primitives alone do not
-make Windows installation available.
+Linux delivery and platform acceptance remain pending. Windows has bounded PE
+metadata/architecture verification, retained-file Authenticode verification,
+private HKCU transactions and CLI staging/discovery adapters. Production
+installation remains disabled: genuine publisher certificate pins, signed
+Windows artifacts/provenance and release acceptance are still required.
+
+Native Windows x86-64 tests exercise private ACLs, hardlinks, locks, retained
+retirement, update/recovery and unsigned-release rejection. Opt-in development
+tests also exercise real HKCU and Credential Manager persistence/isolation
+across processes. These checks do not establish signed installation, full live
+Chrome control or ARM64 acceptance. Windows verification deliberately rejects
+missing cached certificate-revocation evidence; the publisher acceptance run
+must validate the actual certificate chain and timestamp behavior.
+
+## Linux builds and verification
+
+Linux is a required target. The existing native runtime uses desktop Secret
+Service for credentials and per-user Chrome/Chromium native-host registration.
+It does not need the direct Chrome/desktop Launcher changes. Conventional
+browser packages are supported by the registry; Snap/Flatpak integration is
+outside the current contract.
+
+Build a local candidate with the pinned Rust toolchain, cached Cargo dependencies,
+GCC, pkg-config, libdbus development headers, Python 3 and readelf:
+
+```bash
+python3 scripts/build-linux-candidate.py \
+  --cargo /absolute/path/to/cargo --output /absolute/new/candidate-directory
+python3 tests/linux_native_smoke.py --binary /absolute/path/to/a0-browser-bridge
+```
+
+The smoke test requires `dbus-daemon`, `gdbus` and `gnome-keyring-daemon`. It owns
+temporary XDG paths, a private D-Bus session, an encrypted test keyring and a
+loopback pairing server. It verifies real native framing, persistence across
+processes, profile isolation and cleanup without using the desktop keyring.
+It also checks a locked service cannot hang native hello, and accepts an optional
+`--previous-binary` to verify existing credential compatibility. The locked-store
+fixture needs OS Python's D-Bus/GLib bindings. A locked keyring produces
+`repair_required`; unlock it through the desktop and reconnect. The helper does
+not wait indefinitely for an unlock dialog or move credentials to plaintext.
+This test does not prove Core admission. The extension repository also has an opt-in
+Chromium-to-native test using `A0_NATIVE_BRIDGE_BINARY`.
+
+`BUILD.json` records the exact payload/executable hashes, source fingerprint,
+toolchain, required shared libraries and glibc symbol floor. Build on the
+oldest supported baseline: a current-distribution build can require a newer
+glibc than users have. `scripts/Dockerfile.linux` provides Ubuntu 22.04; mount
+the checkout, pinned Rust toolchain and Cargo registry read-only, with separate
+writable Cargo cache, target and output directories. Compile with networking
+disabled. For linked Git worktrees, expose their Git/common directories
+read-only and set `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` accordingly.
+
+On x86-64, building that image with `--build-arg CROSS_ARM64=1` adds the ARM64
+compiler/libraries and QEMU. Install the pinned Rust ARM64 target first, then
+pass `--target aarch64-unknown-linux-gnu` to the candidate builder in that image.
+The receipt labels emulated self-tests; they are not physical ARM64 acceptance.
+
+The Linux bootstrap is a short entry point to the installed
+`a0 browser-extension install` command. It refuses root and performs no separate
+CLI installation or native download logic. Candidate receipts bind its bytes;
+both architecture builds must include the identical bootstrap.
+
+Candidates remain unsigned and unpublished. Linux release activation needs a
+new version, reviewed Linux builder identity/recipe, both architecture payloads,
+publisher-signed catalog and builder provenance, independent CLI pins and a
+current signed Core policy. The current macOS pins cannot authorize Linux.
+Never replace an existing immutable release or treat `self-test` as signed
+installation evidence.
 
 The [payload archive profile](RELEASE-PAYLOAD-v1.md) preserves the signed
 archive digest while deriving a separate executable digest through bounded
@@ -56,12 +120,12 @@ can additionally pin final companion/catalog hashes without circularity.
 The browser registry is compiled into Rust in `src/registry.rs` and mirrored in
 `browser-registry-v1.json` for review and release tooling. Its paths are per-user
 canonical locations only; arbitrary browser profile paths are never accepted.
-Automatic discovery on macOS/Linux checks only conventional compiled stable
+Automatic discovery on macOS/Linux/Windows checks only conventional compiled stable
 executable locations without executing or scanning profiles; custom installs
 can use explicit browser targeting. Updates reuse previously owned targets only
-after full binary, manifest, and install-state readback. Windows installation
-is still unavailable; private Windows staging is implemented but unverified on
-Windows.
+after full binary, manifest, and install-state readback. Windows registration
+uses only HKCU and rejects existing unowned registrations in either registry
+view. Its production acquisition remains closed until Windows trust is provisioned.
 
 ## Commands
 
@@ -171,8 +235,8 @@ current document/ref, origin, target fingerprint, and data classification to
 one explicit decision. TYPE recomputes the exact UTF-8 digest and never retains
 raw text in events, receipts, or result correlations. Private artifact output
 is independently spooled/verified in native and Core and is usable only after
-matching acknowledgements and operation settlement; Windows storage still
-requires its private-DACL adapter. Focused synthetic and disposable Chrome
+matching acknowledgements and operation settlement; Windows storage uses
+protected current-user/SYSTEM DACLs and retained handles. Focused synthetic and disposable Chrome
 checks are not a live paired installation acceptance result.
 
 Production pairing and browser readiness retain their distinct release,

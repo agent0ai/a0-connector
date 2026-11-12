@@ -193,6 +193,14 @@ mod tests {
     use super::*;
     fn fixture(machine: u16) -> Vec<u8> {
         let metadata = crate::release_metadata::as_json()
+            .replace(
+                "\"channel\":\"local-development\"",
+                "\"channel\":\"stable\"",
+            )
+            .replace(
+                "io.agentzero.browser_bridge.dev",
+                "io.agentzero.browser_bridge",
+            )
             .replace("\"platform\":\"macos\"", "\"platform\":\"linux\"")
             .replace("\"platform\":\"windows\"", "\"platform\":\"linux\"");
         let mut bytes = vec![0; 2048];

@@ -12,7 +12,7 @@ use crate::{
 #[path = "install_transaction.rs"]
 mod transaction;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) use transaction::acquire_and_install;
 pub(crate) use transaction::lifecycle;
 pub(crate) use transaction::verify_installed_status;

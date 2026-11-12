@@ -57,10 +57,13 @@
   production bootstrap fallback. A binary built with Rust feature
   `local-development` may install only its own executing bytes for native host
   `io.agentzero.browser_bridge.dev` and the one compiled development extension
-  origin. It uses separate install/state/credential namespaces, remains
-  pairing-only, and must not activate fixture trust or production runtime
+  origin. It uses separate install/state/credential namespaces and must not
+  activate fixture trust or production runtime
   admission. The explicit source-binary command is the user's execution
   authority; never search `PATH`, download a helper, or install into Docker.
+- The current Core integration has retired the development channel's endpoints.
+  Root setup guidance must use production; retain historical status/removal and
+  interrupted-update recovery instructions without claiming development control.
 - Use Linux commands and paths by default. Prefer `./.venv/bin/python`, not Windows-only virtualenv paths.
 - UI preview is the primary loop for TUI work: `./.venv/bin/python devtools/serve.py` at `http://localhost:8566`.
 - The CLI talks to Agent Zero through the connector protocol `a0-connector.v1`, HTTP routes under `/api/plugins/_a0_connector/v1/`, and Socket.IO events on namespace `/ws` with `connector_*` event names.

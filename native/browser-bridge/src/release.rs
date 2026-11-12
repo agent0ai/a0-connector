@@ -36,6 +36,10 @@ pub const TRUSTED_RELEASE_PUBLIC_KEYS: &[TrustedReleasePublicKey] = &[TrustedRel
 pub const PRODUCTION_EXTENSION_ORIGINS: &[&str] =
     &["chrome-extension://nhliclifilepdkoolioacpjpijomfplj/"];
 
+/// Exact Authenticode leaf-certificate SHA-256 pins await publisher evidence.
+/// macOS identities and catalog roots never substitute for this Windows gate.
+pub(crate) const WINDOWS_SIGNER_CERTIFICATES: &[[u8; 32]] = &[];
+
 /// Reviewed immutable catalog locations, never supplied by a page, paired
 /// server, environment variable, or an unsigned update response.
 pub struct PinnedReleaseCatalog {
@@ -187,6 +191,7 @@ pub fn release_trust_configured() -> bool {
         .copied()
         .collect::<BTreeSet<_>>();
     RELEASE_SIGNATURE_VERIFIER_READY
+        && (!cfg!(target_os = "windows") || !WINDOWS_SIGNER_CERTIFICATES.is_empty())
         && !TRUSTED_RELEASE_PUBLIC_KEYS.is_empty()
         && key_ids.len() == TRUSTED_RELEASE_PUBLIC_KEYS.len()
         && TRUSTED_RELEASE_PUBLIC_KEYS.iter().all(|key| {
@@ -225,7 +230,7 @@ mod tests {
         let evidence = VerifiedReleaseEvidence::untrusted_fixture(vec![
             "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/".to_owned(),
         ]);
-        assert!(release_trust_configured());
+        assert_eq!(release_trust_configured(), !cfg!(target_os = "windows"));
         assert!(!evidence.is_fully_verified());
     }
 
@@ -249,7 +254,7 @@ mod tests {
         assert_eq!(PINNED_BUILD_PROVENANCE[0].platform, "macos");
         assert_eq!(PINNED_BUILD_PROVENANCE[0].artifact_arch, "universal2");
         assert!(RELEASE_SIGNATURE_VERIFIER_READY);
-        assert!(release_trust_configured());
+        assert_eq!(release_trust_configured(), !cfg!(target_os = "windows"));
         assert!(verified_release_evidence_unavailable().is_none());
         let evidence = VerifiedReleaseEvidence::untrusted_fixture(
             PRODUCTION_EXTENSION_ORIGINS
@@ -264,10 +269,11 @@ mod tests {
         )
         .is_err());
         #[cfg(not(feature = "local-development"))]
-        assert!(crate::native_host::validate_invocation(&[
-            PRODUCTION_EXTENSION_ORIGINS[0].to_owned()
-        ])
-        .is_ok());
+        assert!(
+            crate::native_host::validate_invocation(&[PRODUCTION_EXTENSION_ORIGINS[0].to_owned()])
+                .is_ok()
+                == !cfg!(target_os = "windows")
+        );
     }
 
     #[test]

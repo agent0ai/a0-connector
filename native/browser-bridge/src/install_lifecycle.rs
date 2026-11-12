@@ -25,7 +25,14 @@ pub(crate) fn run(
         return Err(InstallTransactionError::ReleaseEvidenceUnavailable);
     }
     let platform = Platform::current();
-    if !matches!(platform, Platform::Macos | Platform::Linux) {
+    #[cfg(target_os = "windows")]
+    if crate::release::WINDOWS_SIGNER_CERTIFICATES.is_empty() {
+        return Err(InstallTransactionError::ReleaseEvidenceUnavailable);
+    }
+    if !matches!(
+        platform,
+        Platform::Macos | Platform::Linux | Platform::Windows
+    ) {
         return Err(InstallTransactionError::WindowsAdapterUnavailable);
     }
     let paths = discover_user_paths().map_err(|_| InstallTransactionError::UserPathsUnavailable)?;
@@ -50,7 +57,12 @@ fn secure_mode(file: &File, mode: u32) -> Result<(), InstallTransactionError> {
         .map_err(|_| InstallTransactionError::Filesystem)
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn secure_mode(file: &File, _mode: u32) -> Result<(), InstallTransactionError> {
+    windows::secure_handle(file)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn secure_mode(_file: &File, _mode: u32) -> Result<(), InstallTransactionError> {
     Err(InstallTransactionError::WindowsAdapterUnavailable)
 }
@@ -85,6 +97,7 @@ fn publish_missing(path: &Path, bytes: &[u8]) -> Result<(), InstallTransactionEr
             .map_err(|_| InstallTransactionError::RegistrationConflict)?;
         Ok(())
     })();
+    drop(file);
     fs::remove_file(&temporary).map_err(|_| InstallTransactionError::Filesystem)?;
     result?;
     sync_dir(parent)
@@ -104,6 +117,8 @@ pub(super) fn apply_verified(
     let repair = operation == Operation::Repair;
     // Complete preflight before the first effect. Recheck again at each effect.
     for registration in registrations {
+        #[cfg(target_os = "windows")]
+        windows::registry::present(&registration.path, true)?;
         if let Some(file) = &registration.file {
             recheck(&registration.path, file, manifest.as_bytes(), repair)?;
         } else if !matches!(fs::symlink_metadata(&registration.path), Err(error) if error.kind() == io::ErrorKind::NotFound)
@@ -135,7 +150,9 @@ pub(super) fn apply_verified(
                     }
                     publish_missing(&registration.path, manifest.as_bytes())?;
                 }
-                let file = open_owned_readonly(&registration.path, false, false)?;
+                #[cfg(target_os = "windows")]
+                windows::registry::publish(&registration.path, true)?;
+                let file = open_owned_for_inspection(&registration.path, false, false, false)?;
                 recheck(&registration.path, &file, manifest.as_bytes(), false)?;
             }
             recheck(&state_path, state_file, state_bytes, false)?;
@@ -147,7 +164,14 @@ pub(super) fn apply_verified(
     let retire = || -> Result<(), InstallTransactionError> {
         let id = random_id()?;
         let transactions = paths.install_root.join("transactions");
-        let work = transactions.join(format!("local-retirement-{id}.d"));
+        let backup = paths
+            .install_root
+            .join(format!("retired-registrations-{id}"));
+        let work = if cfg!(target_os = "windows") {
+            backup.clone()
+        } else {
+            transactions.join(format!("local-retirement-{id}.d"))
+        };
         let marker = transactions.join(format!("local-retirement-{id}.json"));
         ensure_new_private_dir(&work)?;
         let mut snapshot = create_new_file(&work.join("original-install-state.json"), 0o600)?;
@@ -157,6 +181,7 @@ pub(super) fn apply_verified(
         snapshot
             .sync_all()
             .map_err(|_| InstallTransactionError::Filesystem)?;
+        drop(snapshot);
         // This intentionally is not an install/update journal. Interrupted local
         // retirement blocks their automatic recovery instead of reinstating access.
         let mut journal = create_new_file(&marker, 0o600)?;
@@ -165,12 +190,18 @@ pub(super) fn apply_verified(
         journal
             .sync_all()
             .map_err(|_| InstallTransactionError::Filesystem)?;
+        drop(journal);
         sync_dir(&work)?;
         sync_dir(&transactions)?;
         for (index, registration) in registrations.iter().enumerate() {
+            #[cfg(target_os = "windows")]
+            windows::registry::remove(&registration.path, false)?;
             if let Some(file) = &registration.file {
                 recheck(&registration.path, file, manifest.as_bytes(), false)?;
                 let backup = work.join(format!("registration-{index}.json"));
+                #[cfg(target_os = "windows")]
+                windows::retire(file, &backup)?;
+                #[cfg(not(target_os = "windows"))]
                 fs::rename(&registration.path, &backup)
                     .map_err(|_| InstallTransactionError::Filesystem)?;
                 recheck(&backup, file, manifest.as_bytes(), false)?;
@@ -185,13 +216,14 @@ pub(super) fn apply_verified(
         }
         recheck(&state_path, state_file, state_bytes, false)?;
         let retired_state = work.join("install-state.json");
+        #[cfg(target_os = "windows")]
+        windows::retire(state_file, &retired_state)?;
+        #[cfg(not(target_os = "windows"))]
         fs::rename(&state_path, &retired_state).map_err(|_| InstallTransactionError::Filesystem)?;
         recheck(&retired_state, state_file, state_bytes, false)?;
         sync_dir(&work)?;
         sync_dir(&paths.install_root)?;
-        let backup = paths
-            .install_root
-            .join(format!("retired-registrations-{id}"));
+        #[cfg(not(target_os = "windows"))]
         fs::rename(&work, &backup).map_err(|_| InstallTransactionError::Filesystem)?;
         sync_dir(&paths.install_root)?;
         fs::remove_file(&marker).map_err(|_| InstallTransactionError::Filesystem)?;

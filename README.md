@@ -132,53 +132,28 @@ remain the equivalent WebUI-first route for Docker users.
 
 ### Local Browser Bridge development
 
-Local source testing uses a separately compiled, namespaced companion and does
-not weaken the blocked production installer:
+Use the production extension and installation commands above with the current
+Core integration. The historical `local-development` channel cannot pair or
+control a browser with that integration: Core has retired its server endpoints.
+Building it from source does not restore those endpoints. Do not copy its
+credentials into a production installation.
+
+If you already have a development installation, use your trusted development
+executable to inspect or remove it:
 
 ```bash
-cargo build --locked --release --features local-development \
-  --manifest-path native/browser-bridge/Cargo.toml
-a0 browser-extension development install --source-binary \
-  /absolute/path/to/target/release/a0-browser-bridge --browser chrome --yes --json
 a0 browser-extension development status --source-binary \
   /absolute/path/to/target/release/a0-browser-bridge --json
-a0 browser-extension development update --source-binary \
-  /absolute/path/to/target/release/a0-browser-bridge --yes --json
 a0 browser-extension development uninstall --source-binary \
   /absolute/path/to/target/release/a0-browser-bridge --yes --json
 ```
 
-The build is pinned to native host `io.agentzero.browser_bridge.dev` and the
-reviewed development extension ID `paoagmddepkmonpeboobaijlenlcokpc`. It copies
-only its executing source bytes into a separate per-user Unix install root and
-registers only explicit or conventionally discovered stable browser targets.
-The coordinated development sources support a separate signed session to an
-explicit-port HTTP loopback Agent Zero origin, including Docker-published
-`localhost` ports. Pairing alone leaves browser control unavailable. Limited
-control also requires the matching Core and extension sources, the explicit
-Core setting `A0_BROWSER_BRIDGE_DEVELOPMENT_RUNTIME=limited-v1`, and the existing
-`A0_BROWSER_BRIDGE_DEVELOPMENT_PAIRING_URL` set to the canonical loopback URL.
-Restart Core after setting its process configuration.
-
-In Browser settings for the intended chat, choose **Use this development
-browser**, allow the exact site origins it may open, then choose **Reconnect
-after selection** in extension Options. A fresh signed connection and tab
-reconciliation must complete before control is ready. This development mode
-supports owned tabs/groups, page reading, navigation, scrolling, and the visible
-cursor. It does not support extension chat relay, screenshots, clicking, typing,
-or production release activation. Keep the existing Agent Zero WebUI as the
-task surface; A0 CLI does not need to remain connected after installation.
-
-Development `update` uses the explicitly chosen source executable and preserves
-pairing, installation identity, and the already-registered browser targets.
-It switches owned registrations to a new immutable build, retaining the old
-binary for existing processes. Reconnect the extension after a successful
-update. A pending update blocks install/uninstall; retry the confirmed update
-with the same trusted source build to recover, and never delete its journal or
-overwrite changed files to force recovery. Docker/WebUI users run the same
-binary's `development update --yes` on the browser host, not inside Docker.
-Windows and automatic credential cleanup remain unavailable; uninstall reports
-remaining credential cleanup instead of claiming it occurred.
+Run these commands on the computer running Chrome, not inside Docker. A pending
+update blocks removal; recover it with the same trusted source build and
+`a0 browser-extension development update --source-binary /absolute/path/to/target/release/a0-browser-bridge --yes --json`.
+Never delete its journal or overwrite changed files to force recovery. Windows
+development installation and automatic credential cleanup remain unavailable;
+check the uninstall result for any remaining credential cleanup.
 
 ## Agent Zero Core
 

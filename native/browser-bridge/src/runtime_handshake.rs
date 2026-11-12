@@ -1204,7 +1204,7 @@ mod tests {
         assert!(packet.contains("\"browser_id\":\"extension:bridge-fixture\""));
         assert!(packet.contains("\"install_instance_id\":\"install-fixture\""));
         assert!(packet.contains("\"instance_id\":\"companion-fixture\""));
-        assert!(packet.contains("\"version\":\"2.12.0\""));
+        assert!(packet.contains(&format!("\"version\":\"{COMPANION_VERSION}\"")));
         assert!(!packet.contains("private_seed"));
         assert_eq!(expected.hello.actions, vec!["list", "open"]);
         assert_eq!(expected.hello.features, vec!["cursor_v1", "tab_leases_v1"]);
@@ -1268,7 +1268,11 @@ mod tests {
         let stale_companion = json::parse(
             ack(&expected, "sid-fixture")
                 .encode()
-                .replacen("\"version\":\"2.12.0\"", "\"version\":\"2.11.0\"", 1)
+                .replacen(
+                    &format!("\"version\":\"{COMPANION_VERSION}\""),
+                    "\"version\":\"2.11.0\"",
+                    1,
+                )
                 .as_bytes(),
         )
         .unwrap();

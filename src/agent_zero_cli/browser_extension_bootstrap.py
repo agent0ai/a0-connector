@@ -18,6 +18,7 @@ import time
 from typing import BinaryIO, Iterator
 from urllib.parse import urlsplit
 import zlib
+import uuid
 
 from . import browser_extension_release as release
 
@@ -160,7 +161,8 @@ def _extract(archive: BinaryIO, destination: BinaryIO, pin: ApprovedBootstrap) -
                     if not field or any(byte not in b"01234567" for byte in field):
                         raise ValueError()
                     return int(field, 8)
-                if (header[:100].rstrip(b"\0") != b"a0-browser-bridge"
+                expected_name = b"a0-browser-bridge.exe" if pin.companion.platform == "windows" else b"a0-browser-bridge"
+                if (header[:100].rstrip(b"\0") != expected_name
                         or header[156:157] not in (b"0", b"\0")
                         or header[257:265] != b"ustar\x0000"
                         or any(header[157:257]) or any(header[345:500])
@@ -207,8 +209,9 @@ class VerifiedBootstrap:
         path = Path(self.path)
         with release._directory(path.parent, private=True):
             info = os.fstat(self.descriptor)
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                    or info.st_nlink != 1 or info.st_mode & 0o777 != 0o500
+            unix_permissions_invalid = os.name != "nt" and (info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o500)
+            if (not stat.S_ISREG(info.st_mode) or unix_permissions_invalid
+                    or info.st_nlink != 1
                     or release._identity(os.lstat(path)) != self.identity
                     or release._identity(info) != self.identity):
                 raise release.CompanionDiscoveryError("COMPANION_BOOTSTRAP_CHANGED")
@@ -233,6 +236,10 @@ def acquire_bootstrap() -> Iterator[VerifiedBootstrap | None]:
         pin = _select()
         if pin is None:
             yield None
+            return
+        if os.name == "nt":
+            with _windows_bootstrap(pin) as verified:
+                yield verified
             return
         parent = Path(tempfile.gettempdir()).resolve(strict=True)
         info = parent.stat()
@@ -264,5 +271,31 @@ def acquire_bootstrap() -> Iterator[VerifiedBootstrap | None]:
                 os.close(descriptor)
     except release.CompanionDiscoveryError:
         raise
-    except (OSError, ValueError, TypeError, zlib.error, http.client.HTTPException):
+    except (OSError, release._PlatformError, ValueError, TypeError, zlib.error, http.client.HTTPException):
         raise release.CompanionDiscoveryError("COMPANION_BOOTSTRAP_UNAVAILABLE") from None
+
+
+@contextmanager
+def _windows_bootstrap(pin: ApprovedBootstrap):
+    from . import browser_extension_windows as windows
+    parent = release._absolute(os.environ.get("LOCALAPPDATA", ""))
+    root = parent / f".a0-bootstrap-{uuid.uuid4().hex}"
+    windows.create_directory(root)
+    archive_path = root / "payload.tar.gz"
+    executable = root / "a0-browser-bridge.exe"
+    try:
+        with windows.directory(root, private=True):
+            with windows.create_file(archive_path) as archive:
+                _download(pin, archive)
+                with windows.create_file(executable) as output:
+                    _extract(archive, output, pin)
+            with windows.file(executable) as descriptor:
+                verified = VerifiedBootstrap(str(executable), pin, descriptor, release._identity(os.fstat(descriptor)))
+                verified.verify()
+                yield verified
+                verified.verify()
+    finally:
+        # Exact generated names only; never recurse through unexpected content.
+        for path in (executable, archive_path):
+            path.unlink(missing_ok=True)
+        root.rmdir()

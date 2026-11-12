@@ -53,6 +53,8 @@ def test_distributed_registry_contains_only_reviewed_mac_executable_and_catalog(
 
 @pytest.fixture
 def installation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    if os.name == "nt":
+        pytest.skip("Unix ownership fixture; native Windows discovery has its own tests")
     home = tmp_path.resolve()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
@@ -75,7 +77,7 @@ def installation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(release, "APPROVED_COMPANION_RELEASES", (pin,))
     manifest_path = home / ".config/google-chrome/NativeMessagingHosts/io.agentzero.browser_bridge.json"
-    manifest_path.parent.mkdir(parents=True)
+    manifest_path.parent.mkdir(parents=True, mode=0o700)
     manifest = {
         "name": release.NATIVE_HOST, "description": "Agent Zero browser bridge",
         "type": "stdio", "path": str(executable), "allowed_origins": list(pin.extension_origins),
@@ -109,6 +111,7 @@ def test_exact_owned_release_and_registration_resolve_without_execution(installa
     "digest", "size", "symlink_binary", "hardlink_binary", "private_root", "private_state",
     "duplicate_state", "unknown_state", "catalog_key", "below_floor", "unknown_release",
     "recovery", "manifest_path", "manifest_origin", "manifest_digest", "state_symlink",
+    "manifest_directory_mode",
 ])
 def test_untrusted_or_changed_install_fails_before_any_execution(installation, monkeypatch, failure):
     root, executable, state_path, state, manifest_path, pin = installation
@@ -150,6 +153,8 @@ def test_untrusted_or_changed_install_fails_before_any_execution(installation, m
         state_path.write_text(json.dumps(state))
     elif failure == "manifest_digest":
         manifest_path.write_text(manifest_path.read_text() + " ")
+    elif failure == "manifest_directory_mode":
+        manifest_path.parent.chmod(0o770)
     elif failure == "state_symlink":
         retained = state_path.with_name("other-state")
         state_path.rename(retained)

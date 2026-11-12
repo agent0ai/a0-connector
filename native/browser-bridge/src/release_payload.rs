@@ -102,6 +102,15 @@ impl std::fmt::Debug for VerifiedExecutablePayload {
 }
 
 impl VerifiedExecutablePayload {
+    /// Windows has no public handle-exec API. The owner retains sealed files
+    /// and non-delete-sharing ancestors until every verifier and launch returns.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn windows_verification_path(&mut self) -> Result<PathBuf, ReleasePayloadError> {
+        self.verify_retained()?;
+        windows::verify_private(&self.staging_file)?;
+        Ok(self.staging_file.clone())
+    }
+
     #[cfg(target_os = "macos")]
     pub(crate) fn macos_verification_lease(
         &mut self,

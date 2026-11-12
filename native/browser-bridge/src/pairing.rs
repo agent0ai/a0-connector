@@ -16,7 +16,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256};
-#[cfg(not(test))]
+#[cfg(any(not(test), all(windows, feature = "local-development")))]
 use zeroize::Zeroize;
 use zeroize::Zeroizing;
 
@@ -768,10 +768,13 @@ impl CredentialMutationLock {
 }
 
 #[cfg(all(windows, not(test)))]
-struct CredentialMutationLock {
+type CredentialMutationLock = WindowsCredentialMutationLock;
+
+#[cfg(all(windows, any(not(test), feature = "local-development")))]
+struct WindowsCredentialMutationLock {
     handle: *mut std::ffi::c_void,
 }
-#[cfg(all(windows, not(test)))]
+#[cfg(all(windows, any(not(test), feature = "local-development")))]
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn CreateMutexW(
@@ -783,8 +786,8 @@ unsafe extern "system" {
     fn ReleaseMutex(handle: *mut std::ffi::c_void) -> i32;
     fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
 }
-#[cfg(all(windows, not(test)))]
-impl CredentialMutationLock {
+#[cfg(all(windows, any(not(test), feature = "local-development")))]
+impl WindowsCredentialMutationLock {
     fn acquire(extension: &str, install: &str) -> Result<Self, PairingFailure> {
         let name: Vec<u16> = format!(
             "Local\\A0BrowserBridgeCredential-{}\0",
@@ -805,8 +808,8 @@ impl CredentialMutationLock {
         Ok(Self { handle })
     }
 }
-#[cfg(all(windows, not(test)))]
-impl Drop for CredentialMutationLock {
+#[cfg(all(windows, any(not(test), feature = "local-development")))]
+impl Drop for WindowsCredentialMutationLock {
     fn drop(&mut self) {
         unsafe {
             ReleaseMutex(self.handle);
@@ -821,11 +824,22 @@ impl EntropySource for SystemEntropy {
     }
 }
 
-#[cfg(not(test))]
+#[cfg(any(not(test), all(windows, feature = "local-development")))]
 struct SystemCredentialStore;
 
-#[cfg(not(test))]
+#[cfg(all(target_os = "linux", not(test)))]
+#[path = "credential_linux.rs"]
+mod linux_credentials;
+
+#[cfg(any(not(test), all(windows, feature = "local-development")))]
 impl SystemCredentialStore {
+    #[cfg(target_os = "linux")]
+    fn entry(name: &str) -> Result<linux_credentials::Entry, PairingFailure> {
+        linux_credentials::Entry::new(CREDENTIAL_SERVICE, name)
+            .map_err(|_| PairingFailure::CredentialStoreUnavailable)
+    }
+
+    #[cfg(not(target_os = "linux"))]
     fn entry(name: &str) -> Result<keyring::Entry, PairingFailure> {
         keyring::Entry::new(CREDENTIAL_SERVICE, name)
             .map_err(|_| PairingFailure::CredentialStoreUnavailable)
@@ -844,7 +858,7 @@ impl SystemCredentialStore {
     }
 }
 
-#[cfg(not(test))]
+#[cfg(any(not(test), all(windows, feature = "local-development")))]
 impl CredentialStore for SystemCredentialStore {
     fn load_rotation(
         &self,
@@ -1647,10 +1661,103 @@ mod tests {
 
     use super::*;
 
+    #[cfg(all(windows, feature = "local-development"))]
+    #[test]
+    #[ignore = "requires explicit approval: creates and removes isolated development Credential Manager entries"]
+    fn approved_windows_credential_roundtrip() {
+        assert_eq!(CREDENTIAL_SERVICE, "io.agentzero.browser_bridge.dev");
+        let store = SystemCredentialStore;
+        let extension = crate::DEVELOPMENT_EXTENSION_ID;
+        if let Ok(profile) = std::env::var("A0_WINDOWS_CREDENTIAL_TEST_PROFILE") {
+            assert!(profile.starts_with("windows-acceptance-"));
+            let record = store.load_credential(extension, &profile).unwrap().unwrap();
+            assert_eq!(record.install_instance_id, profile);
+            assert_eq!(record.bridge_id, "isolated-storage-test");
+            assert_eq!(
+                store
+                    .load_rotation(extension, &profile)
+                    .unwrap()
+                    .unwrap()
+                    .as_slice(),
+                b"isolated-rotation-canary"
+            );
+            assert!(WindowsCredentialMutationLock::acquire(extension, &profile).is_err());
+            assert!(
+                WindowsCredentialMutationLock::acquire(extension, &format!("{profile}-other"))
+                    .is_ok()
+            );
+            return;
+        }
+        let mut identifier = [0u8; 16];
+        SystemEntropy.fill(&mut identifier).unwrap();
+        let profile = format!("windows-acceptance-{}", format_uuid(identifier));
+        assert!(store
+            .load_credential(extension, &profile)
+            .unwrap()
+            .is_none());
+        assert!(store.load_rotation(extension, &profile).unwrap().is_none());
+        struct Cleanup(String);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let store = SystemCredentialStore;
+                let extension = crate::DEVELOPMENT_EXTENSION_ID;
+                let _ = store.delete_rotation(extension, &self.0);
+                let _ = store.delete_credential(extension, &self.0);
+            }
+        }
+        let cleanup = Cleanup(profile.clone());
+        let mut record = CredentialRecord::fixture_development();
+        record.install_instance_id = profile.clone();
+        record.bridge_id = "isolated-storage-test".into();
+        SystemEntropy.fill(&mut record.private_seed[..]).unwrap();
+        let lock = WindowsCredentialMutationLock::acquire(extension, &profile).unwrap();
+        store.save_credential(&record).unwrap();
+        store
+            .save_rotation(extension, &profile, b"isolated-rotation-canary")
+            .unwrap();
+        assert!(store
+            .load_credential(extension, &format!("{profile}-other"))
+            .unwrap()
+            .is_none());
+        assert!(store
+            .load_rotation(extension, &format!("{profile}-other"))
+            .unwrap()
+            .is_none());
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "pairing::tests::approved_windows_credential_roundtrip",
+            ])
+            .env("A0_WINDOWS_CREDENTIAL_TEST_PROFILE", &profile)
+            .status()
+            .unwrap();
+        assert!(child.success());
+        drop(lock);
+        assert!(WindowsCredentialMutationLock::acquire(extension, &profile).is_ok());
+        SystemCredentialStore::entry(&profile_credential_slot(extension, &profile).unwrap())
+            .unwrap()
+            .set_secret(b"corrupt test record")
+            .unwrap();
+        assert!(matches!(
+            store.load_credential(extension, &profile),
+            Err(PairingFailure::CredentialCorrupt)
+        ));
+        drop(cleanup);
+        assert!(store
+            .load_credential(extension, &profile)
+            .unwrap()
+            .is_none());
+        assert!(store.load_rotation(extension, &profile).unwrap().is_none());
+    }
+
     #[test]
     fn staged_rotation_retains_active_until_exact_authenticated_commit() {
         let store = MemoryStore::empty();
+        #[cfg(not(feature = "local-development"))]
         let mut active = CredentialRecord::fixture("https://agent.example");
+        #[cfg(feature = "local-development")]
+        let mut active = CredentialRecord::fixture_development();
         active.private_seed = Zeroizing::new([8; 32]);
         store.save_credential(&active).unwrap();
         let service = PairingService {
@@ -1738,7 +1845,10 @@ mod tests {
     #[test]
     fn expired_rotation_preserves_active_and_commit_crash_is_recoverable() {
         let store = MemoryStore::empty();
+        #[cfg(not(feature = "local-development"))]
         let active = CredentialRecord::fixture("https://agent.example");
+        #[cfg(feature = "local-development")]
+        let active = CredentialRecord::fixture_development();
         store.save_credential(&active).unwrap();
         let service = PairingService {
             credential_store: Box::new(store),

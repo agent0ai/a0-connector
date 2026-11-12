@@ -124,9 +124,9 @@ class BrowserBridgeStructureTests(unittest.TestCase):
         self.assertIn('signing_identifier: "io.agentzero.browser_bridge"', release_source)
         catalog, = policy["pinned_release_catalogs"]
         provenance, = policy["pinned_build_provenance"]
-        base = "https://raw.githubusercontent.com/TerminallyLazy/agent-zero-browser-releases/native-v2.12.0-macos-r1/"
-        self.assertEqual(catalog, {"release": "2.12.0", "catalog_url": base + "catalog.json", "signature_url": base + "catalog.sig"})
-        self.assertEqual(provenance, {"release": "2.12.0", "platform": "macos", "artifact_arch": "universal2", "statement_url": base + "provenance-macos-universal2.json", "signature_url": base + "provenance-macos-universal2.sig"})
+        base = "https://raw.githubusercontent.com/TerminallyLazy/agent-zero-browser-releases/native-v2.12.3-macos/"
+        self.assertEqual(catalog, {"release": "2.12.3", "catalog_url": base + "catalog.json", "signature_url": base + "catalog.sig"})
+        self.assertEqual(provenance, {"release": "2.12.3", "platform": "macos", "artifact_arch": "universal2", "statement_url": base + "provenance-macos-universal2.json", "signature_url": base + "provenance-macos-universal2.sig"})
         for source in (catalog, provenance):
             for field, value in source.items():
                 self.assertIn(f'{field}: "{value}"', release_source)
@@ -156,13 +156,15 @@ class BrowserBridgeStructureTests(unittest.TestCase):
         all_source = "\n".join(
             path.read_text(encoding="utf-8") for path in (ROOT / "src").glob("*.rs")
         )
-        for forbidden in (
-            "std::process::Command",
-            "Command::new",
-            "/bin/sh",
-            "powershell.exe",
-        ):
-            self.assertNotIn(forbidden, all_source)
+        for forbidden in ("/bin/sh", "powershell.exe"):
+            self.assertNotIn(forbidden, all_source, f"shell fallback: {forbidden}")
+        # Only platform verification and verified offline self-tests may launch processes.
+        for path in (ROOT / "src").glob("*.rs"):
+            if path.name not in {"release_macos.rs", "release_windows.rs", "release_candidate.rs"}:
+                source = path.read_text(encoding="utf-8")
+                if path.name == "pairing.rs":
+                    source = source.split("#[cfg(test)]\nmod tests {", 1)[0]
+                self.assertNotIn("Command::new", source, str(path))
 
     def test_native_framing_is_bounded_native_endian_and_stdout_isolated(self) -> None:
         native = (ROOT / "src/native_host.rs").read_text(encoding="utf-8")
@@ -286,8 +288,10 @@ class BrowserBridgeStructureTests(unittest.TestCase):
             pairing.index(".exchange(&endpoint, request.encode().as_bytes())"),
             pairing.index(".save_credential(&credential)"),
         )
-        self.assertNotIn("std::fs", pairing)
-        self.assertNotIn("File::", pairing)
+        # Credential rotation uses empty lock files; key persistence stays OS-owned.
+        store = pairing.split("impl CredentialStore for SystemCredentialStore {", 1)[1].split("struct SystemPairingTransport", 1)[0]
+        self.assertNotIn("std::fs", store, "credential store must not write files")
+        self.assertNotIn("File::", store, "credential store must not write files")
         self.assertNotIn("plaintext", pairing.split("//!", 1)[-1].split("use ", 1)[-1])
 
     def test_native_runtime_requires_release_trust_before_stdin(self) -> None:

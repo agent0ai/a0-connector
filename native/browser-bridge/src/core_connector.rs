@@ -120,7 +120,9 @@ fn enqueue_command<T>(
             Err(mpsc::TrySendError::Disconnected(_)) => return Err(ConnectError::Stopped),
             Err(mpsc::TrySendError::Full(pending)) => command = pending,
         }
-        std::thread::sleep(COMMAND_BACKPRESSURE_TICK.min(deadline.saturating_duration_since(Instant::now())));
+        std::thread::sleep(
+            COMMAND_BACKPRESSURE_TICK.min(deadline.saturating_duration_since(Instant::now())),
+        );
     }
 }
 
@@ -257,7 +259,9 @@ impl CoreConnection {
                 return Err(());
             }
             let authority_deadline = *self.result_deadline.lock().map_err(|_| ())?;
-            let remaining = deadline.min(authority_deadline).saturating_duration_since(Instant::now());
+            let remaining = deadline
+                .min(authority_deadline)
+                .saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 eprintln!("a0-browser-bridge: CORE_RESULT_BACKPRESSURE_EXPIRED");
                 return Err(());
@@ -1115,7 +1119,8 @@ fn serve(
                         .bridge_id();
                     let command_deadline = wire.deadline;
                     #[cfg(not(feature = "local-development"))]
-                    let command_deadline = wire.refresh_deadline
+                    let command_deadline = wire
+                        .refresh_deadline
                         .map_or(command_deadline, |deadline| command_deadline.min(deadline));
                     enqueue_command(
                         &channels.commands,
@@ -1196,12 +1201,20 @@ fn serve(
     }
 }
 
-fn publish_result_deadline(channels: Option<&WorkerChannels>, wire: &Wire) -> Result<(), ConnectError> {
+fn publish_result_deadline(
+    channels: Option<&WorkerChannels>,
+    wire: &Wire,
+) -> Result<(), ConnectError> {
     if let Some(channels) = channels {
         let deadline = wire.deadline;
         #[cfg(not(feature = "local-development"))]
-        let deadline = wire.refresh_deadline.map_or(deadline, |refresh| deadline.min(refresh));
-        *channels.result_deadline.lock().map_err(|_| ConnectError::InvalidPacket)? = deadline;
+        let deadline = wire
+            .refresh_deadline
+            .map_or(deadline, |refresh| deadline.min(refresh));
+        *channels
+            .result_deadline
+            .lock()
+            .map_err(|_| ConnectError::InvalidPacket)? = deadline;
     }
     Ok(())
 }
@@ -1219,25 +1232,46 @@ mod tests {
         let mut connection = CoreConnection::fixture(ConnectionStatus::Ready, None);
         let (sender, receiver) = mpsc::sync_channel(8);
         connection.results = sender;
-        let packets: Vec<String> = (0..24).map(|index| format!(
-            "42/ws,[\"{}\",{{\"fixture_sequence\":{index}}}]",
-            if index == 0 { "browser_bridge_control_result" } else { "browser_bridge_event" },
-        )).collect();
-        for packet in &packets[..8] { connection.send_result(packet.clone()).unwrap(); }
+        let packets: Vec<String> = (0..24)
+            .map(|index| {
+                format!(
+                    "42/ws,[\"{}\",{{\"fixture_sequence\":{index}}}]",
+                    if index == 0 {
+                        "browser_bridge_control_result"
+                    } else {
+                        "browser_bridge_event"
+                    },
+                )
+            })
+            .collect();
+        for packet in &packets[..8] {
+            connection.send_result(packet.clone()).unwrap();
+        }
         let remaining = packets[8..].to_vec();
         let (finished, completion) = mpsc::channel();
         std::thread::scope(|scope| {
             scope.spawn(move || {
-                let result = remaining.into_iter().try_for_each(|packet| connection.send_result(packet));
+                let result = remaining
+                    .into_iter()
+                    .try_for_each(|packet| connection.send_result(packet));
                 finished.send(result).unwrap();
             });
             // The worker deliberately has not drained any of its eight slots.
             // The ninth valid packet must wait, not terminate the native port.
-            assert_eq!(completion.recv_timeout(Duration::from_millis(30)), Err(mpsc::RecvTimeoutError::Timeout));
+            assert_eq!(
+                completion.recv_timeout(Duration::from_millis(30)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            );
             for packet in packets {
-                assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).unwrap(), packet);
+                assert_eq!(
+                    receiver.recv_timeout(Duration::from_secs(2)).unwrap(),
+                    packet
+                );
             }
-            assert_eq!(completion.recv_timeout(Duration::from_secs(2)).unwrap(), Ok(()));
+            assert_eq!(
+                completion.recv_timeout(Duration::from_secs(2)).unwrap(),
+                Ok(())
+            );
         });
     }
 
@@ -1254,15 +1288,25 @@ mod tests {
             let deadline = Arc::clone(&connection.result_deadline);
             let (finished, completion) = mpsc::channel();
             std::thread::scope(|scope| {
-                scope.spawn(move || finished.send(connection.send_result("second".into())).unwrap());
-                assert_eq!(completion.recv_timeout(Duration::from_millis(15)), Err(mpsc::RecvTimeoutError::Timeout));
+                scope.spawn(move || {
+                    finished
+                        .send(connection.send_result("second".into()))
+                        .unwrap()
+                });
+                assert_eq!(
+                    completion.recv_timeout(Duration::from_millis(15)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                );
                 match cancellation {
                     0 => input_closed.store(true, Ordering::Release),
                     1 => stop.store(true, Ordering::Release),
                     2 => status.store(ConnectionStatus::Failed as u8, Ordering::Release),
                     _ => *deadline.lock().unwrap() = Instant::now(),
                 }
-                assert_eq!(completion.recv_timeout(Duration::from_millis(200)).unwrap(), Err(()));
+                assert_eq!(
+                    completion.recv_timeout(Duration::from_millis(200)).unwrap(),
+                    Err(())
+                );
             });
             assert_eq!(receiver.recv().unwrap(), "first");
             assert!(receiver.try_recv().is_err());
@@ -1279,21 +1323,38 @@ mod tests {
     #[test]
     fn command_backpressure_preserves_burst_fifo_and_bounded_queue() {
         let (sender, receiver) = mpsc::sync_channel(8);
-        for value in 0..8 { sender.try_send(value).unwrap(); }
-        assert!(matches!(sender.try_send(8), Err(mpsc::TrySendError::Full(8))));
+        for value in 0..8 {
+            sender.try_send(value).unwrap();
+        }
+        assert!(matches!(
+            sender.try_send(8),
+            Err(mpsc::TrySendError::Full(8))
+        ));
         let stop = AtomicBool::new(false);
         std::thread::scope(|scope| {
             let producer = scope.spawn(|| {
                 for value in 8..32 {
-                    enqueue_command(&sender, value, &stop, Instant::now() + Duration::from_secs(5)).unwrap();
+                    enqueue_command(
+                        &sender,
+                        value,
+                        &stop,
+                        Instant::now() + Duration::from_secs(5),
+                    )
+                    .unwrap();
                 }
             });
             for expected in 0..32 {
-                assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).unwrap(), expected);
+                assert_eq!(
+                    receiver.recv_timeout(Duration::from_secs(2)).unwrap(),
+                    expected
+                );
             }
             producer.join().unwrap();
         });
-        assert!(matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
     }
 
     #[test]
@@ -1301,14 +1362,39 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(1);
         sender.try_send(1).unwrap();
         let stopped = AtomicBool::new(true);
-        assert_eq!(enqueue_command(&sender, 2, &stopped, Instant::now() + Duration::from_secs(1)), Err(ConnectError::Stopped));
+        assert_eq!(
+            enqueue_command(
+                &sender,
+                2,
+                &stopped,
+                Instant::now() + Duration::from_secs(1)
+            ),
+            Err(ConnectError::Stopped)
+        );
         let running = AtomicBool::new(false);
-        assert_eq!(enqueue_command(&sender, 2, &running, Instant::now()), Err(ConnectError::CommandBackpressure));
+        assert_eq!(
+            enqueue_command(&sender, 2, &running, Instant::now()),
+            Err(ConnectError::CommandBackpressure)
+        );
         assert_eq!(receiver.try_recv().unwrap(), 1);
-        assert!(matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         drop(receiver);
-        assert_eq!(enqueue_command(&sender, 2, &running, Instant::now() + Duration::from_secs(1)), Err(ConnectError::Stopped));
-        assert_eq!(ConnectError::CommandBackpressure.reason_code(), "CORE_COMMAND_BACKPRESSURE_EXPIRED");
+        assert_eq!(
+            enqueue_command(
+                &sender,
+                2,
+                &running,
+                Instant::now() + Duration::from_secs(1)
+            ),
+            Err(ConnectError::Stopped)
+        );
+        assert_eq!(
+            ConnectError::CommandBackpressure.reason_code(),
+            "CORE_COMMAND_BACKPRESSURE_EXPIRED"
+        );
     }
 
     fn challenge(base: &str, expires: u64) -> Vec<u8> {
@@ -1830,7 +1916,26 @@ mod development_tests {
             Some("a0.browser-bridge.development-ws-wire.v1")
         );
         let reconcile = format!("42/ws,{}", fixture["provisional_reconcile_packet"].encode());
-        let hello_ack = format!("43/ws,1{}", fixture["hello_ack_args"].encode());
+        let mut hello_ack = fixture["hello_ack_args"].clone();
+        let Value::Array(args) = &mut hello_ack else {
+            panic!()
+        };
+        let Value::Object(envelope) = &mut args[0] else {
+            panic!()
+        };
+        let Value::Array(results) = envelope.get_mut("results").unwrap() else {
+            panic!()
+        };
+        let Value::Object(result) = &mut results[0] else {
+            panic!()
+        };
+        let Value::Object(data) = result.get_mut("data").unwrap() else {
+            panic!()
+        };
+        crate::development_session::fixture_current_companion(
+            data.get_mut("host_browser").unwrap(),
+        );
+        let hello_ack = format!("43/ws,1{}", hello_ack.encode());
         let mut wire = Wire::new(
             Zeroizing::new("40/ws,{}".into()),
             60_000,

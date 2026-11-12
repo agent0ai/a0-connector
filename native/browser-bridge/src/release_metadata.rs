@@ -59,6 +59,7 @@ const fn literal_bytes<const N: usize>(text: &str) -> [u8; N] {
 #[used]
 #[cfg_attr(target_os = "macos", link_section = "__TEXT,__a0_release")]
 #[cfg_attr(target_os = "linux", link_section = ".a0_release")]
+#[cfg_attr(target_os = "windows", link_section = ".a0meta")]
 static EMBEDDED_METADATA: [u8; JSON.len()] = literal_bytes(JSON);
 
 pub fn as_json() -> &'static str {

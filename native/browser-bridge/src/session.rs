@@ -202,7 +202,9 @@ impl RelaySession {
     #[cfg(test)]
     pub(crate) fn fixture(caller_origin: &str, started_at_ms: u64) -> Self {
         let invocation = NativeInvocation::fixture(caller_origin);
-        Self::with_server_state(&invocation, started_at_ms, true)
+        let mut session = Self::with_server_state(&invocation, started_at_ms, true);
+        session.transport_profile = BrowserTransportProfile::fixture_production();
+        session
     }
 
     pub const fn state(&self) -> SessionState {
@@ -1095,31 +1097,14 @@ impl RelaySession {
                 .encode(),
             }]);
         }
-        #[cfg(feature = "local-development")]
-        {
-            // This starts only the separately domain-bound development
-            // challenge and hello-only worker. It cannot construct a runtime
-            // route, negotiate capabilities, or forward application traffic.
-            self.pending_native_hello = Some(PendingNativeHello {
-                id,
-                connection_id,
-                pairing,
-            });
-            self.core_connect_requested = true;
-            self.state = SessionState::Authenticating;
-            Ok(Vec::new())
-        }
-        #[cfg(not(feature = "local-development"))]
-        {
-            self.pending_native_hello = Some(PendingNativeHello {
-                id,
-                connection_id,
-                pairing,
-            });
-            self.core_connect_requested = true;
-            self.state = SessionState::Authenticating;
-            Ok(Vec::new())
-        }
+        self.pending_native_hello = Some(PendingNativeHello {
+            id,
+            connection_id,
+            pairing,
+        });
+        self.core_connect_requested = true;
+        self.state = SessionState::Authenticating;
+        Ok(Vec::new())
     }
 
     fn receive_pairing_only(
@@ -2080,6 +2065,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "local-development"))]
     #[test]
     fn unpaired_session_keeps_onboarding_reachable_and_privileged_relay_closed() {
         let invocation = NativeInvocation::fixture(ORIGIN);
@@ -2131,7 +2117,7 @@ mod tests {
         assert_eq!(session.pending_count(), 0);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(feature = "local-development")))]
     #[test]
     fn exact_core_attestation_promotes_and_exposes_only_the_bound_route() {
         let mut session = authenticating_session(ConnectionStatus::Ready, true);
@@ -2248,6 +2234,7 @@ mod tests {
         assert_eq!(session.pending_count(), 0);
     }
 
+    #[cfg(not(feature = "local-development"))]
     #[test]
     fn output_artifact_request_maps_only_for_an_exact_pending_operation() {
         let mut missing = ready_session();
@@ -2489,6 +2476,14 @@ mod development_session_tests {
                     (
                         "handlerId".into(),
                         Value::String(crate::development_session::DEVELOPMENT_HANDLER_ID.into()),
+                    ),
+                    (
+                        "eventId".into(),
+                        Value::String("event-reconcile-dev-1".into())
+                    ),
+                    (
+                        "ts".into(),
+                        Value::String("2026-09-05T12:00:00.000Z".into())
                     ),
                     (
                         "correlationId".into(),

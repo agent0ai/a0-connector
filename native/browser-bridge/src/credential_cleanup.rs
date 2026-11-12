@@ -9,6 +9,9 @@ use super::*;
 #[cfg(target_os = "macos")]
 #[path = "credential_cleanup_macos.rs"]
 mod macos;
+#[cfg(target_os = "windows")]
+#[path = "credential_cleanup_windows.rs"]
+mod windows;
 
 const MAX_ACCOUNTS: usize = 258; // 128 profiles + rotations + installation + legacy.
 const PREFIX: &str = "profile-credential-v2-";
@@ -38,7 +41,11 @@ impl Inventory {
             }
         }
         Ok(Self {
-            source: "macos_keychain_attributes",
+            source: if cfg!(target_os = "windows") {
+                "windows_credential_attributes"
+            } else {
+                "macos_keychain_attributes"
+            },
             accounts: unique.into_iter().collect(),
         })
     }
@@ -64,7 +71,11 @@ pub(super) fn prepare(root: &Path, state_bytes: &[u8]) -> Result<(), InstallTran
     let inventory = macos::accounts()
         .and_then(Inventory::from_accounts)
         .unwrap_or_else(|_| Inventory::unavailable());
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    let inventory = windows::accounts()
+        .and_then(Inventory::from_accounts)
+        .unwrap_or_else(|_| Inventory::unavailable());
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let inventory = Inventory::unavailable();
     persist(root, state_bytes, inventory)
 }
@@ -128,7 +139,10 @@ fn validate_pending(bytes: &[u8]) -> Result<(), InstallTransactionError> {
     if text(object, "contract")? != CONTRACT
         || number(object, "schema_version")? != 1
         || !valid_sha256(text(object, "install_state_sha256")?)
-        || !matches!(source, "unavailable" | "macos_keychain_attributes")
+        || !matches!(
+            source,
+            "unavailable" | "macos_keychain_attributes" | "windows_credential_attributes"
+        )
         || text(object, "revocation")? != "requires_interactive_profile_receipt"
         || object.get("credential_deletion_authorized") != Some(&Value::Bool(false))
         || object.get("registration_retirement_authorized") != Some(&Value::Bool(false))
