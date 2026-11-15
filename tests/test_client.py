@@ -646,6 +646,124 @@ def test_load_config_reads_computer_use_defaults_and_overrides(
     assert env_config.computer_use_restore_token == "env-token"
 
 
+def _isolate_remote_tree_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Point config at an empty dotenv and clear the remote tree env keys."""
+    import agent_zero_cli.config as config_mod
+
+    env_dir = tmp_path / ".agent-zero"
+    env_dir.mkdir()
+    env_file = env_dir / ".env"
+    monkeypatch.setattr(config_mod, "_ENV_DIR", env_dir)
+    monkeypatch.setattr(config_mod, "_ENV_FILE", env_file)
+    for key in (
+        "AGENT_ZERO_REMOTE_TREE_MAX_DEPTH",
+        "AGENT_ZERO_REMOTE_TREE_MAX_FILES",
+        "AGENT_ZERO_REMOTE_TREE_MAX_FOLDERS",
+        "AGENT_ZERO_REMOTE_TREE_MAX_LINES",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_load_config_remote_tree_limits_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_remote_tree_env(tmp_path, monkeypatch)
+
+    config = load_config()
+
+    assert config.remote_tree_max_depth == 5
+    assert config.remote_tree_max_files == 20
+    assert config.remote_tree_max_folders == 20
+    assert config.remote_tree_max_lines == 250
+
+
+def test_load_config_remote_tree_limits_read_env_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_remote_tree_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_DEPTH", "9")
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_FILES", "75")
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_FOLDERS", "40")
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_LINES", "600")
+
+    config = load_config()
+
+    assert config.remote_tree_max_depth == 9
+    assert config.remote_tree_max_files == 75
+    assert config.remote_tree_max_folders == 40
+    assert config.remote_tree_max_lines == 600
+
+
+def test_load_config_remote_tree_limits_read_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_remote_tree_env(tmp_path, monkeypatch)
+    import agent_zero_cli.config as config_mod
+
+    env_file = config_mod._ENV_FILE
+    env_file.write_text(
+        "\n".join(
+            (
+                "AGENT_ZERO_REMOTE_TREE_MAX_DEPTH=7",
+                "AGENT_ZERO_REMOTE_TREE_MAX_FILES=60",
+                "AGENT_ZERO_REMOTE_TREE_MAX_FOLDERS=30",
+                "AGENT_ZERO_REMOTE_TREE_MAX_LINES=900",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = load_config()
+
+    assert config.remote_tree_max_depth == 7
+    assert config.remote_tree_max_files == 60
+    assert config.remote_tree_max_folders == 30
+    assert config.remote_tree_max_lines == 900
+
+
+def test_load_config_remote_tree_limits_preserve_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_remote_tree_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_DEPTH", "0")
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_FILES", "0")
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_FOLDERS", "0")
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_LINES", "0")
+
+    config = load_config()
+
+    assert config.remote_tree_max_depth == 0
+    assert config.remote_tree_max_files == 0
+    assert config.remote_tree_max_folders == 0
+    assert config.remote_tree_max_lines == 0
+
+
+def test_load_config_remote_tree_limits_fall_back_on_invalid_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_remote_tree_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_DEPTH", "not-a-number")
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_FILES", "")
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_FOLDERS", "-4")
+    monkeypatch.setenv("AGENT_ZERO_REMOTE_TREE_MAX_LINES", "-250")
+
+    config = load_config()
+
+    assert config.remote_tree_max_depth == 5
+    assert config.remote_tree_max_files == 20
+    assert config.remote_tree_max_folders == 20
+    assert config.remote_tree_max_lines == 250
+
+
 def test_save_computer_use_settings_persist_to_dotenv(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

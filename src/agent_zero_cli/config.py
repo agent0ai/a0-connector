@@ -25,7 +25,15 @@ _HOST_BROWSER_FAMILY_KEY = "AGENT_ZERO_HOST_BROWSER_FAMILY"
 _HOST_BROWSER_PROFILE_PATH_KEY = "AGENT_ZERO_HOST_BROWSER_PROFILE_PATH"
 _HOST_BROWSER_PROFILE_LABEL_KEY = "AGENT_ZERO_HOST_BROWSER_PROFILE_LABEL"
 _HOST_BROWSER_RELAUNCH_PREFERENCE_KEY = "AGENT_ZERO_HOST_BROWSER_RELAUNCH_PREFERENCE"
+_REMOTE_TREE_MAX_DEPTH_KEY = "AGENT_ZERO_REMOTE_TREE_MAX_DEPTH"
+_REMOTE_TREE_MAX_FILES_KEY = "AGENT_ZERO_REMOTE_TREE_MAX_FILES"
+_REMOTE_TREE_MAX_FOLDERS_KEY = "AGENT_ZERO_REMOTE_TREE_MAX_FOLDERS"
+_REMOTE_TREE_MAX_LINES_KEY = "AGENT_ZERO_REMOTE_TREE_MAX_LINES"
 _DEFAULT_COMPUTER_USE_TRUST_MODE = "allow"
+_DEFAULT_REMOTE_TREE_MAX_DEPTH = 5
+_DEFAULT_REMOTE_TREE_MAX_FILES = 20
+_DEFAULT_REMOTE_TREE_MAX_FOLDERS = 20
+_DEFAULT_REMOTE_TREE_MAX_LINES = 250
 _VALID_COMPUTER_USE_TRUST_MODES = {"persistent", "allow"}
 _VALID_HOST_BROWSER_RELAUNCH_PREFERENCES = {"ask", "manual"}
 
@@ -46,6 +54,30 @@ class CLIConfig:
     host_browser_profile_path: str = ""
     host_browser_profile_label: str = ""
     host_browser_relaunch_preference: str = "ask"
+    remote_tree_max_depth: int = _DEFAULT_REMOTE_TREE_MAX_DEPTH
+    remote_tree_max_files: int = _DEFAULT_REMOTE_TREE_MAX_FILES
+    remote_tree_max_folders: int = _DEFAULT_REMOTE_TREE_MAX_FOLDERS
+    remote_tree_max_lines: int = _DEFAULT_REMOTE_TREE_MAX_LINES
+
+
+def _coerce_int(value: object, default: int) -> int:
+    """Coerce an env value to a non-negative int, falling back to the default."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value if value >= 0 else default
+    raw = str(value).strip()
+    if not raw:
+        return default
+    try:
+        parsed = int(raw, 10)
+    except (TypeError, ValueError):
+        return default
+    if parsed < 0:
+        return default
+    return parsed
 
 
 def _read_dotenv() -> dict[str, str]:
@@ -420,6 +452,22 @@ def load_config() -> CLIConfig:
             dotenv.get(_HOST_BROWSER_RELAUNCH_PREFERENCE_KEY, "ask"),
         )
     )
+    remote_tree_max_depth = _coerce_int(
+        os.environ.get(_REMOTE_TREE_MAX_DEPTH_KEY, dotenv.get(_REMOTE_TREE_MAX_DEPTH_KEY, "")),
+        _DEFAULT_REMOTE_TREE_MAX_DEPTH,
+    )
+    remote_tree_max_files = _coerce_int(
+        os.environ.get(_REMOTE_TREE_MAX_FILES_KEY, dotenv.get(_REMOTE_TREE_MAX_FILES_KEY, "")),
+        _DEFAULT_REMOTE_TREE_MAX_FILES,
+    )
+    remote_tree_max_folders = _coerce_int(
+        os.environ.get(_REMOTE_TREE_MAX_FOLDERS_KEY, dotenv.get(_REMOTE_TREE_MAX_FOLDERS_KEY, "")),
+        _DEFAULT_REMOTE_TREE_MAX_FOLDERS,
+    )
+    remote_tree_max_lines = _coerce_int(
+        os.environ.get(_REMOTE_TREE_MAX_LINES_KEY, dotenv.get(_REMOTE_TREE_MAX_LINES_KEY, "")),
+        _DEFAULT_REMOTE_TREE_MAX_LINES,
+    )
 
     return CLIConfig(
         instance_url=instance_url,
@@ -436,4 +484,8 @@ def load_config() -> CLIConfig:
         host_browser_profile_path=host_browser_profile_path,
         host_browser_profile_label=host_browser_profile_label,
         host_browser_relaunch_preference=host_browser_relaunch_preference,
+        remote_tree_max_depth=remote_tree_max_depth,
+        remote_tree_max_files=remote_tree_max_files,
+        remote_tree_max_folders=remote_tree_max_folders,
+        remote_tree_max_lines=remote_tree_max_lines,
     )
