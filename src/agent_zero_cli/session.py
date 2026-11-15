@@ -148,6 +148,10 @@ class ConnectorSession:
         self.remote_files = RemoteFileUtility(
             scan_root=str(self.workspace),
             allow_writes=self.remote_file_write_enabled,
+            max_depth=self.config.remote_tree_max_depth,
+            max_files=self.config.remote_tree_max_files,
+            max_folders=self.config.remote_tree_max_folders,
+            max_lines=self.config.remote_tree_max_lines,
         )
         self.remote_exec = RemoteExecManager(
             cwd=self.remote_files.scan_root,

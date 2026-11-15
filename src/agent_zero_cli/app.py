@@ -235,6 +235,10 @@ class AgentZeroCLI(App):
         self._remote_files = RemoteFileUtility(
             scan_root=os.getcwd(),
             allow_writes=self._remote_file_write_enabled,
+            max_depth=self.config.remote_tree_max_depth,
+            max_files=self.config.remote_tree_max_files,
+            max_folders=self.config.remote_tree_max_folders,
+            max_lines=self.config.remote_tree_max_lines,
         )
         self._python_tty = PythonTTYManager(
             cwd=self._remote_files.scan_root,

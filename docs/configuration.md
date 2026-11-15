@@ -15,6 +15,12 @@ Open `/models` (or click the model summary) to edit the active preset. Main and 
 | `A0_CLI_IMAGE_MODE` | Interactive terminal image renderer: `auto`, `tgp`, `sixel`, `halfcell`, or `off` | `auto` |
 | `A0_TERMINAL_NOTIFY` | Terminal-native notification when an active run becomes ready for input. Set to `0`, `false`, `no`, or `off` to disable. | enabled for terminal output |
 | `A0_UPDATE_CHECK` | Startup check for a newer CLI release. Set to `0`, `false`, `no`, or `off` to disable. | enabled |
+| `AGENT_ZERO_REMOTE_TREE_MAX_DEPTH` | Directory depth limit for the host file tree injected into the agent prompt | `5` |
+| `AGENT_ZERO_REMOTE_TREE_MAX_FILES` | Files listed per directory in the host file tree | `20` |
+| `AGENT_ZERO_REMOTE_TREE_MAX_FOLDERS` | Folders listed per directory in the host file tree | `20` |
+| `AGENT_ZERO_REMOTE_TREE_MAX_LINES` | Total line limit for the host file tree | `250` |
+
+A value of `0` means unlimited for the corresponding limit. Unset, blank, non-numeric, or negative values fall back to the default.
 
 ## Resolution order
 
