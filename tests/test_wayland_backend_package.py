@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -618,6 +619,10 @@ def test_wayland_detection_and_support_reason_are_additive_and_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(wayland_detection, "SYSTEM_PYTHON", sys.executable)
+    monkeypatch.setattr(
+        wayland_detection.subprocess, "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""),
+    )
 
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
     assert wayland_detection.detect_wayland_support() is True
@@ -630,6 +635,56 @@ def test_wayland_detection_and_support_reason_are_additive_and_explicit(
     monkeypatch.setattr(wayland_detection, "SYSTEM_PYTHON", str(Path(sys.executable).with_name("definitely-missing-python")))
     assert wayland_detection.detect_wayland_support() is False
     assert "Required system Python interpreter not found" in wayland_detection.wayland_support_reason()
+
+
+@pytest.mark.parametrize("failure", ["imports", "timeout", "spawn"])
+def test_wayland_detection_rejects_unusable_system_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setattr(wayland_detection, "SYSTEM_PYTHON", sys.executable)
+
+    def probe(args, **kwargs):
+        assert args[:3] == [sys.executable, "-I", "-c"]
+        assert kwargs["timeout"] <= 5
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        if failure == "spawn":
+            raise OSError("cannot start interpreter")
+        return subprocess.CompletedProcess(args, 1, "", "ModuleNotFoundError: No module named 'dbus'\n")
+
+    monkeypatch.setattr(wayland_detection.subprocess, "run", probe)
+    assert wayland_detection.detect_wayland_support() is False
+    reason = wayland_detection.wayland_support_reason()
+    assert "system Python" in reason
+    assert "README" in reason
+    if failure == "imports":
+        assert "No module named 'dbus'" in reason
+
+
+def test_standalone_wayland_helper_prefers_system_libraries(tmp_path: Path) -> None:
+    system_libs = tmp_path / "system-libs"
+    system_libs.mkdir()
+    (system_libs / "PIL.py").write_text("origin = 'system Pillow'\n")
+    (system_libs / "dbus.py").write_text(
+        "from PIL import origin\nprint(origin)\nraise SystemExit(0)\n"
+    )
+    venv_libs = tmp_path / "venv-site-packages"
+    package = venv_libs / "a0_computer_use_wayland"
+    package.mkdir(parents=True)
+    helper = package / "computer_use_helper.py"
+    helper.write_bytes(WAYLAND_HELPER_FILES[1].read_bytes())
+    (venv_libs / "PIL.py").write_text("raise ImportError('wrong Python ABI')\n")
+
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c",
+         "import runpy, sys; sys.path.append(sys.argv[1]); runpy.run_path(sys.argv[2], run_name='__main__')",
+         str(system_libs), str(helper)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "system Pillow"
 
 
 def test_wayland_shortcut_dispatch_uses_evdev_keycodes_for_ctrl_t(

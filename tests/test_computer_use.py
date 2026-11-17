@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -1482,10 +1484,12 @@ async def test_helper_request_times_out_when_helper_stops_reading_stdin(
     assert session.process is None
 
 
+@pytest.mark.parametrize("interpreter_strategy", ["system_python", "current_python"])
 async def test_ensure_helper_uses_expanded_stdio_limit_for_large_capture_payloads(
     _temp_env: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    interpreter_strategy: str,
 ) -> None:
     package_src = tmp_path / "package" / "src"
     helper_dir = package_src / "a0_computer_use_wayland"
@@ -1496,6 +1500,7 @@ async def test_ensure_helper_uses_expanded_stdio_limit_for_large_capture_payload
         enabled=True,
         backend_selection=_selection(helper_target=str(helper_script)),
     )
+    manager._backend_spec = replace(manager._backend_spec, interpreter_strategy=interpreter_strategy)
     session = _HelperSession(context_id="ctx-1")
     calls: list[dict[str, object]] = []
 
@@ -1524,7 +1529,13 @@ async def test_ensure_helper_uses_expanded_stdio_limit_for_large_capture_payload
     assert calls[0]["kwargs"]["limit"] == _HELPER_STDIO_LIMIT
     helper_env = calls[0]["kwargs"]["env"]
     assert isinstance(helper_env, dict)
-    pythonpath = str(helper_env["PYTHONPATH"]).split(computer_use_mod.os.pathsep)
+    command = calls[0]["args"]
+    if interpreter_strategy == "system_python":
+        assert command[1:3] == ("-I", "-c")
+        pythonpath = json.loads(command[4])
+    else:
+        assert command == (sys.executable, str(helper_script), "--stdio")
+        pythonpath = helper_env["PYTHONPATH"].split(computer_use_mod.os.pathsep)
     assert str(Path(computer_use_mod.__file__).resolve().parents[1]) in pythonpath
     assert str(package_src) in pythonpath
 
@@ -1546,12 +1557,107 @@ async def test_helper_stderr_is_forwarded_when_debug_is_enabled(
         },
     )()
 
-    await manager._drain_stderr(process)
+    await manager._drain_stderr(_HelperSession(context_id="ctx-1", process=process))
 
     stderr = capsys.readouterr().err
     assert "helper.stderr" in stderr
     assert "waiting for permissions" in stderr
     assert "4242" in stderr
+
+
+def test_unusable_backend_advertises_no_desktop_features(_temp_env: Path) -> None:
+    manager = _manager(
+        enabled=True,
+        backend_selection=_selection(detected=False),
+        supported=None,
+    )
+    metadata = manager.hello_metadata()
+    assert metadata["supported"] is False
+    assert metadata["enabled"] is False
+    assert metadata["features"] == []
+    assert metadata["capabilities"]["capture"]["screenshot"] is False
+    assert metadata["capabilities"]["windows"]["list"] is False
+
+
+async def test_system_helper_keeps_native_modules_ahead_of_cli_packages(
+    _temp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package_root = tmp_path / "site-packages"
+    helper_dir = package_root / "test_helper"
+    helper_dir.mkdir(parents=True)
+    (helper_dir / "__init__.py").write_text("")
+    (package_root / "struct.py").write_text("raise ImportError('wrong Python ABI')\n")
+    (package_root / "helper_dependency.py").write_text("value = 'available'\n")
+    helper_script = helper_dir / "computer_use_helper.py"
+    helper_script.write_text(
+        "import json, struct, sys\n"
+        "import helper_dependency\n"
+        "request = json.loads(sys.stdin.readline())\n"
+        "print(json.dumps({'ok': True, 'request_id': request['request_id'], "
+        "'result': {'dependency': helper_dependency.value, 'size': struct.calcsize('I')}}))\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(package_root))
+    monkeypatch.setenv("PYTHONHOME", str(tmp_path / "invalid-python-home"))
+    monkeypatch.setattr(computer_use_mod, "HELPER_PYTHON", sys.executable)
+    manager = _manager(enabled=True, backend_selection=_selection(helper_target=str(helper_script)))
+    session = _HelperSession(context_id="ctx-abi")
+    try:
+        result = await manager._helper_request(session, {"action": "status"})
+        assert result["ok"] is True
+        assert result["result"] == {"dependency": "available", "size": 4}
+    finally:
+        await manager._close_helper_session(session)
+
+
+async def test_helper_startup_failure_includes_bounded_stderr_without_debug(
+    _temp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("A0_COMPUTER_USE_DEBUG", raising=False)
+    monkeypatch.setattr(computer_use_mod, "HELPER_PYTHON", sys.executable)
+    helper_script = tmp_path / "broken_helper.py"
+    helper_script.write_text(
+        "import sys\n"
+        "sys.stderr.write('é' * 20000 + '\\n')\n"
+        "raise ImportError('missing desktop dependency')\n"
+    )
+    manager = _manager(enabled=True, backend_selection=_selection(helper_target=str(helper_script)))
+    session = _HelperSession(context_id="ctx-error")
+    try:
+        with pytest.raises(RuntimeError) as error:
+            await manager._helper_request(session, {"action": "status"})
+        message = str(error.value)
+        assert "ImportError: missing desktop dependency" in message
+        assert str(helper_script) in message
+        assert len(message) < 5000
+        assert len(session.stderr_tail) <= 4096
+    finally:
+        await manager._close_helper_session(session)
+
+
+@pytest.mark.parametrize("failure", ["already_exited", "broken_stdin", "closed_stdout", "empty_stderr"])
+async def test_helper_exit_diagnostics_cover_each_io_failure(_temp_env: Path, failure: str) -> None:
+    manager = _manager(enabled=True)
+    process = _FakeHelperProcess([])
+    if failure == "already_exited":
+        process.returncode = 1
+    elif failure == "broken_stdin":
+        process.stdin.drain = AsyncMock(side_effect=BrokenPipeError())
+    session = _HelperSession(context_id="ctx-error", process=process)
+    if failure != "empty_stderr":
+        session.stderr_tail = b"ImportError: native dependency is unavailable\n"
+    manager._ensure_helper = AsyncMock(return_value=session)
+
+    with pytest.raises(RuntimeError) as error:
+        await manager._helper_request(session, {"action": "status"})
+    message = str(error.value)
+    if failure == "empty_stderr":
+        assert "A0_COMPUTER_USE_DEBUG_LOG" in message
+    else:
+        assert "ImportError: native dependency is unavailable" in message
 
 
 async def test_move_click_scroll_key_type_normalize_payloads(

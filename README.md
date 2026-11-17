@@ -45,6 +45,8 @@ Set `A0_CLI_IMAGE_MODE` to `auto` (default), `tgp`, `sixel`, `halfcell`, or `off
 
 Computer-use backends are embedded in the `a0` wheel, so the CLI and local computer-use support install and update together. Linux host computer use uses the Wayland portal backend; X11/Xpra control belongs to Agent Zero's internal Docker Desktop tooling rather than the remote host connector.
 
+Wayland Computer Use also needs native libraries installed for `/usr/bin/python3`, including DBus, GI, GTK, GStreamer, Pillow, and AT-SPI. See the [Wayland system requirements](packages/a0-computer-use-wayland/README.md) for distro package commands and startup diagnostics.
+
 ## Manual install
 
 If you already use `uv`, the installer and update flow resolve the latest published GitHub release at runtime. They default to a managed CPython 3.12 tool environment across macOS, Linux, and Windows, and install with the dependency locks committed to the same A0 release. `uv` can download the managed Python automatically without requiring `git` to be installed:

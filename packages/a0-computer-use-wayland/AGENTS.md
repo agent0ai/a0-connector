@@ -20,6 +20,7 @@
 - If a top-level XWayland window rejects AT-SPI `grab_focus`, use its unambiguous PID/title match through `wmctrl` and still require the same AT-SPI node to report active or focused before claiming success.
 - Never choose an arbitrary AT-SPI action by index. Press only a recognized press/click action, and require the focus operation for application or window activation.
 - Keep DBus, GI, GStreamer, Pillow, and AT-SPI imports inside this package/helper path, not in shared CLI import paths.
+- Detection probes native imports with isolated system Python and a three-second deadline before reporting support. It does not request portal approval. The helper appends its package root after system libraries; never prepend the CLI environment's native wheels. `README.md` owns distro system requirements and diagnostics.
 
 ## Work Guidance
 

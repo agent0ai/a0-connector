@@ -19,7 +19,7 @@ if __package__ in {None, ""}:
     package_dir = Path(__file__).resolve().parent
     parent_dir = package_dir.parent
     if str(parent_dir) not in sys.path:
-        sys.path.insert(0, str(parent_dir))
+        sys.path.append(str(parent_dir))
 
 import dbus
 from dbus.mainloop.glib import DBusGMainLoop

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from agent_zero_cli.computer_use_backend import (
@@ -8,23 +7,19 @@ from agent_zero_cli.computer_use_backend import (
     register_builtin_backend_spec,
 )
 
-_HELPER_PYTHON = "/usr/bin/python3"
 _HELPER_TARGET = str(Path(__file__).with_name("computer_use_helper.py"))
 
 
 def _detect_wayland_support() -> bool:
-    if not Path(_HELPER_PYTHON).exists():
-        return False
-    return (os.environ.get("XDG_SESSION_TYPE") or "").strip().lower() == "wayland"
+    from a0_computer_use_wayland.detection import detect_wayland_support
+
+    return detect_wayland_support()
 
 
 def _support_reason() -> str:
-    if not Path(_HELPER_PYTHON).exists():
-        return f"Required system Python interpreter not found at {_HELPER_PYTHON}."
-    session_type = (os.environ.get("XDG_SESSION_TYPE") or "").strip().lower()
-    if session_type != "wayland":
-        return f"XDG_SESSION_TYPE={session_type or 'unset'} is not supported by the Wayland portal backend."
-    return "Wayland portal backend is available."
+    from a0_computer_use_wayland.detection import wayland_support_reason
+
+    return wayland_support_reason()
 
 
 WAYLAND_BACKEND_SPEC = register_builtin_backend_spec(

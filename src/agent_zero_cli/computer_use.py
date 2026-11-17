@@ -408,12 +408,17 @@ def _backend_metadata_from_selection(selection: ComputerUseBackendSelection) -> 
             ),
             "support_reason": selection.support_reason,
         }
+    features = spec.features if selection.supported else ()
     return {
         "backend_id": spec.backend_id,
         "backend_family": spec.backend_family,
-        "features": list(spec.features),
+        "features": list(features),
         "contract_version": COMPUTER_USE_CONTRACT_VERSION,
-        "capabilities": spec.capabilities(),
+        "capabilities": computer_use_capabilities_from_features(
+            backend_id=spec.backend_id,
+            backend_family=spec.backend_family,
+            features=features,
+        ),
         "support_reason": selection.support_reason,
     }
 
@@ -423,6 +428,7 @@ class _HelperSession:
     context_id: str
     process: asyncio.subprocess.Process | None = None
     stderr_task: asyncio.Task[None] | None = None
+    stderr_tail: bytes = b""
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     session_id: str = ""
     active: bool = False
@@ -1380,6 +1386,8 @@ class ComputerUseManager:
                 status=session.status,
             )
             return session
+        if process is not None:
+            await self._close_helper_session(session)
 
         helper_target = str(getattr(self._backend_spec, "helper_target", "") or "").strip()
         if not helper_target:
@@ -1395,10 +1403,20 @@ class ComputerUseManager:
         pythonpath_entries = [str(Path(__file__).resolve().parents[1])]
         if (helper_path.parent / "__init__.py").exists():
             pythonpath_entries.append(str(helper_path.parent.parent))
-        existing_pythonpath = helper_env.get("PYTHONPATH", "")
-        if existing_pythonpath:
-            pythonpath_entries.extend(part for part in existing_pythonpath.split(os.pathsep) if part)
-        helper_env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(pythonpath_entries))
+        helper_command = [helper_python, helper_target, "--stdio"]
+        if interpreter_strategy == "current_python":
+            existing_pythonpath = helper_env.get("PYTHONPATH", "")
+            if existing_pythonpath:
+                pythonpath_entries.extend(part for part in existing_pythonpath.split(os.pathsep) if part)
+            helper_env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(pythonpath_entries))
+        else:
+            # System extensions must win over wheels built for the CLI's Python.
+            helper_command = [
+                helper_python, "-I", "-c",
+                "import json, runpy, sys; sys.path.extend(json.loads(sys.argv[1])); "
+                "sys.argv = sys.argv[2:]; runpy.run_path(sys.argv[0], run_name='__main__')",
+                json.dumps(pythonpath_entries), helper_target, "--stdio",
+            ]
 
         self._debug(
             "helper.launch",
@@ -1408,9 +1426,7 @@ class ComputerUseManager:
             interpreter_strategy=interpreter_strategy or "default",
         )
         process = await asyncio.create_subprocess_exec(
-            helper_python,
-            helper_target,
-            "--stdio",
+            *helper_command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -1418,26 +1434,39 @@ class ComputerUseManager:
             env=helper_env,
         )
         session.process = process
-        session.stderr_task = asyncio.create_task(self._drain_stderr(process))
+        session.stderr_tail = b""
+        session.stderr_task = asyncio.create_task(self._drain_stderr(session))
         session.active = False
         session.status = "idle"
         session.session_id = ""
         self._debug("helper.launch.ok", context_id=session.context_id, pid=getattr(process, "pid", None))
         return session
 
-    async def _drain_stderr(self, process: asyncio.subprocess.Process) -> None:
-        if process.stderr is None:
+    async def _drain_stderr(self, session: _HelperSession) -> None:
+        process = session.process
+        if process is None or process.stderr is None:
             return
         try:
             while True:
                 line = await process.stderr.readline()
                 if not line:
                     return
+                session.stderr_tail = (session.stderr_tail + line)[-4096:]
                 text = line.decode("utf-8", errors="replace").rstrip()
                 if text:
                     self._debug("helper.stderr", line=text, pid=getattr(process, "pid", None))
         except Exception:
             return
+
+    async def _helper_exit_error(self, session: _HelperSession) -> RuntimeError:
+        if session.stderr_task is not None:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(session.stderr_task), timeout=0.2)
+        helper_target = getattr(self._backend_spec, "helper_target", "") or _helper_script_path()
+        detail = session.stderr_tail.decode("utf-8", errors="replace").strip() or (
+            "Set A0_COMPUTER_USE_DEBUG=1 and A0_COMPUTER_USE_DEBUG_LOG to capture diagnostics."
+        )
+        return RuntimeError(f"computer use helper exited ({helper_target}):\n{detail}")
 
     async def _helper_request(self, session: _HelperSession, request: dict[str, Any]) -> dict[str, Any]:
         await self._ensure_helper(session)
@@ -1445,7 +1474,7 @@ class ComputerUseManager:
         if process is None or process.stdin is None or process.stdout is None:
             raise RuntimeError("computer use helper is unavailable")
         if process.returncode is not None:
-            raise RuntimeError("computer use helper exited unexpectedly")
+            raise await self._helper_exit_error(session)
 
         payload = dict(request)
         payload.setdefault("request_id", uuid.uuid4().hex)
@@ -1461,11 +1490,14 @@ class ComputerUseManager:
         deadline = started_at + response_timeout
 
         async with session.lock:
-            process.stdin.write((json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8"))
-            _drained, timed_out_io_task = await _await_helper_io(
-                process.stdin.drain(),
-                timeout=deadline - time.monotonic(),
-            )
+            try:
+                process.stdin.write((json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8"))
+                _drained, timed_out_io_task = await _await_helper_io(
+                    process.stdin.drain(),
+                    timeout=deadline - time.monotonic(),
+                )
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                raise await self._helper_exit_error(session) from exc
             if timed_out_io_task is not None:
                 response = _helper_timeout_response(
                     payload,
@@ -1488,7 +1520,7 @@ class ComputerUseManager:
                         close_timed_out_helper = True
                         break
                     if not raw:
-                        raise RuntimeError("computer use helper closed its stdout")
+                        raise await self._helper_exit_error(session)
 
                     raw_text = raw.decode("utf-8", errors="replace").strip()
                     if not raw_text:
