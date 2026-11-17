@@ -225,6 +225,28 @@ def reset_fake_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config_mod, "_ENV_FILE", env_file)
 
 
+@pytest.mark.parametrize("limits", [(7, 31, 42, 900), (0, 0, 0, 0)])
+def test_session_remote_tree_config_sets_limits(
+    tmp_path: Path, limits: tuple[int, int, int, int],
+) -> None:
+    session = ConnectorSession(
+        CLIConfig(
+            remote_tree_max_depth=limits[0],
+            remote_tree_max_files=limits[1],
+            remote_tree_max_folders=limits[2],
+            remote_tree_max_lines=limits[3],
+        ),
+        workspace=tmp_path,
+    )
+
+    assert (
+        session.remote_files.max_depth,
+        session.remote_files.max_files,
+        session.remote_files.max_folders,
+        session.remote_files.max_lines,
+    ) == limits
+
+
 async def test_session_connects_and_advertises_headless_metadata(tmp_path: Path) -> None:
     FakeClient.chat_metadata = {"ctx-default": {"last_message": "hello"}}
     observer = Observer()

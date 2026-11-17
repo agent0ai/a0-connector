@@ -716,6 +716,23 @@ def test_default_client_host_uses_splash_default() -> None:
     assert app.client.base_url == DEFAULT_HOST
 
 
+@pytest.mark.parametrize("limits", [(7, 31, 42, 900), (0, 0, 0, 0)])
+def test_remote_tree_config_sets_startup_limits(limits: tuple[int, int, int, int]) -> None:
+    app = AgentZeroCLI(config=CLIConfig(
+        remote_tree_max_depth=limits[0],
+        remote_tree_max_files=limits[1],
+        remote_tree_max_folders=limits[2],
+        remote_tree_max_lines=limits[3],
+    ))
+
+    assert (
+        app._remote_files.max_depth,
+        app._remote_files.max_files,
+        app._remote_files.max_folders,
+        app._remote_files.max_lines,
+    ) == limits
+
+
 def test_remote_exec_config_sets_startup_default() -> None:
     app = AgentZeroCLI(config=CLIConfig(remote_exec_enabled=True))
 

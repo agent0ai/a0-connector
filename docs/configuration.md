@@ -15,6 +15,18 @@ Open `/models` (or click the model summary) to edit the active preset. Main and 
 | `A0_CLI_IMAGE_MODE` | Interactive terminal image renderer: `auto`, `tgp`, `sixel`, `halfcell`, or `off` | `auto` |
 | `A0_TERMINAL_NOTIFY` | Terminal-native notification when an active run becomes ready for input. Set to `0`, `false`, `no`, or `off` to disable. | enabled for terminal output |
 | `A0_UPDATE_CHECK` | Startup check for a newer CLI release. Set to `0`, `false`, `no`, or `off` to disable. | enabled |
+| `AGENT_ZERO_REMOTE_TREE_MAX_DEPTH` | Override the host file tree's directory depth limit | Instance setting; `5` on older Core |
+| `AGENT_ZERO_REMOTE_TREE_MAX_FILES` | Override files listed per directory in the host file tree | Instance setting; `20` on older Core |
+| `AGENT_ZERO_REMOTE_TREE_MAX_FOLDERS` | Override folders listed per directory in the host file tree | Instance setting; `20` on older Core |
+| `AGENT_ZERO_REMOTE_TREE_MAX_LINES` | Override the host file-tree entry line limit (excluding the root and final truncation marker) | Instance setting; `250` on older Core |
+
+The four remote-tree settings apply to the TUI, headless, ACP, and gateway sessions. In **Agent Zero → Settings → Agent → Working directory → Host workspace**, **Use container settings** defaults to on: the host tree follows the instance's current default-workdir limits. Turn it off to save separate host limits. This inherits the four limits only, not the container path, ignore rules, project overrides, or host access permissions.
+
+Compatible connectors receive limits at connection and refresh them with existing tree acknowledgements, normally within a minute after saving. Older connectors need an update to consume Web UI settings; new connectors retain 5/20/20/250 defaults with older Core.
+
+For an explicit host override, set a variable in the process environment or persist it in `~/.agent-zero/.env`, then restart the connector. Resolution is process environment, then `.env`, then instance settings, then builtin fallback. A present but blank, non-integer, or negative environment value overrides the `.env` entry by returning to inheritance. `0` removes the corresponding limit. Larger or unlimited trees increase scanning work and agent prompt size.
+
+For example, add `AGENT_ZERO_REMOTE_TREE_MAX_LINES=1000` to `~/.agent-zero/.env` to raise the total entry limit without editing installed files. The depth and per-directory limits still apply.
 
 ## Resolution order
 

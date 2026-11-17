@@ -333,6 +333,7 @@ async def publish_remote_tree_snapshot(app: AgentZeroCLI, *, force: bool = False
     if not app.connected:
         return
 
+    app._remote_files.set_tree_limits(getattr(app.client, "remote_tree_config", None))
     snapshot = app._remote_files.build_tree_snapshot()
     now = monotonic()
     if (
@@ -344,6 +345,9 @@ async def publish_remote_tree_snapshot(app: AgentZeroCLI, *, force: bool = False
 
     try:
         await app.client.send_remote_tree_update(snapshot.as_payload())
+        if app._remote_files.set_tree_limits(getattr(app.client, "remote_tree_config", None)):
+            snapshot = app._remote_files.build_tree_snapshot()
+            await app.client.send_remote_tree_update(snapshot.as_payload())
     except Exception:
         return
 

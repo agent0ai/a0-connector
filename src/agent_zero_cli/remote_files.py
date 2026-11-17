@@ -98,18 +98,32 @@ class RemoteFileUtility:
         *,
         scan_root: str,
         allow_writes: bool = True,
-        max_depth: int = 5,
-        max_files: int = 20,
-        max_folders: int = 20,
-        max_lines: int = 250,
+        max_depth: int | None = None,
+        max_files: int | None = None,
+        max_folders: int | None = None,
+        max_lines: int | None = None,
     ) -> None:
         self.scan_root = os.path.abspath(scan_root or os.getcwd())
         self._scan_root_real = os.path.normcase(os.path.realpath(self.scan_root))
         self.allow_writes = allow_writes
-        self.max_depth = max_depth
-        self.max_files = max_files
-        self.max_folders = max_folders
-        self.max_lines = max_lines
+        self._tree_limit_overrides = dict(
+            max_depth=max_depth, max_files=max_files, max_folders=max_folders, max_lines=max_lines,
+        )
+        self.set_tree_limits(None)
+
+    def set_tree_limits(self, limits: object) -> bool:
+        """Apply instance limits while preserving explicit host overrides."""
+        limits = limits if isinstance(limits, dict) else {}
+        changed = False
+        for key, default in (("max_depth", 5), ("max_files", 20), ("max_folders", 20), ("max_lines", 250)):
+            value = self._tree_limit_overrides[key]
+            if value is None:
+                value = limits.get(key, default)
+            if type(value) is not int or value < 0:
+                value = default
+            changed |= getattr(self, key, None) != value
+            setattr(self, key, value)
+        return changed
 
     def set_write_enabled(self, enabled: bool) -> None:
         self.allow_writes = enabled

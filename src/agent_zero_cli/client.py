@@ -318,6 +318,7 @@ class A0Client:
         self._op_result_notification_tasks: set[asyncio.Task[None]] = set()
         self.peer_ws_max_payload_bytes = _peer_ws_max_payload_bytes(None)
         self.peer_transfer_protocol = 0
+        self.remote_tree_config: dict[str, Any] = {}
         self._incoming_transfers: dict[str, _IncomingTransfer] = {}
         self._outgoing_transfers: dict[str, _OutgoingTransfer] = {}
 
@@ -1685,6 +1686,8 @@ class A0Client:
             )
         else:
             self.peer_transfer_protocol = 0
+        tree_config = result.get("remote_tree_config")
+        self.remote_tree_config = tree_config if isinstance(tree_config, dict) else {}
         return result
 
     async def subscribe_context(
@@ -1706,7 +1709,11 @@ class A0Client:
         )
 
     async def send_remote_tree_update(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return await self._call(_EVENT_REMOTE_TREE_UPDATE, payload)
+        result = await self._call(_EVENT_REMOTE_TREE_UPDATE, payload)
+        tree_config = result.get("remote_tree_config")
+        if isinstance(tree_config, dict):
+            self.remote_tree_config = tree_config
+        return result
 
     async def unsubscribe_context(self, context_id: str) -> dict[str, Any]:
         return await self._call(

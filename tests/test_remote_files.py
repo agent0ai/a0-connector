@@ -565,6 +565,34 @@ def test_remote_file_utility_blocks_writes_and_bounds_tree_snapshots(tmp_path: P
     assert "src/" in snapshot.tree
 
 
+@pytest.mark.parametrize(
+    ("limit", "hidden"),
+    [
+        ("max_depth", "nested.txt"),
+        ("max_files", "b.txt"),
+        ("max_folders", "z-project/"),
+        ("max_lines", "z-project/"),
+    ],
+)
+def test_remote_tree_limits_can_be_removed(tmp_path: Path, limit: str, hidden: str) -> None:
+    (tmp_path / "a-folder").mkdir()
+    (tmp_path / "a-folder" / "nested.txt").touch()
+    (tmp_path / "z-project").mkdir()
+    (tmp_path / "a.txt").touch()
+    (tmp_path / "b.txt").touch()
+    limits = dict(max_depth=0, max_files=0, max_folders=0, max_lines=0)
+    limits[limit] = 1
+
+    bounded = RemoteFileUtility(scan_root=str(tmp_path), **limits).build_tree_snapshot()
+    assert hidden not in bounded.tree
+
+    limits[limit] = 0
+    unlimited = RemoteFileUtility(scan_root=str(tmp_path), **limits).build_tree_snapshot()
+    assert hidden in unlimited.tree
+    assert "# limit reached" not in unlimited.tree
+    assert "# 1 more" not in unlimited.tree
+
+
 def test_remote_file_utility_lists_reference_entries_inside_workspace(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "main.py").write_text("print('ok')\n", encoding="utf-8")
@@ -580,6 +608,72 @@ def test_remote_file_utility_lists_reference_entries_inside_workspace(tmp_path: 
 
     with pytest.raises(PermissionError):
         utility.list_reference_entries("../outside")
+
+
+@pytest.mark.parametrize("value", [None, True, -1, 1.5, "0", {}, []])
+def test_remote_tree_rejects_invalid_server_limits(tmp_path: Path, value: object) -> None:
+    utility = RemoteFileUtility(scan_root=str(tmp_path))
+    utility.set_tree_limits(dict(max_depth=value, max_files=value, max_folders=value, max_lines=value))
+    assert (utility.max_depth, utility.max_files, utility.max_folders, utility.max_lines) == (5, 20, 20, 250)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("frontend", ["tui", "session"])
+@pytest.mark.parametrize("override", [None, 2])
+async def test_remote_tree_publisher_applies_handshake_and_live_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, frontend: str, override: int | None,
+) -> None:
+    from agent_zero_cli.app import AgentZeroCLI
+    from agent_zero_cli.client import A0Client
+    from agent_zero_cli.config import CLIConfig
+    from agent_zero_cli.session import ConnectorSession
+
+    monkeypatch.chdir(tmp_path)
+    for name in ("a.txt", "b.txt", "z.txt"):
+        (tmp_path / name).touch()
+    config = CLIConfig(remote_tree_max_lines=override)
+    if frontend == "tui":
+        app = AgentZeroCLI(config=config)
+        app.connected = True
+        client = app.client
+        utility = app._remote_files
+        publish = app._publish_remote_tree_snapshot
+    else:
+        session = ConnectorSession(config, workspace=tmp_path)
+        client = session.client = A0Client("http://agent.test")
+        utility = session.remote_files
+        publish = session.publish_remote_tree_snapshot
+    client.connected = True
+    sent = []
+
+    async def call(event, payload):
+        if event == "connector_hello":
+            return {"remote_tree_config": {"max_lines": 1}}
+        assert event == "connector_remote_tree_update"
+        sent.append(payload)
+        return {"accepted": True, "remote_tree_config": {"max_lines": 0}}
+
+    monkeypatch.setattr(client, "_call", call)
+    await client.send_hello()
+    await publish(force=True)
+
+    assert "z.txt" not in sent[0]["tree"]
+    if override is None:
+        assert len(sent) == 2
+        assert "z.txt" in sent[-1]["tree"]
+        assert utility.max_lines == 0
+    else:
+        assert len(sent) == 1
+        assert "b.txt" in sent[0]["tree"]
+        assert utility.max_lines == 2
+
+    async def legacy_call(event, payload):
+        return {}
+
+    monkeypatch.setattr(client, "_call", legacy_call)
+    await client.send_hello()
+    await publish(force=True)
+    assert utility.max_lines == (250 if override is None else override)
 
 
 def test_remote_tree_snapshot_skips_directories_that_cannot_be_scanned(

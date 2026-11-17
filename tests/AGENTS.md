@@ -18,6 +18,7 @@
 
 - Async tests use pytest/anyio with asyncio-compatible fixtures; many files set `pytestmark = pytest.mark.anyio`.
 - Prefer `tmp_path`, `monkeypatch`, and local fake classes over real user config or live services.
+- Remote-tree coverage checks environment/`.env` precedence, inheritance, zero and malformed values, both frontend publishers, live acknowledgement changes, older-Core fallback, and host overrides. Core policy stubs include both `resolve_tool` and `ensure_tool_allowed`; Browser config expectations include its idle timeout.
 - `tests/test_app.py` fake widgets mirror the widget API used by `AgentZeroCLI`. When app code calls a new widget method, update the fake.
 - Connection-header coverage checks initial host selection and manual entry stay quiet, while connection attempts, errors, and connected chats restore the status row.
 - Splash layout tests load the real stylesheet and echo host-state messages like the app. Check complete rendered button labels, heading/Refresh alignment and spacing, the bottom manual-URL toggle, absence of splash workspace paths, visible connection controls at compact sizes, stable selection/focus, and manual-input preservation across resize.

@@ -100,6 +100,7 @@ def _install_fake_helpers(
     tool_mod = types.ModuleType("helpers.tool")
     tool_policy_mod = types.ModuleType("helpers.tool_policy")
     tool_policy_mod.resolve_tool = lambda *args, **kwargs: types.SimpleNamespace(allowed=True)
+    tool_policy_mod.ensure_tool_allowed = lambda *args, **kwargs: None
     ws_mod = types.ModuleType("helpers.ws")
     ws_limits_mod = types.ModuleType("helpers.ws_limits")
     ws_manager_mod = types.ModuleType("helpers.ws_manager")
@@ -486,6 +487,7 @@ def _install_fake_helpers(
         sys.modules[module_name] = types.ModuleType(module_name)
 
     files_mod = sys.modules["helpers.files"]
+    sys.modules["helpers.settings"].get_settings = lambda: {}
     fake_base_dir = Path(tempfile.gettempdir()) / "a0-connector-plugin-tests"
     files_mod.get_abs_path = lambda *parts: str(fake_base_dir.joinpath(*map(str, parts)))
     files_mod.normalize_a0_path = lambda path: str(path)
@@ -1130,6 +1132,7 @@ def test_browser_runtime_endpoint_updates_browser_plugin_config() -> None:
                 "autofocus_active_page": False,
                 "browser_tab_scope": "per_context",
                 "max_open_tabs": 32,
+                "idle_timeout_minutes": 60,
                 "evaluate_timeout_seconds": 30.0,
                 "runtime_backend": "host_required",
                 "host_browser_privacy_policy": "warn",
@@ -1589,8 +1592,30 @@ def test_ws_connector_hello_advertises_remote_exec_and_tree_features() -> None:
     assert payload["exec_config"]["output_timeouts"]["max_exec_timeout"] == 120
     assert payload["exec_config"]["prompt_patterns"] == ["PS .+> ?$"]
     assert payload["exec_config"]["dialog_patterns"] == ["yes/no"]
+    assert payload["remote_tree_config"] == dict(max_depth=5, max_files=20, max_folders=20, max_lines=250)
     ws_runtime_mod = importlib.import_module("plugins._a0_connector.helpers.ws_runtime")
     assert ws_runtime_mod.ws_max_payload_bytes_for_sid("sid-1") == 16 * 1024 * 1024
+
+
+def test_remote_tree_ack_refreshes_instance_limits_without_reconnecting() -> None:
+    _install_fake_helpers()
+    config = dict(workdir_max_depth=3, workdir_max_files=10, workdir_max_folders=12, workdir_max_lines=99)
+    sys.modules["helpers.settings"].get_settings = lambda: config
+    ws_connector_mod = _reload("plugins._a0_connector.api.ws_connector")
+    handler = ws_connector_mod.WsConnector(None, None)
+    hello = asyncio.run(handler.process("connector_hello", {}, "sid-1"))
+    assert hello["remote_tree_config"] == dict(max_depth=3, max_files=10, max_folders=12, max_lines=99)
+
+    config.update(remote_tree_inherit=False, remote_tree_max_lines=0)
+    ack = asyncio.run(handler.process(
+        "connector_remote_tree_update", {"tree": "/workspace", "tree_hash": "hash", "root_path": "/workspace"}, "sid-1",
+    ))
+    assert ack["remote_tree_config"]["max_lines"] == 0
+    config["remote_tree_inherit"] = True
+    ack = asyncio.run(handler.process(
+        "connector_remote_tree_update", {"tree": "/workspace", "tree_hash": "hash", "root_path": "/workspace"}, "sid-1",
+    ))
+    assert ack["remote_tree_config"]["max_lines"] == 99
 
 
 def test_plugin_root_resolution_prefers_a0_connector_plugin_root_env(

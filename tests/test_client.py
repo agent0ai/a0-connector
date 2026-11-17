@@ -646,6 +646,54 @@ def test_load_config_reads_computer_use_defaults_and_overrides(
     assert env_config.computer_use_restore_token == "env-token"
 
 
+@pytest.mark.parametrize("field", ["max_depth", "max_files", "max_folders", "max_lines"])
+@pytest.mark.parametrize("source", ["environment", "dotenv"])
+@pytest.mark.parametrize("value", [None, "73", " 42 ", "0", "", "  ", "invalid", "1.5", "-4"])
+def test_load_config_remote_tree_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    source: str,
+    value: str | None,
+) -> None:
+    import agent_zero_cli.config as config_mod
+
+    key = f"AGENT_ZERO_REMOTE_TREE_{field.upper()}"
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(config_mod, "_ENV_FILE", env_file)
+    monkeypatch.delenv(key, raising=False)
+    if value is not None:
+        if source == "environment":
+            monkeypatch.setenv(key, value)
+        else:
+            env_file.write_text(f"{key}={value}\n", encoding="utf-8")
+
+    expected = {"73": 73, " 42 ": 42, "0": 0}.get(value)
+    assert getattr(load_config(), f"remote_tree_{field}") == expected
+    assert getattr(config_mod.CLIConfig(), f"remote_tree_{field}") is None
+
+
+@pytest.mark.parametrize("field", ["max_depth", "max_files", "max_folders", "max_lines"])
+@pytest.mark.parametrize("value", ["91", "0", "", "invalid", "-1"])
+def test_load_config_remote_tree_environment_overrides_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+) -> None:
+    import agent_zero_cli.config as config_mod
+
+    key = f"AGENT_ZERO_REMOTE_TREE_{field.upper()}"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{key}=73\n", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "_ENV_FILE", env_file)
+    monkeypatch.setenv(key, value)
+
+    default = getattr(config_mod.CLIConfig(), f"remote_tree_{field}")
+    expected = {"91": 91, "0": 0}.get(value, default)
+    assert getattr(load_config(), f"remote_tree_{field}") == expected
+
+
 def test_save_computer_use_settings_persist_to_dotenv(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

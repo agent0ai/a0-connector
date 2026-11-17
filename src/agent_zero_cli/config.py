@@ -25,6 +25,10 @@ _HOST_BROWSER_FAMILY_KEY = "AGENT_ZERO_HOST_BROWSER_FAMILY"
 _HOST_BROWSER_PROFILE_PATH_KEY = "AGENT_ZERO_HOST_BROWSER_PROFILE_PATH"
 _HOST_BROWSER_PROFILE_LABEL_KEY = "AGENT_ZERO_HOST_BROWSER_PROFILE_LABEL"
 _HOST_BROWSER_RELAUNCH_PREFERENCE_KEY = "AGENT_ZERO_HOST_BROWSER_RELAUNCH_PREFERENCE"
+_REMOTE_TREE_MAX_DEPTH_KEY = "AGENT_ZERO_REMOTE_TREE_MAX_DEPTH"
+_REMOTE_TREE_MAX_FILES_KEY = "AGENT_ZERO_REMOTE_TREE_MAX_FILES"
+_REMOTE_TREE_MAX_FOLDERS_KEY = "AGENT_ZERO_REMOTE_TREE_MAX_FOLDERS"
+_REMOTE_TREE_MAX_LINES_KEY = "AGENT_ZERO_REMOTE_TREE_MAX_LINES"
 _DEFAULT_COMPUTER_USE_TRUST_MODE = "allow"
 _VALID_COMPUTER_USE_TRUST_MODES = {"persistent", "allow"}
 _VALID_HOST_BROWSER_RELAUNCH_PREFERENCES = {"ask", "manual"}
@@ -46,6 +50,18 @@ class CLIConfig:
     host_browser_profile_path: str = ""
     host_browser_profile_label: str = ""
     host_browser_relaunch_preference: str = "ask"
+    remote_tree_max_depth: int | None = None
+    remote_tree_max_files: int | None = None
+    remote_tree_max_folders: int | None = None
+    remote_tree_max_lines: int | None = None
+
+
+def _coerce_non_negative_int(value: str) -> int | None:
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _read_dotenv() -> dict[str, str]:
@@ -420,6 +436,18 @@ def load_config() -> CLIConfig:
             dotenv.get(_HOST_BROWSER_RELAUNCH_PREFERENCE_KEY, "ask"),
         )
     )
+    remote_tree_max_depth = _coerce_non_negative_int(
+        os.environ.get(_REMOTE_TREE_MAX_DEPTH_KEY, dotenv.get(_REMOTE_TREE_MAX_DEPTH_KEY, "")),
+    )
+    remote_tree_max_files = _coerce_non_negative_int(
+        os.environ.get(_REMOTE_TREE_MAX_FILES_KEY, dotenv.get(_REMOTE_TREE_MAX_FILES_KEY, "")),
+    )
+    remote_tree_max_folders = _coerce_non_negative_int(
+        os.environ.get(_REMOTE_TREE_MAX_FOLDERS_KEY, dotenv.get(_REMOTE_TREE_MAX_FOLDERS_KEY, "")),
+    )
+    remote_tree_max_lines = _coerce_non_negative_int(
+        os.environ.get(_REMOTE_TREE_MAX_LINES_KEY, dotenv.get(_REMOTE_TREE_MAX_LINES_KEY, "")),
+    )
 
     return CLIConfig(
         instance_url=instance_url,
@@ -436,4 +464,8 @@ def load_config() -> CLIConfig:
         host_browser_profile_path=host_browser_profile_path,
         host_browser_profile_label=host_browser_profile_label,
         host_browser_relaunch_preference=host_browser_relaunch_preference,
+        remote_tree_max_depth=remote_tree_max_depth,
+        remote_tree_max_files=remote_tree_max_files,
+        remote_tree_max_folders=remote_tree_max_folders,
+        remote_tree_max_lines=remote_tree_max_lines,
     )

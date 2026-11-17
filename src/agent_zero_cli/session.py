@@ -148,6 +148,10 @@ class ConnectorSession:
         self.remote_files = RemoteFileUtility(
             scan_root=str(self.workspace),
             allow_writes=self.remote_file_write_enabled,
+            max_depth=self.config.remote_tree_max_depth,
+            max_files=self.config.remote_tree_max_files,
+            max_folders=self.config.remote_tree_max_folders,
+            max_lines=self.config.remote_tree_max_lines,
         )
         self.remote_exec = RemoteExecManager(
             cwd=self.remote_files.scan_root,
@@ -487,6 +491,7 @@ class ConnectorSession:
         ):
             return
 
+        self.remote_files.set_tree_limits(getattr(client, "remote_tree_config", None))
         snapshot = self.remote_files.build_tree_snapshot()
         now = monotonic()
         if (
@@ -498,6 +503,9 @@ class ConnectorSession:
 
         try:
             await client.send_remote_tree_update(snapshot.as_payload())
+            if self.remote_files.set_tree_limits(getattr(client, "remote_tree_config", None)):
+                snapshot = self.remote_files.build_tree_snapshot()
+                await client.send_remote_tree_update(snapshot.as_payload())
         except Exception:
             return
 
