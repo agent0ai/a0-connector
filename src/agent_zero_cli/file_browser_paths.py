@@ -51,7 +51,7 @@ def open_regular(workspace, parent_fd, name, flags=os.O_RDONLY):
                 final = "\\\\" + final[8:]
             elif final.startswith("\\\\?\\"):
                 final = final[4:]
-            workspace._assert_within_root(final, final)
+            workspace._ensure_path_contained(final, original_path=name)
         return os.fdopen(descriptor, "rb")
     except BaseException:
         os.close(descriptor)

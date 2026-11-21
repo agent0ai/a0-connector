@@ -37,6 +37,7 @@ from agent_zero_cli.host_browser_common import (
     remote_debugging_endpoint_label,
     remote_debugging_restriction_reason,
 )
+from agent_zero_cli.remote_files import RemoteFileUtility
 from agent_zero_cli.host_browser_session import HostBrowserSession, ProfileLockedError
 
 
@@ -64,8 +65,10 @@ class HostBrowserManager:
         config: CLIConfig,
         *,
         persist_enabled: bool = True,
+        file_workspace: Callable[[], RemoteFileUtility | None] | None = None,
         candidate_provider: Callable[[], list[BrowserCandidate]] | None = None,
     ) -> None:
+        self.file_workspace = file_workspace
         self.config = config
         self.enabled = bool(config.host_browser_enabled)
         self._persist_enabled = persist_enabled
@@ -125,6 +128,7 @@ class HostBrowserManager:
                 "dom_helper_rpc",
                 "evaluate_timeout_v1",
                 "local_upload_paths",
+                "browser_file_scopes_v1",
                 *sorted(_SUPPORTED_ACTIONS),
             ],
             "support_reason": status["support_reason"],
@@ -486,6 +490,10 @@ class HostBrowserManager:
                 with contextlib.suppress(Exception):
                     await session.close()
 
+    async def release_uploads(self) -> None:
+        for session in list(self._sessions.values()):
+            await session._uploads.release()
+
     async def disconnect(self) -> None:
         await self.close()
 
@@ -708,6 +716,7 @@ class HostBrowserManager:
             session = HostBrowserSession(
                 context_id=context_id,
                 profile=profile,
+                file_workspace=self.file_workspace,
             )
             self._sessions[context_id] = session
         if self._dom_helper_source is not None:

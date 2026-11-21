@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from agent_zero_cli.remote_files import RemoteFileUtility
 
 import pytest
 
@@ -1212,7 +1213,7 @@ def test_hello_metadata_advertises_native_profile_support(tmp_path: Path) -> Non
     assert metadata["supported"] is True
     assert metadata["can_prepare"] is True
     assert metadata["can_repair"] is False
-    assert "cdp" in metadata["features"]
+    assert {"cdp", "browser_file_scopes_v1"} <= set(metadata["features"])
 
 
 def test_hello_metadata_marks_restricted_saved_profile_as_preparable(
@@ -2216,6 +2217,34 @@ async def test_manager_recreates_session_when_profile_changes(tmp_path: Path) ->
     assert session_two.profile == profile_two
 
 
+async def test_browser_file_scope_applies_to_direct_and_multi(monkeypatch, tmp_path):
+    root = tmp_path / "shared"
+    root.mkdir()
+    outside = tmp_path / "other"
+    outside.write_bytes(b"fixture")
+    workspace = RemoteFileUtility(scan_root=str(root))
+    session = HostBrowserSession("chat", profile=None)
+    monkeypatch.setattr(session, "ensure_started", AsyncMock())
+    page = FakePage()
+    session.pages[1] = host_browser_session_module.HostBrowserPage(1, page)
+    monkeypatch.setattr(session, "_state", AsyncMock(return_value={"id": 1}))
+    calls = [
+        {"action": "upload_file", "browser_id": 1, "ref": 1, "path": str(outside)},
+        {"action": "screenshot", "browser_id": 1, "path": str(outside)},
+    ]
+    for op in calls:
+        with pytest.raises(PermissionError, match="Files folder"):
+            await session.dispatch(op)
+    session.file_workspace = lambda: workspace
+    assert all(not item["ok"] for item in await session.multi(calls))
+    workspace.set_write_enabled(False)
+    with pytest.raises(PermissionError, match="writes are disabled"):
+        await session.dispatch({"action": "screenshot", "browser_id": 1, "path": "proof.png"})
+    session.file_workspace = lambda: None
+    assert (await session.dispatch({"action": "screenshot", "browser_id": 1}))["ephemeral"]
+    assert outside.read_bytes() == b"fixture" and list(root.iterdir()) == []
+
+
 @pytest.mark.parametrize("while_claiming", [False, True])
 def test_owned_marker_retirement_preserves_replacement(tmp_path, monkeypatch, while_claiming):
     marker = tmp_path / "DevToolsActivePort"
@@ -2239,8 +2268,144 @@ def test_owned_marker_retirement_preserves_replacement(tmp_path, monkeypatch, wh
     assert marker.read_text() == "43501\n/devtools/browser/new"
 
 
+def test_session_browser_uses_live_gateway_file_and_write_scopes(tmp_path):
+    from agent_zero_cli.session import ConnectorSession
+
+    config = CLIConfig(host_browser_enabled=True)
+    manager = HostBrowserManager(config)
+    session = ConnectorSession(config, workspace=tmp_path, host_browser_manager=manager,
+                               gateway={"scopes": {"browser": True, "files": False, "file_write": False}})
+    assert manager.file_workspace() is None
+    session.gateway["scopes"] = {"browser": True, "files": True, "file_write": False}
+    session._apply_scope_state()
+    assert manager.file_workspace() is session.remote_files and not session.remote_files.allow_writes
+    session.gateway["scopes"]["file_write"] = True
+    session._apply_scope_state()
+    assert manager.file_workspace().allow_writes
+
+
+def test_browser_upload_snapshots_keep_selected_bytes(tmp_path):
+    from threading import Event
+    from agent_zero_cli.host_browser_files import snapshot_uploads
+
+    root = tmp_path / "shared"
+    root.mkdir()
+    snapshots = tmp_path / "staged"
+    snapshots.mkdir()
+    source = root / "note.txt"
+    source.write_text("chosen")
+    workspace = RemoteFileUtility(scan_root=str(root))
+    (selected,), _ = snapshot_uploads(workspace, ["note.txt"], snapshots, 8192, Event())
+    source.write_text("later edit")
+    assert Path(selected).name == source.name and Path(selected).read_text() == "chosen"
+    if os.name != "nt":
+        link = root / "link"
+        link.symlink_to(tmp_path / "staged", target_is_directory=True)
+        with pytest.raises(PermissionError):
+            snapshot_uploads(workspace, ["link/0/note.txt"], snapshots, 8192, Event())
+
+
+async def test_snapshot_budget_is_shared_across_concurrent_uploads(tmp_path, monkeypatch):
+    from agent_zero_cli import host_browser_files as files
+
+    monkeypatch.setattr(files, "MAX_BYTES", 8192)
+    workspace = RemoteFileUtility(scan_root=str(tmp_path))
+    (tmp_path / "file").write_bytes(b"a" * 5000)
+    store = files.UploadSnapshots()
+    received = []
+
+    async def transfer(paths):
+        received.extend(map(Path, paths))
+
+    async def upload(tab):
+        await store.attach(tab, workspace, ["file"], lambda: None, transfer)
+
+    try:
+        results = await asyncio.gather(upload(1), upload(2), return_exceptions=True)
+        assert results[0] is None and isinstance(results[1], ValueError)
+        assert len(received) == 1 and received[0].stat().st_size == 5000
+        await store.release(1)
+        assert not received[0].exists()
+        await upload(2)
+        assert received[1].is_file()
+        store.sync_workspace(RemoteFileUtility(scan_root=str(tmp_path / "different")))
+        assert not received[1].exists()
+    finally:
+        await store.release()
+
+
+async def test_files_revocation_clears_accepted_and_inflight_uploads(tmp_path, monkeypatch):
+    from threading import Event
+    from agent_zero_cli import host_browser_files as files
+    from agent_zero_cli.session import ConnectorSession
+
+    config = CLIConfig(host_browser_enabled=True)
+    manager = HostBrowserManager(config, persist_enabled=False)
+    gateway = ConnectorSession(config, workspace=tmp_path, host_browser_manager=manager,
+                               gateway={"scopes": {"browser": True, "files": True}})
+    browser = HostBrowserSession("chat", profile=None, file_workspace=manager.file_workspace)
+    manager._sessions["chat"] = browser
+    (tmp_path / "note").write_text("held")
+    retained = []
+
+    async def receive(paths):
+        retained.extend(map(Path, paths))
+
+    await browser._uploads.attach(1, gateway.remote_files, ["note"], lambda: None, receive)
+    started, resume = Event(), Event()
+    copy = files.snapshot_uploads
+
+    def delayed(*args):
+        started.set()
+        assert resume.wait(3)
+        return copy(*args)
+
+    monkeypatch.setattr(files, "snapshot_uploads", delayed)
+    upload = asyncio.create_task(browser._uploads.attach(2, gateway.remote_files, ["note"], lambda: None, receive))
+    assert await asyncio.to_thread(started.wait, 2)
+    try:
+        revoke = asyncio.create_task(gateway.replace_gateway_scopes({"files": False, "browser": True}))
+        async with asyncio.timeout(2):
+            while retained[0].exists():
+                await asyncio.sleep(0.01)
+    finally:
+        resume.set()
+    with pytest.raises(PermissionError, match="revoked"):
+        await upload
+    await revoke
+    assert manager.file_workspace() is None and len(retained) == 1
+
+
+def test_growing_upload_cannot_write_past_remaining_budget(tmp_path, monkeypatch):
+    from threading import Event
+    from agent_zero_cli import host_browser_files as files
+
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    source = shared / "file"
+    source.write_bytes(b"a")
+    output = tmp_path / "partial"
+    output.mkdir()
+    original_open = files.open_regular
+
+    def open_growing(*args):
+        stream = original_open(*args)
+        read = stream.read
+        def grow(size):
+            with source.open("ab") as append:
+                append.write(b"x" * 8192)
+            return read(size)
+        stream.read = grow
+        return stream
+
+    monkeypatch.setattr(files, "open_regular", open_growing)
+    with pytest.raises(ValueError, match="session budget"):
+        files.snapshot_uploads(RemoteFileUtility(scan_root=str(shared)), ["file"], output, 4096, Event())
+    assert (output / "0/file").stat().st_size <= 4096
+
+
 @pytest.mark.skipif(not os.environ.get("A0_TEST_CHROMIUM"), reason="set A0_TEST_CHROMIUM to run a headed Chromium")
-async def test_native_chromium_profile_and_attach(tmp_path: Path) -> None:
+async def test_native_chromium_profile_and_attach(tmp_path: Path, monkeypatch) -> None:
     from aiohttp import web
     from PIL import Image
     from io import BytesIO
@@ -2248,7 +2413,7 @@ async def test_native_chromium_profile_and_attach(tmp_path: Path) -> None:
     app = web.Application()
 
     async def index(request):
-        return web.Response(text='<title>CDP check</title><input id="text"><input type="file" id="file">'
+        return web.Response(text='<title>CDP check</title><input id="text"><input type="file" id="file"><input type="file" id="second">'
                                  '<div style="height:3200px"></div>', content_type="text/html")
 
     app.router.add_get("/{page}", index)
@@ -2258,7 +2423,10 @@ async def test_native_chromium_profile_and_attach(tmp_path: Path) -> None:
     await site.start()
     origin = f"http://127.0.0.1:{runner.addresses[0][1]}"
     profile = BrowserProfile("chrome-a0", "Chrome", os.environ["A0_TEST_CHROMIUM"], tmp_path, "Default", "Test")
-    owner = HostBrowserSession("owned", profile)
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    workspace = RemoteFileUtility(scan_root=str(shared))
+    owner = HostBrowserSession("owned", profile, file_workspace=lambda: workspace)
     try:
         opened = await owner.open(origin + "/first")
         browser_id = opened["id"]
@@ -2279,21 +2447,56 @@ async def test_native_chromium_profile_and_attach(tmp_path: Path) -> None:
         await owner.keyboard(browser_id, text="typed")
         assert (await owner.evaluate(browser_id, "document.querySelector('#text').value"))["result"] == "typed"
 
-        upload = tmp_path / "upload.txt"
+        upload = shared / "upload.txt"
         upload.write_text("CDP upload", encoding="utf-8")
         await owner.set_content_helper_source("""
             globalThis.__spaceBrowserPageContent__ = {
                 ready: () => true, capture: () => ({version: 1}), fileInputFor: () => ({selector: "#file"}),
-                fileInputElementFor: () => document.querySelector("#file")
+                fileInputElementFor: ref => document.querySelector(ref === 2 ? "#second" : "#file")
             }
         """)
-        await owner.upload_file(browser_id, 1, str(upload))
+        staged = []
+        page_type = type(owner.pages[browser_id].page)
+        set_files = page_type.upload_files
+        async def record_files(page, ref, selector, paths):
+            staged.extend(map(Path, paths))
+            await set_files(page, ref, selector, paths)
+        monkeypatch.setattr(page_type, "upload_files", record_files)
+        attached_file = await owner.upload_file(browser_id, 1, str(upload))
+        assert attached_file["action"]["files"] == ["upload.txt"]
+        second_input = shared / "second.txt"
+        second_input.write_text("second")
+        await owner.upload_file(browser_id, 2, str(second_input))
         assert (await owner.evaluate(browser_id, "document.querySelector('#file').files[0].name"))["result"] == upload.name
+        upload.unlink()
+        assert (await owner.evaluate(browser_id, "document.querySelector('#file').files[0].text()"))["result"] == "CDP upload"
+        another = (await owner.open(origin + "/uploads"))["id"]
+        await owner.upload_file(another, 1, "second.txt")
+        assert all(file.is_file() for file in staged)
+        await owner.close_browser(another)
+        assert not staged[2].exists() and all(file.is_file() for file in staged[:2])
+
+        oversize = shared / "oversize"
+        with oversize.open("wb") as stream:
+            stream.truncate(100 * 1024 * 1024 + 1)
+        with pytest.raises(ValueError, match="session budget"):
+            await owner.upload_file(browser_id, 1, "oversize")
+        owner.file_workspace = lambda: None
+        await owner.state(browser_id)
+        assert not any(file.exists() for file in staged)
+        owner.file_workspace = lambda: workspace
         assert (await owner.content(browser_id))["version"] == 1
         await owner.set_content_helper_source("""
             globalThis.__spaceBrowserPageContent__ = {ready: () => true, capture: () => ({version: 2})}
         """)
         assert (await owner.content(browser_id))["version"] == 2
+        saved = await owner.screenshot_file(browser_id, path="images/proof.png", image_format="jpeg")
+        assert Path(saved["host_path"]).read_bytes().startswith(b"\x89PNG")
+        replaced = await owner.screenshot_file(browser_id, path="images/proof.png")
+        assert replaced["host_path"] == saved["host_path"]
+        workspace.set_write_enabled(False)
+        with pytest.raises(PermissionError, match="writes are disabled"):
+            await owner.screenshot_file(browser_id, path="images/other.png")
         captures = await owner.dispatch({"action": "multi", "calls": [
             {"action": "screenshot", "browser_id": browser_id, "image_format": "png"},
             {"action": "screenshot_file", "browser_id": browser_id},
@@ -2340,6 +2543,18 @@ async def test_native_chromium_profile_and_attach(tmp_path: Path) -> None:
             await attached.close()
         assert marker.is_file()
         assert process.returncode is None and (await owner.state(browser_id))["title"] == "CDP check"
+        await owner.set_content_helper_source("""
+            globalThis.__spaceBrowserPageContent__ = {
+                ready: () => true, fileInputFor: () => ({selector: "#file"}),
+                fileInputElementFor: () => document.querySelector("#file")
+            }
+        """)
+        await owner.upload_file(browser_id, 1, "second.txt")
+        assert staged[-1].exists()
+        await owner.browser.command("Browser.close")
+        async with asyncio.timeout(3):
+            while staged[-1].exists():
+                await asyncio.sleep(0.01)
     finally:
         await owner.close()
         await runner.cleanup()

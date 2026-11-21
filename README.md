@@ -229,6 +229,8 @@ If the selected profile must be launched by A0 and is already locked by a normal
 
 Chrome 136+ restricts command-line remote debugging against the default personal Chrome data directory. If Chrome's own Remote debugging consent path is not available, A0 exposes and auto-selects a separate local profile such as `chrome-a0 Default` under the user's data directory. Site data stays in that local browser profile, and the user may need to sign in once there. You can still select it manually with `/browser profile chrome-a0 Default`.
 
+For host file uploads, choose a file in the shared Files folder and submit the form before closing the tab or disconnecting. The CLI keeps up to 100 MiB of pending upload copies per browser session. Saving a screenshot on the host also requires write access to that folder. Capturing a screenshot for the chat uses the Browser permission.
+
 The CLI uses the Chrome DevTools Protocol for both attached and A0-launched Chromium profiles. The Docker browser uses its own profile inside Agent Zero.
 
 - macOS: detects Safari through its system WebDriver, plus Chrome, Chromium, Edge, Brave, Opera, and Vivaldi apps in `/Applications` and profile data in `~/Library/Application Support`.

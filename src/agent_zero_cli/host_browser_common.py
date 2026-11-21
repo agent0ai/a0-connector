@@ -870,19 +870,23 @@ def normalize_modifiers(modifiers: list[str] | str | None) -> list[str] | None:
     return normalized
 
 
-def normalize_upload_paths(path: str = "", paths: list[str] | None = None) -> list[str]:
+def normalize_upload_paths(path: str = "", paths: list[str] | None = None, *, workspace=None) -> list[str]:
     raw_paths: list[str] = []
     if isinstance(paths, list):
         raw_paths.extend(str(item or "").strip() for item in paths)
     if str(path or "").strip():
         raw_paths.append(str(path or "").strip())
     normalized: list[str] = []
-    for raw_path in raw_paths:
-        if not raw_path:
+    for name in raw_paths:
+        if not name:
             continue
-        candidate = Path(raw_path).expanduser().resolve()
-        if not candidate.is_file():
-            raise FileNotFoundError(f"Upload file does not exist on the CLI host: {candidate}")
+        if workspace is not None:
+            from agent_zero_cli.file_browser import checked_path
+            candidate = checked_path(workspace, {"root_path": workspace.scan_root, "path": name})
+        else:
+            candidate = Path(name).expanduser().resolve()
+            if not candidate.is_file():
+                raise FileNotFoundError(f"Upload file does not exist on the CLI host: {candidate}")
         normalized.append(str(candidate))
     if not normalized:
         raise ValueError("upload_file requires path or non-empty paths")
@@ -904,8 +908,6 @@ def screenshot_output_path(
     raw_path = str(path or "").strip()
     if raw_path:
         output_path = Path(raw_path).expanduser()
-        if not output_path.is_absolute():
-            output_path = artifact_root() / safe_context_id(context_id) / output_path
         suffix = output_path.suffix.lower()
         if suffix == ".png":
             return output_path, "png", "image/png"

@@ -249,7 +249,7 @@ class AgentZeroCLI(App):
         self._computer_use.set_status_callback(
             lambda label, detail: self._run_on_ui(self._apply_computer_use_status, label, detail)
         )
-        self._host_browser = HostBrowserManager(self.config)
+        self._host_browser = HostBrowserManager(self.config, file_workspace=lambda: self._remote_files)
         self._local_workspace = self._remote_files.scan_root
         self._remote_workspace = ""
         self._token_refresh_task: asyncio.Task[None] | None = None

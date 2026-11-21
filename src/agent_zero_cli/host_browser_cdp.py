@@ -30,7 +30,7 @@ class CDPConnection:
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._send_lock = asyncio.Lock()
-        self.on_detached: Callable[[str], None] | None = None
+        self.on_detached: Callable[[str | None], None] | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -142,6 +142,8 @@ class CDPConnection:
                 elif message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
                     break
         finally:
+            if self.on_detached:
+                self.on_detached(None)
             for future in list(self._pending.values()):
                 if not future.done():
                     future.set_result({"error": {"message": "Chrome DevTools connection closed."}})
@@ -458,11 +460,10 @@ class CDPContext:
         self._target_lock = asyncio.Lock()
         connection.on_detached = self._detached
 
-    def _detached(self, session_id: str) -> None:
-        for page in self.pages:
-            if page.session_id == session_id:
+    def _detached(self, session_id: str | None) -> None:
+        for page in list(self.pages):
+            if session_id is None or page.session_id == session_id:
                 self._remove_page(page)
-                break
 
     def _remove_page(self, page: CDPPage) -> None:
         self._pages_by_target.pop(page.target_id, None)

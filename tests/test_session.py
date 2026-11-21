@@ -360,6 +360,9 @@ class FakeHostBrowser:
         self.requests.append(payload)
         return {"op_id": payload.get("op_id"), "ok": True, "result": {"browser": True}}
 
+    async def release_uploads(self) -> None:
+        self.uploads_released = True
+
     async def close(self) -> None:
         self.closed += 1
 

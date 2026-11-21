@@ -10,9 +10,12 @@ import platform
 import stat
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
+from agent_zero_cli.file_browser import checked_path
+from agent_zero_cli.host_browser_files import save_screenshot, UploadSnapshots
+from agent_zero_cli.remote_files import RemoteFileUtility
 from agent_zero_cli.host_browser_cdp import CDPConnection, CDPContext, CDPPage
 from agent_zero_cli.host_browser_safari import (
     SafariDriver,
@@ -78,9 +81,7 @@ class _RuntimeAdapter:
         visible_pages = set(discovered_pages)
         for browser_id, browser_page in list(session.pages.items()):
             if browser_page.page not in visible_pages:
-                session.pages.pop(browser_id, None)
-                if session.last_interacted_browser_id == browser_id:
-                    session.last_interacted_browser_id = None
+                await session._unregister_page_async(browser_id)
         for page in discovered_pages:
             await session._register_page(page)
         if session.last_interacted_browser_id not in session.pages:
@@ -91,6 +92,7 @@ class _RuntimeAdapter:
 
     async def close_runtime(self, session: "HostBrowserSession") -> None:
         session.pages.clear()
+        await session._uploads.release()
         if session.browser is not None:
             with contextlib.suppress(Exception):
                 await session.browser.close()
@@ -287,7 +289,9 @@ class HostBrowserSession:
     _dom_helper_sha256: str = ""
     _content_helper_source: str | None = None
     _content_helper_sha256: str = ""
+    file_workspace: Callable[[], RemoteFileUtility | None] | None = None
     _owned_marker: tuple[int, int, int, int] | None = None
+    _uploads: UploadSnapshots = field(default_factory=UploadSnapshots)
     _start_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _registry_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _bootstrap_page: Any = None
@@ -532,6 +536,7 @@ class HostBrowserSession:
         return await self._runtime.is_started(self)
 
     async def ensure_started(self) -> None:
+        self._uploads.sync_workspace(self.file_workspace() if self.file_workspace else None)
         async with self._start_lock:
             runtime = self._runtime
             if await self.is_started():
@@ -1155,6 +1160,14 @@ class HostBrowserSession:
         self._maybe_promote(resolved_id)
         return {"action": action or {}, "state": await self._state(resolved_id)}
 
+    def _workspace(self, *, writing: bool = False) -> RemoteFileUtility:
+        workspace = self.file_workspace() if self.file_workspace else None
+        if self._closing or workspace is None:
+            raise PermissionError("Host browser file transfers require access to the shared Files folder.")
+        if writing and not workspace.allow_writes:
+            raise PermissionError("Host file writes are disabled. Enable writing in the CLI or Launcher.")
+        return workspace
+
     async def upload_file(
         self,
         browser_id: int | str | None,
@@ -1162,7 +1175,8 @@ class HostBrowserSession:
         path: str = "",
         paths: list[str] | None = None,
     ) -> dict[str, Any]:
-        upload_paths = normalize_upload_paths(path=path, paths=paths)
+        workspace = self._workspace()
+        upload_paths = normalize_upload_paths(path=path, paths=paths, workspace=workspace)
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
         page = self._page(resolved_id)
@@ -1171,10 +1185,22 @@ class HostBrowserSession:
             "(ref) => globalThis.__spaceBrowserPageContent__.fileInputFor(ref)",
             ref,
         )
-        await page.upload_files(ref, (metadata or {}).get("selector", ""), upload_paths)
+        original_root = workspace.scan_root
+
+        def check_access():
+            if self._workspace() is not workspace or workspace.scan_root != original_root:
+                raise PermissionError("The shared host folder changed during upload.")
+            if resolved_id not in self.pages or page.is_closed():
+                raise RuntimeError("The upload tab closed.")
+
+        async def transfer(snapshots):
+            await page.upload_files(ref, (metadata or {}).get("selector", ""), snapshots)
+
+        await self._uploads.attach(resolved_id, workspace, upload_paths, check_access, transfer)
+        relative_paths = [Path(source).relative_to(original_root).as_posix() for source in upload_paths]
         await self._settle(page, short=True)
         self._maybe_promote(resolved_id)
-        return {"action": {"files": upload_paths, "input": metadata or {}, "ref": ref}, "state": await self._state(resolved_id)}
+        return {"action": {"files": relative_paths, "input": metadata or {}, "ref": ref}, "state": await self._state(resolved_id)}
 
     async def screenshot_file(
         self,
@@ -1185,30 +1211,27 @@ class HostBrowserSession:
         path: str = "",
         image_format: str = "jpeg",
     ) -> dict[str, Any]:
+        raw_path = str(path or "").strip()
+        workspace = self._workspace(writing=True) if raw_path else None
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
         page = self._page(resolved_id)
-        raw_path = str(path or "").strip()
         output_path, image_type, mime = screenshot_output_path(self.context_id, resolved_id, path, image_format)
+        if workspace:
+            checked_path(workspace, {"root_path": workspace.scan_root, "path": str(output_path)}, writing=True)
         kwargs: dict[str, Any] = {
             "type": image_type,
             "full_page": bool(full_page),
         }
-        if raw_path:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            kwargs["path"] = str(output_path)
         if image_type == "jpeg":
             kwargs["quality"] = max(20, min(95, int(quality)))
         image = await page.screenshot(**kwargs)
-        if not image and raw_path:
-            source_size = output_path.stat().st_size
-            if source_size > _SCREENSHOT_ARTIFACT_MAX_BYTES:
-                raise ValueError(
-                    "Host-browser screenshot is too large to return inline "
-                    f"({source_size} bytes, limit {_SCREENSHOT_ARTIFACT_MAX_BYTES} bytes). "
-                    "Use the saved host file through the HTTP bulk-transfer path."
-                )
-            image = output_path.read_bytes()
+        if workspace:
+            def check_access():
+                if self._workspace(writing=True) is not workspace:
+                    raise PermissionError("The shared host folder changed during capture.")
+            check_access()
+            saved_path = await asyncio.to_thread(save_screenshot, workspace, output_path, image, check_access)
         if len(image) > _SCREENSHOT_ARTIFACT_MAX_BYTES:
             raise ValueError(
                 "Host-browser screenshot is too large to return inline "
@@ -1227,7 +1250,7 @@ class HostBrowserSession:
             "state": await self._state(resolved_id),
         }
         if raw_path:
-            result["host_path"] = str(output_path)
+            result["host_path"] = saved_path
         else:
             result["ephemeral"] = True
         return result
@@ -1246,6 +1269,7 @@ class HostBrowserSession:
             with contextlib.suppress(Exception):
                 await self.pages[browser_id].page.close()
         self.pages.clear()
+        await self._uploads.release()
         self.last_interacted_browser_id = None
         return {"browsers": [], "last_interacted_browser_id": None}
 
@@ -1386,6 +1410,7 @@ class HostBrowserSession:
                 try:
                     asyncio.create_task(self._unregister_page_async(browser_id))
                 except RuntimeError:
+                    self._uploads.clear(browser_id)
                     self.pages.pop(browser_id, None)
 
             with contextlib.suppress(Exception):
@@ -1397,6 +1422,7 @@ class HostBrowserSession:
             self.pages.pop(browser_id, None)
             if self.last_interacted_browser_id == browser_id:
                 self.last_interacted_browser_id = next(iter(sorted(self.pages)), None)
+        await self._uploads.release(browser_id)
 
     def _on_new_page_sync(self, page: Any) -> None:
         if self._closing:
@@ -1417,6 +1443,7 @@ class HostBrowserSession:
         if self._closing:
             return
         self._bootstrap_page = None
+        self._uploads.clear()
         self.context = None
         self.pages.clear()
         self.last_interacted_browser_id = None

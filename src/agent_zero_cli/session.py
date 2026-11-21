@@ -153,6 +153,8 @@ class ConnectorSession:
             max_folders=self.config.remote_tree_max_folders,
             max_lines=self.config.remote_tree_max_lines,
         )
+        if self.host_browser is not None:
+            self.host_browser.file_workspace = lambda: self.remote_files if self._scope_available("files") else None
         self.remote_exec = RemoteExecManager(
             cwd=self.remote_files.scan_root,
             enabled=self.remote_exec_enabled,
@@ -887,6 +889,8 @@ class ConnectorSession:
             not self.master_enabled or not scopes["browser"]
         ):
             await self.host_browser.close()
+        elif self.host_browser is not None and not scopes["files"]:
+            await self.host_browser.release_uploads()
         if self.computer_use is not None and (
             not self.master_enabled or not scopes["computer_use"]
         ):
