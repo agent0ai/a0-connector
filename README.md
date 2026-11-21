@@ -160,7 +160,7 @@ In **F6 Chats**, type in **Search** to find chat titles or message text. Matchin
 | `/browser list` | List host-browser targets |
 | `/browser auto` / `/browser <number>` / `/browser <id>` / `/browser <host:port>` / `/browser ws://...` | Choose the current Agent Zero Browser host target |
 | `/browser relaunch` | Prepare the selected host browser now |
-| `/browser repair` | Install missing Python Playwright for the local-profile launch path |
+| `/browser repair` | Refresh host browser discovery and publish its status |
 | `/browser privacy` | Show where host-browser content policy is configured |
 | `/disconnect` | Disconnect and return to the current host connection flow |
 | `/keys` | Toggle key help |
@@ -226,19 +226,12 @@ For Chromium-family browsers, if the browser's Remote debugging page has been al
 
 For a browser launched with an explicit debugging port, select its discovery address directly, for example `/browser localhost:9222`. A0 CLI resolves `/json/version` on the host; full `ws://` or `wss://` DevTools endpoints remain supported.
 
-If the selected profile must be launched by A0 and is already locked by a normal browser window, A0 reports `relaunch_required`; close that browser and retry the agent request or run `/browser relaunch` manually. This launch path uses the Python Playwright client installed with A0 CLI against an installed Chromium-family executable.
+If the selected profile must be launched by A0 and is already locked by a normal browser window, A0 reports `relaunch_required`; close that browser and retry the agent request or run `/browser relaunch` manually. A0 launches the installed Chromium-family executable with a fresh loopback debugging port and closes that process on disconnect.
 
-Chrome 136+ blocks Playwright remote debugging against the default personal Chrome data directory. If Chrome's own Remote debugging consent path is not available, A0 exposes and auto-selects a separate local profile such as `chrome-a0 Default` under the user's data directory. Site data stays in that local browser profile, and the user may need to sign in once there. You can still select it manually with `/browser profile chrome-a0 Default`.
+Chrome 136+ restricts command-line remote debugging against the default personal Chrome data directory. If Chrome's own Remote debugging consent path is not available, A0 exposes and auto-selects a separate local profile such as `chrome-a0 Default` under the user's data directory. Site data stays in that local browser profile, and the user may need to sign in once there. You can still select it manually with `/browser profile chrome-a0 Default`.
 
-The Patchright runtime and Chromium binary under the Agent Zero Docker container, such as `/a0/tmp/playwright`, belong to the container browser backend. They are useful when Browser settings use `container`, but they cannot control a host Chrome-family profile from inside Docker.
+The CLI uses the Chrome DevTools Protocol for both attached and A0-launched Chromium profiles. The Docker browser uses its own profile inside Agent Zero.
 
-The A0 CLI installation includes the Python Playwright client, but it does not download a separate Chromium binary. If an older or damaged installation is missing that client, Launcher Browser setup, automatic host-browser preparation, `/browser host on`, and `/browser relaunch` repair it automatically. You can also trigger the repair directly:
-
-```bash
-/browser repair
-```
-
-Platform caveats:
 - macOS: detects Safari through its system WebDriver, plus Chrome, Chromium, Edge, Brave, Opera, and Vivaldi apps in `/Applications` and profile data in `~/Library/Application Support`.
 - Windows: detects Chrome, Chromium, Edge, Brave, Opera, and Vivaldi under `%LOCALAPPDATA%`/Program Files profile conventions.
 - Linux: detects Chrome, Chromium, Edge, Brave, Opera, and Vivaldi variants on `PATH`; X11 and Wayland are both supported by the underlying system browser.

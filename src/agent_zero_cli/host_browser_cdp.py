@@ -6,7 +6,7 @@ import contextlib
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
@@ -15,6 +15,7 @@ from agent_zero_cli.host_browser_common import (
     DEFAULT_VIEWPORT,
     REMOTE_DEBUGGING_CONNECT_TIMEOUT_SECONDS,
 )
+
 
 class CDPError(RuntimeError):
     pass
@@ -29,6 +30,14 @@ class CDPConnection:
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._send_lock = asyncio.Lock()
+        self.on_detached: Callable[[str], None] | None = None
+
+    @property
+    def is_connected(self) -> bool:
+        return (
+            self._ws is not None and not self._ws.closed
+            and self._reader_task is not None and not self._reader_task.done()
+        )
 
     async def connect(self) -> None:
         timeout = aiohttp.ClientTimeout(total=REMOTE_DEBUGGING_CONNECT_TIMEOUT_SECONDS)
@@ -37,8 +46,7 @@ class CDPConnection:
             endpoint = self.endpoint
             parsed = urlsplit(endpoint)
             if parsed.scheme in {"http", "https"}:
-                path = parsed.path if parsed.path == "/json/version" else "/json/version"
-                version_url = urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
+                version_url = urlunsplit((parsed.scheme, parsed.netloc, "/json/version", parsed.query, ""))
                 async with self._session.get(version_url) as response:
                     response.raise_for_status()
                     version = await response.json()
@@ -48,11 +56,11 @@ class CDPConnection:
                     raise CDPError(f"{version_url} did not return webSocketDebuggerUrl.")
             self._ws = await self._session.ws_connect(
                 endpoint,
-                timeout=REMOTE_DEBUGGING_CONNECT_TIMEOUT_SECONDS,
+                max_msg_size=36 * 1024 * 1024,
                 autoclose=True,
                 autoping=True,
             )
-        except Exception:
+        except BaseException:
             await self.close()
             raise
         self._reader_task = asyncio.create_task(self._read_loop())
@@ -111,96 +119,178 @@ class CDPConnection:
             if not future.done():
                 future.set_result({"error": {"message": "Chrome DevTools connection closed."}})
         self._pending.clear()
+        self.on_detached = None
 
     async def _read_loop(self) -> None:
         assert self._ws is not None
-        async for message in self._ws:
-            if message.type == aiohttp.WSMsgType.TEXT:
-                try:
-                    payload = json.loads(message.data)
-                except Exception:
-                    continue
-                msg_id = payload.get("id")
-                if isinstance(msg_id, int):
-                    future = self._pending.get(msg_id)
-                    if future is not None and not future.done():
-                        future.set_result(payload)
-            elif message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
-                break
-        for future in list(self._pending.values()):
-            if not future.done():
-                future.set_result({"error": {"message": "Chrome DevTools connection closed."}})
+        try:
+            async for message in self._ws:
+                if message.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        payload = json.loads(message.data)
+                    except Exception:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    msg_id = payload.get("id")
+                    if isinstance(msg_id, int):
+                        future = self._pending.get(msg_id)
+                        if future is not None and not future.done():
+                            future.set_result(payload)
+                    elif payload.get("method") == "Target.detachedFromTarget" and self.on_detached:
+                        self.on_detached(payload["params"]["sessionId"])
+                elif message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+                    break
+        finally:
+            for future in list(self._pending.values()):
+                if not future.done():
+                    future.set_result({"error": {"message": "Chrome DevTools connection closed."}})
 
 
 class CDPMouse:
     def __init__(self, page: "CDPPage") -> None:
         self.page = page
-        self._x = 0.0
-        self._y = 0.0
+        self.x = self.y = 0.0
+        self.buttons = 0
 
-    async def move(self, x: float, y: float, steps: int | None = None) -> None:
-        del steps
-        self._x = float(x)
-        self._y = float(y)
-        await self.page.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": self._x, "y": self._y})
+    async def _dispatch(self, event: str, **kwargs: Any) -> None:
+        await self.page.send("Input.dispatchMouseEvent", {
+            "type": event, "x": self.x, "y": self.y, "buttons": self.buttons,
+            "modifiers": self.page.keyboard.modifiers, **kwargs,
+        })
+
+    async def move(self, x: float, y: float, steps: int = 1) -> None:
+        start_x, start_y = self.x, self.y
+        for step in range(1, steps + 1):
+            self.x = start_x + (x - start_x) * step / steps
+            self.y = start_y + (y - start_y) * step / steps
+            await self._dispatch("mouseMoved")
 
     async def click(self, x: float, y: float, button: str = "left") -> None:
-        self._x = float(x)
-        self._y = float(y)
-        params = {"x": float(x), "y": float(y), "button": _cdp_mouse_button(button), "clickCount": 1}
-        await self.page.send("Input.dispatchMouseEvent", {"type": "mousePressed", **params})
-        await self.page.send("Input.dispatchMouseEvent", {"type": "mouseReleased", **params})
+        await self.move(x, y)
+        await self.down(button)
+        await self.up(button)
 
     async def dblclick(self, x: float, y: float, button: str = "left") -> None:
-        self._x = float(x)
-        self._y = float(y)
-        params = {"x": float(x), "y": float(y), "button": _cdp_mouse_button(button), "clickCount": 2}
-        await self.page.send("Input.dispatchMouseEvent", {"type": "mousePressed", **params})
-        await self.page.send("Input.dispatchMouseEvent", {"type": "mouseReleased", **params})
+        await self.click(x, y, button)
+        await self.down(button, 2)
+        await self.up(button, 2)
 
-    async def down(self) -> None:
-        await self.page.send(
-            "Input.dispatchMouseEvent",
-            {"type": "mousePressed", "x": self._x, "y": self._y, "button": "left", "clickCount": 1},
-        )
+    async def down(self, button: str = "left", count: int = 1) -> None:
+        button = _cdp_mouse_button(button)
+        self.buttons |= {"left": 1, "right": 2, "middle": 4}[button]
+        await self._dispatch("mousePressed", button=button, clickCount=count)
 
-    async def up(self) -> None:
-        await self.page.send(
-            "Input.dispatchMouseEvent",
-            {"type": "mouseReleased", "x": self._x, "y": self._y, "button": "left", "clickCount": 1},
-        )
+    async def up(self, button: str = "left", count: int = 1) -> None:
+        button = _cdp_mouse_button(button)
+        self.buttons &= ~{"left": 1, "right": 2, "middle": 4}[button]
+        await self._dispatch("mouseReleased", button=button, clickCount=count)
 
     async def wheel(self, delta_x: float, delta_y: float) -> None:
-        await self.page.send(
-            "Input.dispatchMouseEvent",
-            {"type": "mouseWheel", "x": self._x, "y": self._y, "deltaX": float(delta_x), "deltaY": float(delta_y)},
-        )
+        await self._dispatch("mouseWheel", deltaX=delta_x, deltaY=delta_y)
+
+
+_MODIFIERS = {"Alt": 1, "Control": 2, "Meta": 4, "Shift": 8}
+_KEY_CODES = {
+    "Backspace": 8, "Tab": 9, "Enter": 13, "Shift": 16, "Control": 17,
+    "Alt": 18, "Escape": 27, " ": 32, "PageUp": 33, "PageDown": 34,
+    "End": 35, "Home": 36, "ArrowLeft": 37, "ArrowUp": 38, "ArrowRight": 39,
+    "ArrowDown": 40, "Insert": 45, "Delete": 46, "Meta": 91,
+    **{f"F{n}": 111 + n for n in range(1, 25)},
+}
+# CDP accepts DOM physical codes and Windows virtual-key codes on all host OSes.
+_PRINTABLE_KEYS = {
+    **{digit + shifted: ("Digit" + digit, ord(digit)) for digit, shifted in zip("1234567890", "!@#$%^&*()")},
+    "`~": ("Backquote", 192), "-_": ("Minus", 189), "=+": ("Equal", 187),
+    "[{": ("BracketLeft", 219), "]}": ("BracketRight", 221), "\\|": ("Backslash", 220),
+    ";:": ("Semicolon", 186), "'\"": ("Quote", 222), ",<": ("Comma", 188),
+    ".>": ("Period", 190), "/?": ("Slash", 191),
+}
+_KEY_ALIASES = {"Ctrl": "Control", "Esc": "Escape", "Space": " ", "Return": "Enter",
+                "\n": "Enter", "\r": "Enter", "\t": "Tab"}
+
+
+def _key_definition(raw: str, shifted: bool) -> tuple[str, str, int]:
+    key = _KEY_ALIASES.get(raw, raw)
+    for modifier in _MODIFIERS:
+        if key in (modifier, modifier + "Left", modifier + "Right"):
+            code = modifier + "Left" if key == modifier else key
+            return modifier, code, 92 if code == "MetaRight" else _KEY_CODES[modifier]
+    if key.startswith("Key") and len(key) == 4 and key[-1].isascii() and key[-1].isalpha():
+        key = key[-1].lower()
+    if len(key) == 1 and key.isascii() and key.isalpha():
+        return key.upper() if shifted else key, "Key" + key.upper(), ord(key.upper())
+    for pair, (code, virtual) in _PRINTABLE_KEYS.items():
+        if key == code or key in (pair[0], pair[1]):
+            return pair[1] if shifted or key == pair[1] else pair[0], code, virtual
+    return key, "Space" if key == " " else key, _KEY_CODES.get(key, 0)
 
 
 class CDPKeyboard:
     def __init__(self, page: "CDPPage") -> None:
         self.page = page
+        self.modifiers = 0
+        self._held: set[str] = set()
 
     async def type(self, text: str) -> None:
-        await self.insert_text(text)
+        for character in text:
+            if character.isascii() and (character.isprintable() or character in _KEY_ALIASES):
+                await self.press(character)
+            else:
+                await self.insert_text(character)
 
     async def insert_text(self, text: str) -> None:
-        await self.page.send("Input.insertText", {"text": str(text or "")})
+        await self.page.send("Input.insertText", {"text": text})
 
     async def press(self, key: str) -> None:
-        key_text = str(key or "")
-        if len(key_text) == 1:
-            await self.page.send("Input.dispatchKeyEvent", {"type": "keyDown", "text": key_text, "key": key_text})
-            await self.page.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": key_text})
-            return
-        await self.page.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": key_text})
-        await self.page.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": key_text})
+        if key.endswith("++") and len(key) > 2:
+            keys = [*key[:-2].split("+"), "+"]
+        else:
+            keys = [key] if key == "+" else key.split("+")
+        if not all(keys):
+            raise ValueError("Expected a key between chord separators")
+        pressed = []
+        try:
+            for part in keys:
+                await self.down(part)
+                pressed.append(part)
+        finally:
+            for part in reversed(pressed):
+                await self.up(part)
+
+    async def _dispatch(self, raw: str, down: bool) -> None:
+        key, code, keycode = _key_definition(raw, bool(self.modifiers & _MODIFIERS["Shift"]))
+        modifier = _MODIFIERS.get(key, 0)
+        modifiers = self.modifiers
+        if modifier:
+            if down:
+                modifiers |= modifier
+            elif not (self._held - {code}) & {key + "Left", key + "Right"}:
+                modifiers &= ~modifier
+        text = key if len(key) == 1 else "\r" if key == "Enter" else ""
+        if modifiers & 7:
+            text = ""
+        params = {
+            "type": ("keyDown" if text else "rawKeyDown") if down else "keyUp",
+            "key": key, "code": code, "windowsVirtualKeyCode": keycode,
+            "modifiers": modifiers, "text": text if down else "",
+        }
+        if down:
+            params["autoRepeat"] = code in self._held
+        if modifier:
+            params["location"] = 2 if code.endswith("Right") else 1
+        await self.page.send("Input.dispatchKeyEvent", params)
+        self.modifiers = modifiers
+        if down:
+            self._held.add(code)
+        else:
+            self._held.discard(code)
 
     async def down(self, key: str) -> None:
-        await self.page.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": str(key or "")})
+        await self._dispatch(key, True)
 
     async def up(self, key: str) -> None:
-        await self.page.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": str(key or "")})
+        await self._dispatch(key, False)
 
 
 class CDPPage:
@@ -222,26 +312,49 @@ class CDPPage:
     async def send(self, method: str, params: dict[str, Any] | None = None, *, timeout: float = 30.0) -> dict[str, Any]:
         return await self.connection.command(method, params, session_id=self.session_id, timeout=timeout)
 
-    async def goto(self, url: str, **_: object) -> None:
-        await self.send("Page.navigate", {"url": url})
+    async def goto(self, url: str, *, timeout: int = 30000, **_: object) -> None:
+        result = await self.send("Page.navigate", {"url": url}, timeout=timeout / 1000)
+        if result.get("errorText"):
+            raise CDPError(result["errorText"])
         self.url = url
+        await self.wait_for_load_state(timeout=timeout)
 
-    async def go_back(self, **_: object) -> None:
-        await self.evaluate("() => history.back()")
+    async def _traverse(self, offset: int, timeout: int) -> None:
+        async with asyncio.timeout(timeout / 1000):
+            history = await self.send("Page.getNavigationHistory")
+            index = history["currentIndex"] + offset
+            if 0 <= index < len(history["entries"]):
+                entry_id = history["entries"][index]["id"]
+                await self.send("Page.navigateToHistoryEntry", {"entryId": entry_id})
+                while True:
+                    history = await self.send("Page.getNavigationHistory")
+                    if history["entries"][history["currentIndex"]]["id"] == entry_id:
+                        break
+                    await asyncio.sleep(0.05)
 
-    async def go_forward(self, **_: object) -> None:
-        await self.evaluate("() => history.forward()")
+    async def go_back(self, *, timeout: int = 10000, **_: object) -> None:
+        await self._traverse(-1, timeout)
 
-    async def reload(self, **kwargs: object) -> None:
-        previous = await self.send("Page.getFrameTree") if kwargs.get("wait_until") == "commit" else None
-        await self.send("Page.reload", {})
-        if previous is not None:
-            loader = previous["frameTree"]["frame"]["loaderId"]
-            while (await self.send("Page.getFrameTree"))["frameTree"]["frame"]["loaderId"] == loader:
+    async def go_forward(self, *, timeout: int = 10000, **_: object) -> None:
+        await self._traverse(1, timeout)
+
+    async def reload(self, *, timeout: int = 15000, **_: object) -> None:
+        async with asyncio.timeout(timeout / 1000):
+            previous = (await self.send("Page.getFrameTree"))["frameTree"]["frame"]["loaderId"]
+            await self.send("Page.reload")
+            while (await self.send("Page.getFrameTree"))["frameTree"]["frame"]["loaderId"] == previous:
                 await asyncio.sleep(0.05)
 
-    async def wait_for_load_state(self, *_: object, **__: object) -> None:
-        await asyncio.sleep(0.15)
+    async def wait_for_load_state(self, *_: object, timeout: int = 30000) -> None:
+        async with asyncio.timeout(timeout / 1000):
+            while True:
+                try:
+                    if await self.evaluate("document.readyState") in {"interactive", "complete"}:
+                        return
+                except CDPError as exc:
+                    if "context" not in str(exc).lower():
+                        raise
+                await asyncio.sleep(0.05)
 
     async def bring_to_front(self) -> None:
         await self.connection.command("Target.activateTarget", {"targetId": self.target_id})
@@ -251,23 +364,32 @@ class CDPPage:
         return str(result or "")
 
     async def evaluate(self, script: str, arg: object = None, *, timeout: float = 30.0) -> object:
-        result = await self.send(
-            "Runtime.evaluate",
-            {
-                "expression": _cdp_evaluate_expression(script, arg),
-                "awaitPromise": True,
-                "returnByValue": True,
-            },
-            timeout=timeout,
-        )
+        source = script.strip()
+        if re.match(r"^(?:async\s+)?function\b", source) and source.rstrip(";").endswith("}"):
+            source = f"({source.rstrip(';')})"
+        if arg is not None:
+            source = f"({source})({json.dumps(arg)})"
+        result = await self.send("Runtime.evaluate", {
+            "expression": source, "awaitPromise": True, "returnByValue": arg is not None,
+        }, timeout=timeout)
         if result.get("exceptionDetails"):
             raise CDPError(str(result["exceptionDetails"]))
-        remote = result.get("result") if isinstance(result.get("result"), dict) else {}
-        if "value" in remote:
-            return remote.get("value")
-        if remote.get("type") == "undefined":
-            return None
-        return remote.get("description")
+        remote = result["result"]
+        object_id = remote.get("objectId")
+        if not object_id:
+            return remote.get("value", remote.get("unserializableValue"))
+        try:
+            result = await self.send("Runtime.callFunctionOn", {
+                "objectId": object_id,
+                "functionDeclaration": "function(){return this()}" if remote["type"] == "function" else "function(){return this}",
+                "awaitPromise": True, "returnByValue": True,
+            }, timeout=timeout)
+            if result.get("exceptionDetails"):
+                raise CDPError(str(result["exceptionDetails"]))
+            return result["result"].get("value")
+        finally:
+            with contextlib.suppress(CDPError):
+                await self.send("Runtime.releaseObject", {"objectId": object_id}, timeout=2)
 
     async def screenshot(self, **kwargs: object) -> bytes:
         image_type = str(kwargs.get("type") or "jpeg")
@@ -275,7 +397,9 @@ class CDPPage:
         if image_type == "jpeg":
             params["quality"] = int(kwargs.get("quality") or 80)
         if kwargs.get("full_page"):
-            params["captureBeyondViewport"] = True
+            metrics = await self.send("Page.getLayoutMetrics")
+            size = metrics["cssContentSize"]
+            params.update(captureBeyondViewport=True, clip={**size, "scale": 1})
         result = await self.send("Page.captureScreenshot", params, timeout=60.0)
         data = base64.b64decode(str(result.get("data") or ""))
         path = kwargs.get("path")
@@ -304,13 +428,24 @@ class CDPPage:
             },
         )
 
-    async def evaluate_handle(self, *_: object, **__: object) -> object:
-        raise NotImplementedError(
-            "CDPPage.evaluate_handle is not supported for user-authorized Chrome remote debugging yet."
-        )
+    async def install_in_frames(self, source: str) -> None:
+        script = await self.send("Page.addScriptToEvaluateOnNewDocument", {"source": source, "runImmediately": True})
+        await self.send("Page.removeScriptToEvaluateOnNewDocument", {"identifier": script["identifier"]})
 
-    async def set_input_files(self, *_: object, **__: object) -> None:
-        raise NotImplementedError("File uploads are not supported for user-authorized Chrome remote debugging yet.")
+    async def upload_files(self, ref: int | str, selector: str, paths: list[str]) -> None:
+        expression = f"globalThis.__spaceBrowserPageContent__.fileInputElementFor({json.dumps(ref)})"
+        if selector:
+            expression = f"({expression}) || document.querySelector({json.dumps(selector)})"
+        result = await self.send("Runtime.evaluate", {"expression": expression})
+        element = result.get("result", {})
+        object_id = element.get("objectId")
+        if not object_id:
+            raise CDPError(f"Browser ref {ref!r} does not resolve to a file input")
+        try:
+            await self.send("DOM.setFileInputFiles", {"objectId": object_id, "files": paths})
+        finally:
+            with contextlib.suppress(CDPError):
+                await self.send("Runtime.releaseObject", {"objectId": object_id})
 
 
 class CDPContext:
@@ -320,12 +455,21 @@ class CDPContext:
         self._pages_by_target: dict[str, CDPPage] = {}
         self._handlers: dict[str, Any] = {}
         self._init_scripts: list[str] = []
+        self._target_lock = asyncio.Lock()
+        connection.on_detached = self._detached
 
-    def set_default_timeout(self, timeout: int) -> None:
-        del timeout
+    def _detached(self, session_id: str) -> None:
+        for page in self.pages:
+            if page.session_id == session_id:
+                self._remove_page(page)
+                break
 
-    def set_default_navigation_timeout(self, timeout: int) -> None:
-        del timeout
+    def _remove_page(self, page: CDPPage) -> None:
+        self._pages_by_target.pop(page.target_id, None)
+        self.pages.remove(page)
+        page._closed = True
+        if callback := page._handlers.get("close"):
+            callback()
 
     def on(self, event: str, callback: Any) -> None:
         self._handlers[event] = callback
@@ -340,12 +484,22 @@ class CDPContext:
     async def new_page(self) -> CDPPage:
         result = await self.connection.command("Target.createTarget", {"url": "about:blank"})
         target_id = str(result.get("targetId") or "")
-        return await self._attach_page(target_id, "about:blank")
+        try:
+            async with self._target_lock:
+                return self._pages_by_target.get(target_id) or await self._attach_page(target_id, "about:blank")
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self.connection.command("Target.closeTarget", {"targetId": target_id})
+            raise
 
     async def close(self) -> None:
         return None
 
     async def discover_pages(self) -> list[CDPPage]:
+        async with self._target_lock:
+            return await self._discover_pages()
+
+    async def _discover_pages(self) -> list[CDPPage]:
         result = await self.connection.command("Target.getTargets", {})
         infos = result.get("targetInfos") if isinstance(result.get("targetInfos"), list) else []
         visible_targets: set[str] = set()
@@ -362,10 +516,9 @@ class CDPContext:
                 page = await self._attach_page(target_id, url)
             else:
                 page.url = url
-        for target_id in list(self._pages_by_target):
-            if target_id not in visible_targets:
-                self._pages_by_target.pop(target_id, None)
-        self.pages = [page for page in self.pages if page.target_id in self._pages_by_target]
+        for page in list(self.pages):
+            if page.target_id not in visible_targets:
+                self._remove_page(page)
         return list(self.pages)
 
     async def _attach_page(self, target_id: str, url: str) -> CDPPage:
@@ -393,30 +546,6 @@ def _cdp_mouse_button(button: str) -> str:
     if normalized in {"middle", "auxiliary"}:
         return "middle"
     return "left"
-
-
-def _cdp_evaluate_expression(script: str, arg: object = None) -> str:
-    source = str(script or "undefined")
-    if arg is not None:
-        return f"({source})({json.dumps(arg)})"
-    stripped = source.strip()
-    if _cdp_expression_is_iife(stripped):
-        return source
-    if _cdp_expression_is_function(stripped):
-        return f"({source})()"
-    return source
-
-
-def _cdp_expression_is_function(source: str) -> bool:
-    return bool(
-        re.match(r"^(?:async\s+)?function\b", source)
-        or re.match(r"^(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>", source)
-    )
-
-
-def _cdp_expression_is_iife(source: str) -> bool:
-    compact = source.rstrip()
-    return compact.endswith(")();") or compact.endswith("})();")
 
 
 def _cdp_target_visible(url: str) -> bool:

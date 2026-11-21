@@ -5,9 +5,12 @@ import base64
 import contextlib
 import math
 from dataclasses import dataclass, field, replace
+import os
 import platform
+import stat
+import tempfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from agent_zero_cli.host_browser_cdp import CDPConnection, CDPContext, CDPPage
@@ -32,6 +35,7 @@ from agent_zero_cli.host_browser_common import (
     normalize_upload_paths,
     normalize_url,
     profile_lock_state_for_profile,
+    remote_debugging_endpoint_from_active_port_file,
     remote_debugging_endpoint_from_user_data_dir,
     remote_debugging_endpoint_label,
     remote_debugging_enable_hint,
@@ -63,64 +67,43 @@ class HostBrowserPage:
 
 
 class _RuntimeAdapter:
-    close_pages_on_session_close = True
-
     async def is_started(self, session: "HostBrowserSession") -> bool:
-        return session.context is not None
+        raise NotImplementedError
 
     async def start(self, session: "HostBrowserSession") -> None:
         raise NotImplementedError
 
     async def refresh_pages(self, session: "HostBrowserSession") -> None:
-        del session
+        discovered_pages = await session.context.discover_pages()
+        visible_pages = set(discovered_pages)
+        for browser_id, browser_page in list(session.pages.items()):
+            if browser_page.page not in visible_pages:
+                session.pages.pop(browser_id, None)
+                if session.last_interacted_browser_id == browser_id:
+                    session.last_interacted_browser_id = None
+        for page in discovered_pages:
+            await session._register_page(page)
+        if session.last_interacted_browser_id not in session.pages:
+            session.last_interacted_browser_id = next(iter(sorted(session.pages)), None)
 
     async def current_url(self, page: Any) -> str:
         return str(getattr(page, "url", "") or "")
 
     async def close_runtime(self, session: "HostBrowserSession") -> None:
-        if self.close_pages_on_session_close:
-            for browser_id in list(session.pages):
-                with contextlib.suppress(Exception):
-                    await session.pages[browser_id].page.close()
         session.pages.clear()
-        if session.context is not None:
+        if session.browser is not None:
             with contextlib.suppress(Exception):
-                await session.context.close()
-            session.context = None
-        if session.playwright is not None:
-            with contextlib.suppress(Exception):
-                await session.playwright.stop()
-            session.playwright = None
+                await session.browser.close()
         session.browser = None
+        session.context = None
         session.last_interacted_browser_id = None
 
 
-class _PlaywrightRuntimeAdapter(_RuntimeAdapter):
-    async def start(self, session: "HostBrowserSession") -> None:
-        if session.playwright_starter is not None:
-            starter = session.playwright_starter
-        else:
-            from playwright.async_api import async_playwright
-
-            starter = async_playwright
-        session.playwright = await starter().start()
-        launch_args = chromium_launch_args(session.profile.profile_directory)
-        session.context = await session.playwright.chromium.launch_persistent_context(
-            user_data_dir=str(session.profile.user_data_dir),
-            executable_path=session.profile.executable_path,
-            headless=False,
-            accept_downloads=True,
-            viewport=DEFAULT_VIEWPORT,
-            screen=DEFAULT_VIEWPORT,
-            no_viewport=False,
-            args=launch_args,
-        )
-
-
 class _CDPRuntimeAdapter(_RuntimeAdapter):
-    close_pages_on_session_close = False
-
     async def start(self, session: "HostBrowserSession") -> None:
+        if not session.profile.is_remote_debugging:
+            await self._launch(session)
+            return
         profile = _refreshed_remote_debugging_profile(session.profile)
         session.profile = profile
         for attempt in range(2):
@@ -145,40 +128,84 @@ class _CDPRuntimeAdapter(_RuntimeAdapter):
         session.context = CDPContext(connection)
         await session.context.discover_pages()
 
-    async def refresh_pages(self, session: "HostBrowserSession") -> None:
-        discovered_pages = await session.context.discover_pages()
-        visible_pages = set(discovered_pages)
-        for browser_id, browser_page in list(session.pages.items()):
-            if browser_page.page not in visible_pages:
-                session.pages.pop(browser_id, None)
-                if session.last_interacted_browser_id == browser_id:
-                    session.last_interacted_browser_id = None
-        for page in discovered_pages:
-            await session._register_page(page)
-        if session.last_interacted_browser_id not in session.pages:
-            session.last_interacted_browser_id = next(iter(sorted(session.pages)), None)
+    async def _launch(self, session: "HostBrowserSession") -> None:
+        profile = session.profile
+        previous_endpoint = remote_debugging_endpoint_from_user_data_dir(profile.user_data_dir)
+        session.process = await asyncio.create_subprocess_exec(
+            profile.executable_path,
+            f"--user-data-dir={profile.user_data_dir}",
+            *chromium_launch_args(profile.profile_directory),
+            "--remote-debugging-address=127.0.0.1",
+            "--remote-debugging-port=0",
+            "--no-first-run",
+            "--no-default-browser-check",
+            f"--window-size={DEFAULT_VIEWPORT['width']},{DEFAULT_VIEWPORT['height']}",
+            "about:blank",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            async with asyncio.timeout(30):
+                while session.process.returncode is None:
+                    endpoint = remote_debugging_endpoint_from_user_data_dir(profile.user_data_dir)
+                    if endpoint and endpoint != previous_endpoint:
+                        connection = CDPConnection(endpoint)
+                        try:
+                            await connection.connect()
+                            info = await connection.command("SystemInfo.getProcessInfo")
+                            if not any(p["type"] == "browser" and p["id"] == session.process.pid for p in info["processInfo"]):
+                                raise RuntimeError("The debugging endpoint belongs to another Chromium process.")
+                        except BaseException:
+                            await connection.close()
+                            raise
+                        session.browser = connection
+                        marker = profile.user_data_dir / "DevToolsActivePort"
+                        if remote_debugging_endpoint_from_user_data_dir(profile.user_data_dir) == endpoint:
+                            session._owned_marker = _marker_identity(marker)
+                        session.context = CDPContext(connection)
+                        await session.context.discover_pages()
+                        return
+                    await asyncio.sleep(0.05)
+        except TimeoutError as exc:
+            raise RuntimeError("Chromium did not open its local debugging endpoint within 30 seconds.") from exc
+        raise RuntimeError(f"Chromium exited during startup (exit code {session.process.returncode}).")
 
-    async def current_url(self, page: Any) -> str:
-        if isinstance(page, CDPPage):
-            with contextlib.suppress(Exception):
-                current_url = await page.evaluate("() => location.href")
-                if current_url:
-                    page.url = str(current_url)
-        return await super().current_url(page)
+    async def is_started(self, session: "HostBrowserSession") -> bool:
+        return (
+            session.context is not None and session.browser is not None
+            and session.browser.is_connected
+            and (session.process is None or session.process.returncode is None)
+        )
 
     async def close_runtime(self, session: "HostBrowserSession") -> None:
-        session.pages.clear()
-        if session.browser is not None:
-            with contextlib.suppress(Exception):
-                await session.browser.close()
-        session.browser = None
-        session.context = None
-        session.last_interacted_browser_id = None
+        process = session.process
+        if process is not None and process.returncode is None:
+            if session.browser is not None and session.browser.is_connected:
+                with contextlib.suppress(Exception):
+                    await session.browser.command("Browser.close", timeout=2)
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(process.wait(), 3)
+            if process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), 3)
+                except TimeoutError:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
+                    await process.wait()
+        marker = session._owned_marker
+        endpoint = session.browser.endpoint if marker is not None else ""
+        session._owned_marker = None
+        session.process = None
+        session._bootstrap_page = None
+        await super().close_runtime(session)
+        if process is not None and process.returncode is not None and marker is not None:
+            _retire_owned_marker(session.profile.user_data_dir, marker, endpoint)
 
 
 class _SafariRuntimeAdapter(_RuntimeAdapter):
-    close_pages_on_session_close = False
-
     async def is_started(self, session: "HostBrowserSession") -> bool:
         process = getattr(session.browser, "process", None)
         if session.context is None or process is None or process.returncode is not None:
@@ -194,32 +221,43 @@ class _SafariRuntimeAdapter(_RuntimeAdapter):
         session.browser = driver
         session.context = await driver.start()
 
-    async def refresh_pages(self, session: "HostBrowserSession") -> None:
-        discovered_pages = await session.context.discover_pages()
-        visible_pages = set(discovered_pages)
-        for browser_id, browser_page in list(session.pages.items()):
-            if browser_page.page not in visible_pages:
-                session.pages.pop(browser_id, None)
-                if session.last_interacted_browser_id == browser_id:
-                    session.last_interacted_browser_id = None
-        for page in discovered_pages:
-            await session._register_page(page)
-        if session.last_interacted_browser_id not in session.pages:
-            session.last_interacted_browser_id = next(iter(sorted(session.pages)), None)
-
     async def current_url(self, page: Any) -> str:
         if isinstance(page, SafariPage):
             return await page.current_url()
         return await super().current_url(page)
 
-    async def close_runtime(self, session: "HostBrowserSession") -> None:
-        session.pages.clear()
-        if session.browser is not None:
-            with contextlib.suppress(Exception):
-                await session.browser.close()
-        session.browser = None
-        session.context = None
-        session.last_interacted_browser_id = None
+
+def _marker_identity(path: Path) -> tuple[int, int, int, int] | None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISREG(info.st_mode):
+        return info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size
+    return None
+
+
+def _retire_owned_marker(directory: Path, identity: tuple[int, int, int, int], endpoint: str) -> None:
+    marker = directory / "DevToolsActivePort"
+    if _marker_identity(marker) != identity or remote_debugging_endpoint_from_user_data_dir(directory) != endpoint:
+        return
+    # Claim the directory entry before verifying it again. A replacement stays discoverable.
+    with tempfile.NamedTemporaryFile(dir=directory, prefix=".a0-port-", delete=False) as temporary:
+        claimed = Path(temporary.name)
+    try:
+        marker.replace(claimed)
+    except FileNotFoundError:
+        claimed.unlink(missing_ok=True)
+        return
+    except OSError:
+        claimed.unlink(missing_ok=True)
+        raise
+    if _marker_identity(claimed) != identity or remote_debugging_endpoint_from_active_port_file(claimed) != endpoint:
+        try:
+            os.link(claimed, marker, follow_symlinks=False)
+        except FileExistsError:
+            pass
+    claimed.unlink()
 
 
 def _refreshed_remote_debugging_profile(profile: BrowserProfile) -> BrowserProfile:
@@ -239,8 +277,7 @@ def _refreshed_remote_debugging_profile(profile: BrowserProfile) -> BrowserProfi
 class HostBrowserSession:
     context_id: str
     profile: BrowserProfile
-    playwright_starter: Callable[[], Any] | None = None
-    playwright: Any = None
+    process: asyncio.subprocess.Process | None = None
     browser: Any = None
     context: Any = None
     pages: dict[int, HostBrowserPage] = field(default_factory=dict)
@@ -250,6 +287,7 @@ class HostBrowserSession:
     _dom_helper_sha256: str = ""
     _content_helper_source: str | None = None
     _content_helper_sha256: str = ""
+    _owned_marker: tuple[int, int, int, int] | None = None
     _start_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _registry_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _bootstrap_page: Any = None
@@ -259,9 +297,7 @@ class HostBrowserSession:
     def _runtime(self) -> _RuntimeAdapter:
         if self.profile.is_safari:
             return _SafariRuntimeAdapter()
-        if self.profile.is_remote_debugging:
-            return _CDPRuntimeAdapter()
-        return _PlaywrightRuntimeAdapter()
+        return _CDPRuntimeAdapter()
 
     async def set_dom_helper_source(self, source: str, source_hash: str = "") -> None:
         normalized_source = str(source or "")
@@ -477,6 +513,7 @@ class HostBrowserSession:
                 quality=coerce_int(payload.get("quality"), default=80),
                 full_page=coerce_bool(payload.get("full_page")),
                 path=str(payload.get("path") or ""),
+                image_format=payload.get("image_format", "jpeg"),
             )
         if action == "close":
             return await self.close_browser(payload.get("browser_id"))
@@ -519,8 +556,6 @@ class HostBrowserSession:
             with contextlib.suppress(Exception):
                 await runtime.close_runtime(self)
             raise
-        self.context.set_default_timeout(30000)
-        self.context.set_default_navigation_timeout(30000)
         self.context.on("close", self._on_context_closed)
         self.context.on("page", self._on_new_page_sync)
         if self._dom_helper_source:
@@ -698,13 +733,9 @@ class HostBrowserSession:
         self, browser_page: HostBrowserPage, script: str, timeout: float
     ) -> dict[str, Any]:
         page = browser_page.page
-        session = page if isinstance(page, CDPPage) else await asyncio.wait_for(
-            page.context.new_cdp_session(page), EVALUATE_RECOVERY_TIMEOUT_SECONDS
-        )
 
         async def run():
-            kwargs = {"timeout": timeout + 15} if isinstance(page, CDPPage) else {}
-            result = await page.evaluate(script, **kwargs)
+            result = await page.evaluate(script, timeout=timeout + 15)
             self._maybe_promote(browser_page.id)
             return {"result": result, "state": await self._state(browser_page.id)}
 
@@ -721,7 +752,7 @@ class HostBrowserSession:
             raise
         finally:
             cleanup = asyncio.create_task(
-                self._finish_evaluate(browser_page, session, operation, aborted)
+                self._finish_evaluate(browser_page, operation, aborted)
             )
             cancelled = False
             while not cleanup.done():
@@ -743,7 +774,7 @@ class HostBrowserSession:
                 raise asyncio.CancelledError
 
     async def _finish_evaluate(
-        self, browser_page: HostBrowserPage, session: Any, operation: asyncio.Task, aborted: bool
+        self, browser_page: HostBrowserPage, operation: asyncio.Task, aborted: bool
     ) -> str:
         page = browser_page.page
         recovery_notice = ""
@@ -751,7 +782,7 @@ class HostBrowserSession:
         async def recover():
             if operation.done() and not operation.cancelled() and operation.exception() is None:
                 return ""
-            await session.send("Runtime.terminateExecution")
+            await page.send("Runtime.terminateExecution")
             done, _ = await asyncio.wait({operation}, timeout=EVALUATE_TERMINATION_GRACE_SECONDS)
             if done and not operation.cancelled() and not isinstance(
                 operation.exception(), (TimeoutError, asyncio.TimeoutError)
@@ -770,8 +801,7 @@ class HostBrowserSession:
                 except Exception:
                     if not page.is_closed():
                         try:
-                            kwargs = {} if isinstance(page, CDPPage) else {"run_before_unload": False}
-                            await asyncio.wait_for(page.close(**kwargs), EVALUATE_RECOVERY_TIMEOUT_SECONDS)
+                            await asyncio.wait_for(page.close(), EVALUATE_RECOVERY_TIMEOUT_SECONDS)
                         except Exception:
                             raise RuntimeError(
                                 "Browser evaluate recovery failed; the affected tab could not be closed"
@@ -782,12 +812,6 @@ class HostBrowserSession:
             if not operation.done():
                 operation.cancel()
             await asyncio.gather(operation, return_exceptions=True)
-            if session is not page:
-                try:
-                    await asyncio.wait_for(session.detach(), EVALUATE_RECOVERY_TIMEOUT_SECONDS)
-                except Exception:
-                    if not page.is_closed():
-                        raise RuntimeError("Browser evaluate protocol session cleanup failed") from None
         return recovery_notice
 
     async def click(
@@ -981,8 +1005,10 @@ class HostBrowserSession:
         )
         await page.mouse.move(float(start_point["x"]), float(start_point["y"]))
         await page.mouse.down()
-        await page.mouse.move(float(end_point["x"]), float(end_point["y"]), steps=12)
-        await page.mouse.up()
+        try:
+            await page.mouse.move(float(end_point["x"]), float(end_point["y"]), steps=12)
+        finally:
+            await page.mouse.up()
         await self._settle(page, short=True)
         self._maybe_promote(resolved_id)
         return {"action": {"from": start_point, "to": end_point, "ref": ref if has_ref(ref) else None, "target_ref": target_ref if has_ref(target_ref) else None}, "state": await self._state(resolved_id)}
@@ -1017,12 +1043,12 @@ class HostBrowserSession:
         resolved_id = self._resolve_browser_id(browser_id)
         page = self._page(resolved_id)
         event_type_lower = str(event_type or "click").strip().lower()
-        if event_type_lower == "move":
+        if event_type_lower in {"move", "down", "up"}:
             await page.mouse.move(float(x), float(y))
-        elif event_type_lower == "down":
-            await page.mouse.down()
-        elif event_type_lower == "up":
-            await page.mouse.up()
+            if event_type_lower == "down":
+                await page.mouse.down(button=button)
+            elif event_type_lower == "up":
+                await page.mouse.up(button=button)
         else:
             pressed: list[str] = []
             try:
@@ -1145,23 +1171,7 @@ class HostBrowserSession:
             "(ref) => globalThis.__spaceBrowserPageContent__.fileInputFor(ref)",
             ref,
         )
-        handle = None
-        try:
-            handle = await page.evaluate_handle(
-                "(ref) => globalThis.__spaceBrowserPageContent__.fileInputElementFor(ref)",
-                ref,
-            )
-            element = handle.as_element() if handle else None
-            if element:
-                await element.set_input_files(upload_paths)
-            elif metadata and metadata.get("selector"):
-                await page.set_input_files(metadata["selector"], upload_paths)
-            else:
-                raise ValueError(f"Browser ref {ref!r} does not resolve to a file input")
-        finally:
-            if handle:
-                with contextlib.suppress(Exception):
-                    await handle.dispose()
+        await page.upload_files(ref, (metadata or {}).get("selector", ""), upload_paths)
         await self._settle(page, short=True)
         self._maybe_promote(resolved_id)
         return {"action": {"files": upload_paths, "input": metadata or {}, "ref": ref}, "state": await self._state(resolved_id)}
@@ -1173,12 +1183,13 @@ class HostBrowserSession:
         quality: int = 80,
         full_page: bool = False,
         path: str = "",
+        image_format: str = "jpeg",
     ) -> dict[str, Any]:
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
         page = self._page(resolved_id)
         raw_path = str(path or "").strip()
-        output_path, image_type, mime = screenshot_output_path(self.context_id, resolved_id, path)
+        output_path, image_type, mime = screenshot_output_path(self.context_id, resolved_id, path, image_format)
         kwargs: dict[str, Any] = {
             "type": image_type,
             "full_page": bool(full_page),
@@ -1226,10 +1237,8 @@ class HostBrowserSession:
         resolved_id = self._resolve_browser_id(browser_id)
         page = self._page(resolved_id)
         await page.close()
-        self.pages.pop(resolved_id, None)
-        if self.last_interacted_browser_id == resolved_id:
-            self.last_interacted_browser_id = next(iter(sorted(self.pages)), None)
-        return await self.list()
+        await self._unregister_page_async(resolved_id)
+        return {"closed": resolved_id}
 
     async def close_all_browsers(self) -> dict[str, Any]:
         await self.ensure_started()
@@ -1332,25 +1341,33 @@ class HostBrowserSession:
 
     async def _state(self, browser_id: int) -> dict[str, Any]:
         browser_page = self.pages.get(int(browser_id))
-        if not browser_page:
+        if browser_page is None or browser_page.page.is_closed():
             raise KeyError(f"Browser {browser_id} is not open.")
         page = browser_page.page
-        current_url = await self._runtime.current_url(page)
-        try:
-            title = await page.title()
-        except Exception:
+        can_go_back = can_go_forward = False
+        if isinstance(page, CDPPage):
+            info = await page.connection.command("Target.getTargetInfo", {"targetId": page.target_id})
+            current_url = info["targetInfo"]["url"]
+            title = info["targetInfo"].get("title", "")
+            with contextlib.suppress(Exception):
+                history = await page.send("Page.getNavigationHistory")
+                index = history["currentIndex"]
+                can_go_back = index > 0
+                can_go_forward = index + 1 < len(history["entries"])
+        else:
+            current_url = await self._runtime.current_url(page)
             title = ""
-        try:
-            history_length = await page.evaluate("() => globalThis.history?.length || 0")
-        except Exception:
-            history_length = 0
+            with contextlib.suppress(Exception):
+                title = await page.title()
+            with contextlib.suppress(Exception):
+                can_go_back = int(await page.evaluate("() => globalThis.history?.length || 0")) > 1
         return {
             "id": browser_page.id,
             "context_id": self.context_id,
             "currentUrl": current_url,
             "title": title,
-            "canGoBack": bool(history_length and int(history_length) > 1),
-            "canGoForward": False,
+            "canGoBack": can_go_back,
+            "canGoForward": can_go_forward,
             "loading": False,
             "runtime": "host",
         }
@@ -1442,7 +1459,9 @@ class HostBrowserSession:
     async def _ensure_content_helper(self, page: Any) -> None:
         await self._ensure_dom_helper(page)
         has_helper = await page.evaluate(
-            "() => Boolean(globalThis.__spaceBrowserPageContent__?.ready?.())"
+            "(digest) => Boolean(globalThis.__spaceBrowserPageContent__?.ready?.()) && "
+            "(!digest || globalThis.__a0ContentHelperDigest === digest)",
+            self._content_helper_sha256,
         )
         if has_helper:
             return
@@ -1451,30 +1470,23 @@ class HostBrowserSession:
                 "Host browser content helper source was not provided by Agent Zero Browser plugin."
             )
         await page.evaluate(self._content_helper_source)
+        await page.evaluate("(digest) => { globalThis.__a0ContentHelperDigest = digest }", self._content_helper_sha256)
 
     async def _ensure_dom_helper(self, page: Any) -> None:
         if self._dom_helper_source is None:
             return
-        await self._ensure_helper_source(
-            page,
-            self._dom_helper_source,
-            "() => Boolean(globalThis.__spaceBrowserDomHelper__?.captureDocument)",
+        ready = await page.evaluate(
+            "(digest) => Boolean(globalThis.__spaceBrowserDomHelper__?.captureDocument) && "
+            "globalThis.__a0DomHelperDigest === digest", self._dom_helper_sha256,
         )
+        if not ready:
+            if isinstance(page, CDPPage):
+                # Install in the existing documents of the requested tab as well as its main frame.
+                await page.install_in_frames(self._dom_helper_source)
+            else:
+                await page.evaluate(self._dom_helper_source)
+            await page.evaluate("(digest) => { globalThis.__a0DomHelperDigest = digest }", self._dom_helper_sha256)
 
-    async def _ensure_helper_source(self, page: Any, source: str, ready_script: str) -> None:
-        targets = [page]
-        frames = getattr(page, "frames", None)
-        if isinstance(frames, list) and frames:
-            targets = frames
-        for target in targets:
-            try:
-                has_helper = await target.evaluate(ready_script)
-            except Exception:
-                continue
-            if has_helper:
-                continue
-            with contextlib.suppress(Exception):
-                await target.evaluate(source)
 
 class ProfileLockedError(RuntimeError):
     def __init__(self, message: str, *, lock_state: ProfileLockState):

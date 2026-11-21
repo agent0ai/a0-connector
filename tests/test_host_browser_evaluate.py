@@ -19,18 +19,12 @@ def anyio_backend():
     return "asyncio"
 
 
-def _runtime(monkeypatch, cdp=False):
+def _runtime(monkeypatch):
     session = HostBrowserSession("ctx", profile=None)
-    protocol = SimpleNamespace(send=AsyncMock(), detach=AsyncMock())
-    if cdp:
-        page = CDPPage(CDPContext(SimpleNamespace()), "target", "session")
-        page.send = protocol.send
-        page.close = AsyncMock()
-    else:
-        page = SimpleNamespace(
-            context=SimpleNamespace(new_cdp_session=AsyncMock(return_value=protocol)),
-            is_closed=lambda: False, close=AsyncMock(),
-        )
+    protocol = SimpleNamespace(send=AsyncMock())
+    page = CDPPage(CDPContext(SimpleNamespace()), "target", "session")
+    page.send = protocol.send
+    page.close = AsyncMock()
     page.evaluate = AsyncMock(return_value=2)
     page.reload = AsyncMock()
     session.pages[1] = HostBrowserPage(1, page)
@@ -63,9 +57,8 @@ def _hang(page):
     return started, stopped, operations
 
 
-@pytest.mark.parametrize("cdp", [False, True])
-async def test_host_timeout_recovers_and_preserves_multi_results(monkeypatch, cdp):
-    session, page, protocol = _runtime(monkeypatch, cdp)
+async def test_host_timeout_recovers_and_preserves_multi_results(monkeypatch):
+    session, page, protocol = _runtime(monkeypatch)
     _, stopped, operations = _hang(page)
     before = asyncio.all_tasks()
     results = await asyncio.wait_for(session.dispatch({
@@ -82,14 +75,12 @@ async def test_host_timeout_recovers_and_preserves_multi_results(monkeypatch, cd
     assert stopped.is_set() and all(task.done() for task in operations)
     assert not session.pages[1].evaluate_lock.locked()
     assert not (asyncio.all_tasks() - before)
-    assert protocol.detach.await_count == (0 if cdp else 2)
     page.close.assert_not_awaited()
 
 
-@pytest.mark.parametrize("cdp", [False, True])
 @pytest.mark.parametrize("caller_cancel", [False, True])
-async def test_host_confirmed_interruption_preserves_page(monkeypatch, cdp, caller_cancel):
-    session, page, protocol = _runtime(monkeypatch, cdp)
+async def test_host_confirmed_interruption_preserves_page(monkeypatch, caller_cancel):
+    session, page, protocol = _runtime(monkeypatch)
     started, stopped, operations = _hang(page)
     protocol.send.side_effect = lambda method: stopped.set()
     task = asyncio.create_task(session.evaluate(1, "hang", timeout=0.1))
@@ -107,9 +98,8 @@ async def test_host_confirmed_interruption_preserves_page(monkeypatch, cdp, call
     assert (await session.evaluate(1, "1+1"))["result"] == 2
 
 
-@pytest.mark.parametrize("cdp", [False, True])
-async def test_host_cancellation_ack_waits_for_browser_recovery(monkeypatch, cdp):
-    session, page, protocol = _runtime(monkeypatch, cdp)
+async def test_host_cancellation_ack_waits_for_browser_recovery(monkeypatch):
+    session, page, protocol = _runtime(monkeypatch)
     started, stopped, operations = _hang(page)
     manager = HostBrowserManager(CLIConfig(host_browser_enabled=True))
 
@@ -176,7 +166,6 @@ async def test_host_failed_reload_closes_only_affected_tab(monkeypatch, close_fa
     assert (1 in session.pages) is close_fails
     assert session.pages[2] is other
     assert all(task.done() for task in operations)
-    protocol.detach.assert_awaited_once()
 
 
 async def test_safari_evaluate_is_rejected_before_start(monkeypatch):
@@ -188,9 +177,8 @@ async def test_safari_evaluate_is_rejected_before_start(monkeypatch):
     page.evaluate.assert_not_awaited()
 
 
-@pytest.mark.parametrize("cdp", [False, True])
-async def test_host_provider_wait_timeout_does_not_confirm_javascript_cancellation(monkeypatch, cdp):
-    session, page, protocol = _runtime(monkeypatch, cdp)
+async def test_host_provider_wait_timeout_does_not_confirm_javascript_cancellation(monkeypatch):
+    session, page, protocol = _runtime(monkeypatch)
     page.evaluate.side_effect = asyncio.TimeoutError
     with pytest.raises(TimeoutError, match="reloaded to cancel pending JavaScript"):
         await session.evaluate(1, "hang", timeout=0.1)

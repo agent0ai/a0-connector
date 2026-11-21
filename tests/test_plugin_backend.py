@@ -1130,9 +1130,7 @@ def test_browser_runtime_endpoint_updates_browser_plugin_config() -> None:
                 "extension_paths": [os.path.normpath("/tmp/ext")],
                 "default_homepage": "https://example.com",
                 "autofocus_active_page": False,
-                "browser_tab_scope": "per_context",
                 "max_open_tabs": 32,
-                "idle_timeout_minutes": 60,
                 "evaluate_timeout_seconds": 30.0,
                 "runtime_backend": "host_required",
                 "host_browser_privacy_policy": "warn",
@@ -1176,6 +1174,25 @@ def test_browser_runtime_endpoint_defaults_missing_profile_mode() -> None:
     assert payload["runtime_backend"] == "host_required"
     assert payload["host_browser_profile_mode"] == "existing"
     assert payload["host_browser_selection"] == ""
+
+
+def test_browser_runtime_round_trips_explicit_endpoint() -> None:
+    _install_fake_helpers()
+    plugins_mod = sys.modules["helpers.plugins"]
+    settings = {}
+    plugins_mod.get_plugin_config = lambda *args, **kwargs: settings
+    plugins_mod.save_plugin_config = lambda *args: settings.update(args[-1])
+    _reload("plugins._a0_connector.api.v1.base")
+    mod = _reload("plugins._a0_connector.api.v1.browser_runtime")
+    handler = mod.BrowserRuntime(None, None)
+    endpoint = "ws://[::1]:9222/devtools/browser/AbCd?token=X%2FY&mode=Exact"
+
+    for request in (
+        {"action": "set", "runtime_backend": "host", "browser_selection": endpoint},
+        {"action": "get"},
+    ):
+        result = asyncio.run(handler.process(request, object()))
+        assert result["host_browser_selection"] == endpoint
 
 
 def test_capabilities_reflect_core_login_requirement() -> None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from functools import lru_cache
 import hashlib
 import json
@@ -9,7 +8,6 @@ import platform
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -28,7 +26,6 @@ DEFAULT_VIEWPORT = {"width": 1280, "height": 800}
 CHROME_SINGLETON_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
 HOST_BROWSER_ARTIFACT_ROOT_ENV = "A0_HOST_BROWSER_ARTIFACT_ROOT"
 DEFAULT_HOST_BROWSER_ARTIFACT_ROOT = Path(tempfile.gettempdir()) / "_a0_connector" / "host_browser"
-PLAYWRIGHT_PYTHON_PACKAGE = "playwright"
 SAFARI_EXECUTABLE_PATH = Path("/Applications/Safari.app/Contents/MacOS/Safari")
 SAFARI_DRIVER_PATH = Path("/usr/bin/safaridriver")
 HOST_BROWSER_OZONE_PLATFORM_ENV = "A0_HOST_BROWSER_OZONE_PLATFORM"
@@ -38,7 +35,6 @@ REMOTE_DEBUGGING_RESTRICTED_MAJOR = 136
 REMOTE_DEBUGGING_ENABLE_URL = "chrome://inspect/#remote-debugging"
 REMOTE_DEBUGGING_ENABLE_LABEL = "Allow remote debugging for this browser instance"
 RELAUNCH_CONTEXT_ID = "_a0_cli_browser_check"
-MAX_INSTALL_OUTPUT_CHARS = 4000
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z\d+\-.]*:", re.I)
 _SAFE_CONTEXT_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SUPPORTED_ACTIONS = {
@@ -80,7 +76,6 @@ _SUPPORTED_ACTIONS = {
     "multi",
     "status",
 }
-_SENSITIVE_ACTIONS = {"content", "detail", "evaluate", "screenshot", "screenshot_file"}
 _VALID_MODIFIERS = {"Control", "Shift", "Alt", "Meta"}
 BROWSER_REEXPORTS = [
     "CONTENT_HELPER_PATH",
@@ -90,7 +85,6 @@ BROWSER_REEXPORTS = [
     "CHROME_SINGLETON_FILES",
     "HOST_BROWSER_ARTIFACT_ROOT_ENV",
     "DEFAULT_HOST_BROWSER_ARTIFACT_ROOT",
-    "PLAYWRIGHT_PYTHON_PACKAGE",
     "SAFARI_EXECUTABLE_PATH",
     "SAFARI_DRIVER_PATH",
     "HOST_BROWSER_OZONE_PLATFORM_ENV",
@@ -100,12 +94,10 @@ BROWSER_REEXPORTS = [
     "REMOTE_DEBUGGING_ENABLE_URL",
     "REMOTE_DEBUGGING_ENABLE_LABEL",
     "RELAUNCH_CONTEXT_ID",
-    "MAX_INSTALL_OUTPUT_CHARS",
     "BrowserCandidate",
     "BrowserProfile",
     "ProfileLockState",
     "normalize_action",
-    "action_is_sensitive",
     "normalize_url",
     "detect_browser_candidates",
     "a0_managed_user_data_dir",
@@ -141,8 +133,6 @@ BROWSER_REEXPORTS = [
     "safe_context_id",
     "screenshot_output_path",
     "multi_group_key",
-    "playwright_python_install_command",
-    "playwright_python_install_commands",
     "content_helper_sha256",
     "parse_dom_helper_payload",
     "parse_content_helper_payload",
@@ -326,19 +316,6 @@ def normalize_action(value: object) -> str:
         "close_all_browsers": "close_all",
     }
     return aliases.get(normalized, normalized)
-
-
-def action_is_sensitive(payload: dict[str, Any]) -> bool:
-    action = normalize_action(payload.get("action"))
-    if action in _SENSITIVE_ACTIONS:
-        return True
-    if action == "list" and coerce_bool(payload.get("include_content")):
-        return True
-    if action == "multi":
-        calls = payload.get("calls")
-        if isinstance(calls, list):
-            return any(action_is_sensitive(call) for call in calls if isinstance(call, dict))
-    return False
 
 
 def normalize_url(value: str) -> str:
@@ -713,7 +690,7 @@ def profile_lock_state_for_profile(profile: BrowserProfile) -> ProfileLockState:
         return ProfileLockState(False)
     if profile.is_remote_debugging:
         return ProfileLockState(False)
-    return profile_lock_state(profile.profile_path)
+    return profile_lock_state(profile.user_data_dir)
 
 
 def is_profile_locked(profile_path: Path | str) -> bool:
@@ -770,7 +747,7 @@ def remote_debugging_restriction_reason(profile: BrowserProfile) -> str:
     ):
         managed_family = f"{profile.family}-a0"
         return (
-            "This Chromium-family browser blocks Playwright remote debugging for its default "
+            "This Chromium-family browser blocks command-line remote debugging for its default "
             f"data directory in version {major}+. {remote_debugging_enable_hint()} "
             "Or choose Clean Agent profile in Browser settings, or select the "
             f"A0-controlled local profile with /browser profile "
@@ -921,7 +898,9 @@ def safe_context_id(context_id: str) -> str:
     return _SAFE_CONTEXT_RE.sub("_", str(context_id or "default")).strip("._") or "default"
 
 
-def screenshot_output_path(context_id: str, browser_id: int, path: str = "") -> tuple[Path, str, str]:
+def screenshot_output_path(
+    context_id: str, browser_id: int, path: str = "", image_format: str = "jpeg",
+) -> tuple[Path, str, str]:
     raw_path = str(path or "").strip()
     if raw_path:
         output_path = Path(raw_path).expanduser()
@@ -934,10 +913,14 @@ def screenshot_output_path(context_id: str, browser_id: int, path: str = "") -> 
             output_path = output_path.with_suffix(".jpg") if not suffix else output_path.with_name(f"{output_path.name}.jpg")
         return output_path, "jpeg", "image/jpeg"
 
+    image_format = str(image_format or "jpeg").strip().lower()
+    if image_format not in {"jpeg", "png"}:
+        raise ValueError("Screenshot image_format must be jpeg or png.")
+    suffix = ".png" if image_format == "png" else ".jpg"
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     millis = int((time.time() % 1) * 1000)
-    output_path = artifact_root() / safe_context_id(context_id) / f"host-browser-{int(browser_id)}-{timestamp}-{millis:03d}.jpg"
-    return output_path, "jpeg", "image/jpeg"
+    output_path = artifact_root() / safe_context_id(context_id) / f"host-browser-{int(browser_id)}-{timestamp}-{millis:03d}{suffix}"
+    return output_path, image_format, f"image/{image_format}"
 
 
 def multi_group_key(call: dict[str, Any]) -> Any:
@@ -951,46 +934,6 @@ def multi_group_key(call: dict[str, Any]) -> Any:
         return int(raw)
     except ValueError:
         return raw
-
-
-def playwright_python_install_command(python_executable: str = sys.executable) -> list[str]:
-    return playwright_python_install_commands(python_executable)[0]
-
-
-def playwright_python_install_commands(python_executable: str = sys.executable) -> list[list[str]]:
-    uv = shutil.which("uv")
-    if uv:
-        return [
-            [
-                uv,
-                "pip",
-                "install",
-                "--python",
-                python_executable,
-                PLAYWRIGHT_PYTHON_PACKAGE,
-            ]
-        ]
-    return [[python_executable, "-m", "pip", "install", PLAYWRIGHT_PYTHON_PACKAGE]]
-
-
-async def _run_install_command(command: list[str]) -> tuple[int, str]:
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    stdout, _ = await process.communicate()
-    output = stdout.decode("utf-8", errors="replace") if stdout else ""
-    return int(process.returncode or 0), output
-
-
-def _trim_install_output(output: str) -> str:
-    cleaned = str(output or "").strip()
-    if not cleaned:
-        return "no output"
-    if len(cleaned) <= MAX_INSTALL_OUTPUT_CHARS:
-        return cleaned
-    return "..." + cleaned[-MAX_INSTALL_OUTPUT_CHARS:]
 
 
 def format_profile_rows(profiles: Iterable[BrowserProfile]) -> list[str]:

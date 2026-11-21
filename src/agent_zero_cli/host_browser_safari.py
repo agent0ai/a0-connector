@@ -187,12 +187,6 @@ class SafariContext:
             if handle in self._claimed_handles and handle in self._pages_by_handle
         ]
 
-    def set_default_timeout(self, timeout: int) -> None:
-        del timeout
-
-    def set_default_navigation_timeout(self, timeout: int) -> None:
-        del timeout
-
     def on(self, event: str, callback: Any) -> None:
         self._handlers[event] = callback
 
@@ -422,26 +416,20 @@ class SafariPage:
         )
         self.viewport_size = dict(viewport)
 
-    async def evaluate_handle(
-        self,
-        script: str,
-        arg: object = None,
-    ) -> "SafariElementHandle | None":
-        value = await self.evaluate(script, arg)
-        if not isinstance(value, dict) or not value.get(_ELEMENT_KEY):
-            return None
-        return SafariElementHandle(self, str(value[_ELEMENT_KEY]))
-
-    async def set_input_files(self, selector: str, paths: list[str]) -> None:
-        await self._activate()
-        value = await self.driver.session_request(
-            "POST",
-            "element",
-            {"using": "css selector", "value": str(selector)},
+    async def upload_files(self, ref: int | str, selector: str, paths: list[str]) -> None:
+        value = await self.evaluate(
+            "(ref) => globalThis.__spaceBrowserPageContent__.fileInputElementFor(ref)", ref
         )
+        if not (isinstance(value, dict) and value.get(_ELEMENT_KEY)) and selector:
+            value = await self.driver.session_request(
+                "POST", "element", {"using": "css selector", "value": selector}
+            )
         if not isinstance(value, dict) or not value.get(_ELEMENT_KEY):
-            raise SafariDriverError(f"Safari could not find file input {selector!r}.")
-        await SafariElementHandle(self, str(value[_ELEMENT_KEY])).set_input_files(paths)
+            raise SafariDriverError(f"Browser ref {ref!r} does not resolve to a file input.")
+        text = "\n".join(paths)
+        await self.driver.session_request(
+            "POST", f"element/{value[_ELEMENT_KEY]}/value", {"text": text, "value": list(text)}
+        )
 
     async def _activate(self) -> None:
         await self.context.activate(self.handle)
@@ -450,27 +438,6 @@ class SafariPage:
         callback = self._handlers.get("close")
         if callable(callback):
             callback()
-
-
-class SafariElementHandle:
-    def __init__(self, page: SafariPage, element_id: str) -> None:
-        self.page = page
-        self.element_id = element_id
-
-    def as_element(self) -> "SafariElementHandle":
-        return self
-
-    async def set_input_files(self, paths: list[str]) -> None:
-        await self.page._activate()
-        text = "\n".join(str(path) for path in paths)
-        await self.page.driver.session_request(
-            "POST",
-            f"element/{self.element_id}/value",
-            {"text": text, "value": list(text)},
-        )
-
-    async def dispose(self) -> None:
-        return None
 
 
 class SafariMouse:

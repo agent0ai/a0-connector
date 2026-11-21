@@ -123,7 +123,7 @@ Browser screenshot materialization already exists in Agent Zero Core: browser hi
 
 ## Host browser operations
 
-Host browser mode keeps the public agent API as Agent Zero's existing `browser` tool. The Browser plugin decides whether a call uses the container Patchright runtime or emits `connector_browser_op` to the subscribed CLI:
+Host browser mode keeps the public agent API as Agent Zero's existing `browser` tool. The Browser plugin decides whether a call uses the container Chromium runtime or emits `connector_browser_op` to the subscribed CLI:
 
 ```json
 {
@@ -155,7 +155,7 @@ Screenshots are transferred as artifact payloads rather than inline tool output.
 
 `connector_hello.host_browser` advertises:
 - `supported`, `enabled`, and `status`
-- `can_prepare` when the CLI can repair or launch host control on first use
+- `can_prepare` when the CLI can prepare host control on first use
 - `browser_family`
 - `profile_label` and `profile_path`
 - `cdp_endpoint` when a browser has exposed a user-authorized DevTools endpoint
@@ -171,7 +171,7 @@ When the browser itself exposes a user-authorized debugging server, the CLI pref
 
 Explicit selections accept `host:port`, HTTP(S) CDP discovery addresses, and full DevTools WebSocket URLs. The connector resolves discovery addresses via `/json/version` on the host before opening the WebSocket, so Agent Zero Core does not need direct network access to the host browser.
 
-The local-profile launch path uses the Python Playwright client installed as a normal A0 CLI runtime dependency. It does not install a separate Chromium binary. The Patchright runtime under the Agent Zero Docker container, including `/a0/tmp/playwright`, powers the container browser backend and cannot control a host Chromium-family profile from inside Docker. User-authorized remote debugging does not require the Chrome DevTools MCP package or Playwright CDP attach; the connector carries the small CDP helper directly. If an older or damaged A0 installation is missing the host Python dependency, Launcher Browser setup, `/browser host on`, `/browser relaunch`, and `/browser repair` run the same repair with `uv pip install --python <a0-python> playwright` when uv is available. Manual/non-uv installs fall back to `python -m pip install playwright`, bootstrapping `pip` with `ensurepip` if the interpreter supports it. This matters for uv-managed tool environments, which may not include a `pip` module inside the tool Python.
+For an unlocked local profile the CLI starts the installed Chromium-family executable, waits for a fresh loopback endpoint in its data directory and connects the same CDP client. A0 closes the process it started on disconnect. `/browser repair` refreshes discovery and publishes the current status to Core.
 
 ## Event bridge
 

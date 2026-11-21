@@ -51,8 +51,7 @@ async def cmd_browser(app: "AgentZeroCLI", query: str = "") -> None:
         await _cmd_browser_relaunch(app)
         return
     if command == "repair":
-        if await _ensure_playwright_dependency(app):
-            await _refresh_browser_metadata_notice(app, "Host browser repair completed.")
+        await _refresh_browser_metadata_notice(app, "Host browser discovery refreshed.")
         return
     if command == "privacy":
         app._show_notice(_CONTENT_POLICY_NOTICE)
@@ -92,9 +91,6 @@ async def _cmd_browser_runtime(app: "AgentZeroCLI", runtime_backend: str) -> Non
 
     if runtime_backend == "host_required":
         app._host_browser.set_enabled(True)
-        if _selected_profile_needs_playwright(app) and not await _ensure_playwright_dependency(app):
-            await _refresh_browser_metadata_notice(app, "Browser host mode is selected but unsupported.")
-            return
         if not await app._refresh_remote_tool_metadata():
             app._show_notice(
                 "Host browser changed locally, but Agent Zero did not acknowledge "
@@ -125,9 +121,6 @@ async def _cmd_browser_host(app: "AgentZeroCLI", args: list[str]) -> None:
 
     enabled = args[0].lower() in {"on", "enable"}
     app._host_browser.set_enabled(enabled)
-    if enabled and _selected_profile_needs_playwright(app) and not await _ensure_playwright_dependency(app):
-        await _refresh_browser_metadata_notice(app, "Host browser is enabled but still unsupported.")
-        return
     synced = await app._refresh_remote_tool_metadata()
     state = "enabled" if enabled else "disabled"
     if not synced:
@@ -271,9 +264,6 @@ async def _cmd_browser_select(app: "AgentZeroCLI", args: list[str]) -> None:
         return
 
     app._host_browser.set_enabled(True)
-    if _profile_needs_playwright(profile) and not await _ensure_playwright_dependency(app):
-        await _refresh_browser_metadata_notice(app, "Host browser selection is saved but unsupported.")
-        return
     if not await app._refresh_remote_tool_metadata():
         app._show_notice(
             "Host browser changed locally, but Agent Zero did not acknowledge "
@@ -303,9 +293,6 @@ async def _cmd_browser_select(app: "AgentZeroCLI", args: list[str]) -> None:
 
 
 async def _cmd_browser_relaunch(app: "AgentZeroCLI") -> None:
-    if _selected_profile_needs_playwright(app) and not await _ensure_playwright_dependency(app):
-        await _refresh_browser_metadata_notice(app, "Host browser relaunch is blocked.")
-        return
     try:
         status = await app._host_browser.relaunch()
     except ProfileLockedError as exc:
@@ -326,18 +313,6 @@ async def _cmd_browser_relaunch(app: "AgentZeroCLI") -> None:
             "Host browser relaunched locally, but Agent Zero did not acknowledge "
             f"the update: {app._remote_tool_metadata_error}",
             error=True,
-    )
-
-
-def _selected_profile_needs_playwright(app: "AgentZeroCLI") -> bool:
-    profile = app._host_browser.selected_profile()
-    return _profile_needs_playwright(profile)
-
-
-def _profile_needs_playwright(profile: object | None) -> bool:
-    return profile is None or not bool(
-        getattr(profile, "is_remote_debugging", False)
-        or getattr(profile, "is_safari", False)
     )
 
 
@@ -402,31 +377,6 @@ def _host_browser_selection_label(selection: str, choices: list[dict[str, str]])
         if choice["value"] == selection:
             return choice["label"]
     return selection
-
-
-async def _ensure_playwright_dependency(app: "AgentZeroCLI") -> bool:
-    if app._host_browser.has_playwright_dependency():
-        return True
-
-    command = " ".join(app._host_browser.playwright_install_command())
-    app._show_notice(
-        "Host browser needs Python Playwright in the A0 CLI environment. "
-        f"Installing now: {command}"
-    )
-    try:
-        result = await app._host_browser.ensure_playwright_dependency()
-    except Exception as exc:
-        app._show_notice(f"Host browser repair failed: {exc}", error=True)
-        return False
-
-    if result.get("installed"):
-        app._show_notice(
-            "Python Playwright installed for host browser control. "
-            "A0 will use your installed Chromium-family browser; no bundled browser was installed."
-        )
-    else:
-        app._show_notice("Python Playwright is already installed for host browser control.")
-    return True
 
 
 async def _refresh_browser_metadata_notice(app: "AgentZeroCLI", message: str) -> None:

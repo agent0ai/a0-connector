@@ -518,26 +518,21 @@ class FakeHostBrowserManager:
         self.enabled = False
         self.disconnect_calls = 0
         self.handled_ops: list[dict[str, object]] = []
-        self.playwright_available = True
-        self.install_calls = 0
         self.remote_debugging = False
         self.profile_selections: list[tuple[str, str]] = []
 
     def metadata(self) -> dict[str, object]:
-        supported = self.playwright_available or self.remote_debugging
         return {
-            "supported": supported,
+            "supported": True,
             "enabled": self.enabled,
-            "status": "ready" if self.enabled and supported else "disabled",
+            "status": "ready" if self.enabled else "disabled",
             "browser_family": "chrome-cdp" if self.remote_debugging else "chrome",
             "profile_label": "localhost:9222" if self.remote_debugging else "Default",
             "features": ["open", "content"],
-            "support_reason": "" if supported else "missing playwright",
+            "support_reason": "",
         }
 
     def status_text(self) -> str:
-        if not self.playwright_available and not self.remote_debugging:
-            return "Host browser unsupported: missing playwright"
         if self.remote_debugging:
             state = "ready" if self.enabled else "disabled"
             return f"Host browser {state}: remote debugging browser at ws://localhost:9222/devtools/browser/test."
@@ -578,17 +573,6 @@ class FakeHostBrowserManager:
                 "enabled": True,
             },
         ]
-
-    def has_playwright_dependency(self) -> bool:
-        return self.playwright_available
-
-    def playwright_install_command(self) -> list[str]:
-        return ["uv", "pip", "install", "--python", "/tmp/python", "playwright"]
-
-    async def ensure_playwright_dependency(self) -> dict[str, object]:
-        self.install_calls += 1
-        self.playwright_available = True
-        return {"installed": True, "command": self.playwright_install_command(), "output": ""}
 
     async def disconnect(self) -> None:
         self.disconnect_calls += 1
@@ -5065,42 +5049,6 @@ async def test_computer_use_slash_commands_refresh_hello_metadata_when_connected
     ]
 
 
-async def test_browser_host_on_repairs_missing_playwright(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    host_browser = dummy_app._host_browser
-    host_browser.playwright_available = False
-    notices: list[tuple[str, bool]] = []
-    monkeypatch.setattr(dummy_app, "_show_notice", lambda message, *, error=False: notices.append((message, error)))
-
-    await dummy_app._dispatch_command("/browser host on")
-
-    assert host_browser.enabled is True
-    assert host_browser.install_calls == 1
-    assert host_browser.playwright_available is True
-    assert "Installing now: uv pip install --python /tmp/python playwright" in notices[0][0]
-    assert "Python Playwright installed for host browser control" in notices[1][0]
-    assert notices[-1][0].startswith("Host browser enabled.")
-
-
-async def test_browser_host_on_skips_playwright_for_remote_debugging(
-    dummy_app: DummyAgentZeroCLI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    host_browser = dummy_app._host_browser
-    host_browser.playwright_available = False
-    host_browser.remote_debugging = True
-    notices: list[tuple[str, bool]] = []
-    monkeypatch.setattr(dummy_app, "_show_notice", lambda message, *, error=False: notices.append((message, error)))
-
-    await dummy_app._dispatch_command("/browser host on")
-
-    assert host_browser.enabled is True
-    assert host_browser.install_calls == 0
-    assert not any("Installing now" in notice[0] for notice in notices)
-
-
 async def test_browser_host_on_off_syncs_agent_zero_browser_mode(
     dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,
@@ -5143,20 +5091,17 @@ async def test_browser_host_on_off_syncs_agent_zero_browser_mode(
     assert "Browser set to Docker browser for project Research." in notices[1][0]
 
 
-async def test_browser_repair_command_installs_missing_playwright(
+async def test_browser_repair_refreshes_discovery(
     dummy_app: DummyAgentZeroCLI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     host_browser = dummy_app._host_browser
-    host_browser.playwright_available = False
     notices: list[tuple[str, bool]] = []
     monkeypatch.setattr(dummy_app, "_show_notice", lambda message, *, error=False: notices.append((message, error)))
 
     await dummy_app._dispatch_command("/browser repair")
 
-    assert host_browser.install_calls == 1
-    assert "Installing now: uv pip install --python /tmp/python playwright" in notices[0][0]
-    assert notices[-1][0].startswith("Host browser repair completed.")
+    assert notices[-1][0].startswith("Host browser discovery refreshed.")
 
 
 async def test_browser_runtime_commands_update_agent_zero_config(
@@ -5223,7 +5168,6 @@ async def test_browser_direct_command_sets_host_browser_selection(
 
     dummy_app.connector_features = {"browser_runtime_config"}
     dummy_app.current_context = "ctx-browser"
-    dummy_app._host_browser.playwright_available = False
     dummy_app.client.set_browser_runtime = fake_set_browser_runtime  # type: ignore[method-assign]
     monkeypatch.setattr(
         dummy_app,
@@ -5233,7 +5177,6 @@ async def test_browser_direct_command_sets_host_browser_selection(
 
     await dummy_app._dispatch_command("/browser list")
     await dummy_app._dispatch_command("/browser 1")
-    dummy_app._host_browser.playwright_available = True
     await dummy_app._dispatch_command("/browser auto")
 
     assert "0 auto - Automatic" in notices[0][0]
@@ -5253,7 +5196,6 @@ async def test_browser_direct_command_sets_host_browser_selection(
         ),
     ]
     assert dummy_app._host_browser.enabled is True
-    assert dummy_app._host_browser.install_calls == 0
     assert any(
         "Browser host target set to Chrome (allowed) - localhost:9222 for project Research." in notice[0]
         for notice in notices

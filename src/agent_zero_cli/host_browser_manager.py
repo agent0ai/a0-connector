@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import importlib.util
 from pathlib import Path
 import platform
 import subprocess
 import sys
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 from agent_zero_cli.config import (
     CLIConfig,
@@ -34,13 +33,9 @@ from agent_zero_cli.host_browser_common import (
     normalize_action,
     parse_content_helper_payload,
     parse_dom_helper_payload,
-    playwright_python_install_command,
-    playwright_python_install_commands,
     profile_lock_state_for_profile,
     remote_debugging_endpoint_label,
     remote_debugging_restriction_reason,
-    _run_install_command,
-    _trim_install_output,
 )
 from agent_zero_cli.host_browser_session import HostBrowserSession, ProfileLockedError
 
@@ -63,22 +58,6 @@ def normalize_host_browser_profile_mode(value: object, *, default: str = "") -> 
     return default
 
 
-def _is_python_pip_install_command(command: list[str]) -> bool:
-    return len(command) >= 5 and command[1:4] == ["-m", "pip", "install"]
-
-
-def _pip_module_missing(output: str) -> bool:
-    normalized = str(output or "").lower()
-    return "no module named pip" in normalized or "no module named 'pip'" in normalized
-
-
-def _format_install_attempts(attempts: list[tuple[list[str], int, str]]) -> str:
-    return "; ".join(
-        f"{' '.join(command)} exited {returncode}: {_trim_install_output(output)}"
-        for command, returncode, output in attempts
-    )
-
-
 class HostBrowserManager:
     def __init__(
         self,
@@ -86,17 +65,11 @@ class HostBrowserManager:
         *,
         persist_enabled: bool = True,
         candidate_provider: Callable[[], list[BrowserCandidate]] | None = None,
-        playwright_available: bool | None = None,
-        playwright_starter: Callable[[], Any] | None = None,
-        playwright_installer: Callable[[list[str]], Awaitable[tuple[int, str]]] | None = None,
     ) -> None:
         self.config = config
         self.enabled = bool(config.host_browser_enabled)
         self._persist_enabled = persist_enabled
         self._candidate_provider = candidate_provider or detect_browser_candidates
-        self._playwright_available = playwright_available
-        self._playwright_starter = playwright_starter
-        self._playwright_installer = playwright_installer or _run_install_command
         self._sessions: dict[str, HostBrowserSession] = {}
         self._session_lock = asyncio.Lock()
         self._evaluate_ops: dict[str, tuple[str, asyncio.Task]] = {}
@@ -125,13 +98,10 @@ class HostBrowserManager:
             profile_mode=profile_mode,
             browser_selection=browser_selection,
         )
-        can_repair = not self._has_playwright() and not bool(
-            profile and (profile.is_remote_debugging or profile.is_safari)
-        )
         return {
             "supported": bool(status["supported"]),
             "can_prepare": bool(status["can_prepare"]),
-            "can_repair": can_repair,
+            "can_repair": False,
             "enabled": bool(status["enabled"]),
             "status": status["status"],
             "browser_family": profile.family if profile else "",
@@ -147,7 +117,7 @@ class HostBrowserManager:
                 "existing_profile",
                 "dedicated_profile",
                 "user_authorized_remote_debugging",
-                "playwright",
+                "cdp",
                 *(["safari_webdriver"] if profile and profile.is_safari else []),
                 "artifacts",
                 "background_tabs",
@@ -249,54 +219,6 @@ class HostBrowserManager:
         self.config.host_browser_relaunch_preference = normalized
         save_host_browser_relaunch_preference(normalized)
         return normalized
-
-    def has_playwright_dependency(self) -> bool:
-        return self._has_playwright()
-
-    def playwright_install_command(self) -> list[str]:
-        return playwright_python_install_command(sys.executable)
-
-    async def ensure_playwright_dependency(self) -> dict[str, object]:
-        commands = playwright_python_install_commands(sys.executable)
-        command = commands[0]
-        if self._has_playwright():
-            return {"installed": False, "command": command, "output": ""}
-
-        attempts: list[tuple[list[str], int, str]] = []
-        installed = False
-        for candidate in commands:
-            returncode, output = await self._playwright_installer(candidate)
-            attempts.append((candidate, returncode, output))
-            if returncode == 0:
-                command = candidate
-                installed = True
-                break
-            if _pip_module_missing(output) and _is_python_pip_install_command(candidate):
-                ensurepip_command = [sys.executable, "-m", "ensurepip", "--upgrade"]
-                ensurepip_returncode, ensurepip_output = await self._playwright_installer(ensurepip_command)
-                attempts.append((ensurepip_command, ensurepip_returncode, ensurepip_output))
-                if ensurepip_returncode == 0:
-                    returncode, output = await self._playwright_installer(candidate)
-                    attempts.append((candidate, returncode, output))
-                    if returncode == 0:
-                        command = candidate
-                        installed = True
-                        break
-
-        importlib.invalidate_caches()
-        if self._playwright_available is not True:
-            self._playwright_available = None
-        if not installed:
-            raise RuntimeError(
-                "Python Playwright install failed with exit code "
-                f"{attempts[-1][1]}: {_format_install_attempts(attempts)}"
-            )
-        if not self._has_playwright():
-            raise RuntimeError(
-                "Python Playwright install completed, but the package is still not importable "
-                f"from {sys.executable}."
-            )
-        return {"installed": True, "command": command, "output": _trim_install_output(attempts[-1][2])}
 
     def selected_profile(
         self,
@@ -437,7 +359,14 @@ class HostBrowserManager:
 
     def available_profiles(self) -> list[BrowserProfile]:
         candidates = self._candidate_provider()
-        profiles: list[BrowserProfile] = discover_remote_debugging_profiles(candidates)
+        owned_dirs = {
+            session.profile.user_data_dir for session in self._sessions.values()
+            if session.process is not None and session.process.returncode is None
+        }
+        profiles = [
+            profile for profile in discover_remote_debugging_profiles(candidates)
+            if profile.user_data_dir not in owned_dirs
+        ]
         for candidate in candidates:
             profiles.extend(discover_profiles(candidate))
         return profiles
@@ -511,16 +440,10 @@ class HostBrowserManager:
                     profile_mode=mode,
                     browser_selection=selection,
                 )
-        safari_selection = selection in {"safari", "safari:default"}
-        if profile is None and not safari_selection and not self._has_playwright():
-            await self.ensure_playwright_dependency()
-            profile = self._auto_start_profile(profile_mode=mode, browser_selection=selection)
         if profile is None:
             if selection:
                 raise RuntimeError(f"No host browser matched selection {selection!r}.")
             raise RuntimeError("No supported host browser was found.")
-        if not profile.is_remote_debugging and not profile.is_safari and not self._has_playwright():
-            await self.ensure_playwright_dependency()
         support_reason = self._support_reason(profile)
         if support_reason:
             raise RuntimeError(support_reason)
@@ -785,7 +708,6 @@ class HostBrowserManager:
             session = HostBrowserSession(
                 context_id=context_id,
                 profile=profile,
-                playwright_starter=self._playwright_starter,
             )
             self._sessions[context_id] = session
         if self._dom_helper_source is not None:
@@ -822,7 +744,7 @@ class HostBrowserManager:
 
     async def _live_context_for_profile(self, profile: BrowserProfile) -> str:
         context_id = self._active_context_for_profile(profile)
-        if not context_id or not profile.is_safari:
+        if not context_id:
             return context_id
         session = self._sessions[context_id]
         if await session.is_started():
@@ -991,20 +913,11 @@ class HostBrowserManager:
 
     def _support_reason(self, profile: BrowserProfile | None = None) -> str:
         profile = profile if profile is not None else self.selected_profile()
-        if profile is not None and (profile.is_remote_debugging or profile.is_safari):
-            return self._profile_support_reason(profile)
-        if not self._has_playwright():
-            return (
-                f"Browser support is incomplete in the A0 CLI host environment ({sys.executable}). "
-                "Use the current Browser setup action, or run /browser repair in the A0 CLI. "
-                "The Patchright runtime inside the Agent Zero Docker container is used by the "
-                "container browser backend and cannot control host Chromium-family profiles."
-            )
         return self._profile_support_reason(profile)
 
     def _profile_support_reason(self, profile: BrowserProfile | None) -> str:
         if profile is None:
-            return "No supported host browser was detected."
+            return "Install a Chromium-family browser, or select an existing remote debugging endpoint."
         if profile.is_safari:
             if sys.platform != "darwin":
                 return "Safari host browser control is available only on macOS."
@@ -1021,14 +934,6 @@ class HostBrowserManager:
         if restriction_reason:
             return restriction_reason
         return ""
-
-    def _has_playwright(self) -> bool:
-        if self._playwright_available is not None:
-            return bool(self._playwright_available)
-        try:
-            return importlib.util.find_spec("playwright.async_api") is not None
-        except (ModuleNotFoundError, ValueError):
-            return False
 
     def _success(self, op_id: str, result: Any) -> dict[str, Any]:
         return {"op_id": op_id, "ok": True, "result": result}

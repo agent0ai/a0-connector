@@ -58,10 +58,8 @@ async def test_evaluate_rejects_missing_or_invalid_script(monkeypatch, args):
 @pytest.mark.parametrize("value", [None, False, 0, {"answer": 42}])
 async def test_evaluate_preserves_javascript_results(monkeypatch, value):
     session = HostBrowserSession(context_id="ctx-evaluate", profile=None)
-    cdp = SimpleNamespace(send=AsyncMock(), detach=AsyncMock())
     page = SimpleNamespace(
         evaluate=AsyncMock(return_value=value), is_closed=lambda: False,
-        context=SimpleNamespace(new_cdp_session=AsyncMock(return_value=cdp)),
     )
     session.pages[3] = host_browser_session_module.HostBrowserPage(3, page)
     monkeypatch.setattr(session, "ensure_started", AsyncMock())
@@ -71,7 +69,7 @@ async def test_evaluate_preserves_javascript_results(monkeypatch, value):
     script = "() => globalThis.probeValue"
     result = await session.evaluate(3, script)
     assert result == {"result": value, "state": {"id": 3}}
-    page.evaluate.assert_awaited_once_with(script)
+    page.evaluate.assert_awaited_once_with(script, timeout=45)
 
 
 @pytest.fixture(autouse=True)
@@ -196,17 +194,16 @@ class FakePage:
 
 
 class FakeContext:
+    is_connected = True
+
+    async def discover_pages(self):
+        return list(self.pages)
+
     def __init__(self) -> None:
         self.pages = []
         self.handlers = {}
         self.closed = False
         self.init_scripts: list[str] = []
-
-    def set_default_timeout(self, timeout: int) -> None:
-        del timeout
-
-    def set_default_navigation_timeout(self, timeout: int) -> None:
-        del timeout
 
     def on(self, event: str, callback) -> None:
         self.handlers[event] = callback
@@ -228,46 +225,15 @@ class FakeContext:
         return None
 
 
-class FakeBrowser:
-    def __init__(self, context: FakeContext) -> None:
-        self.contexts = [context]
+@pytest.fixture
+def browser_context(monkeypatch):
+    context = FakeContext()
 
-    async def new_context(self, **_: object) -> FakeContext:
-        context = FakeContext()
-        self.contexts.append(context)
-        return context
+    async def launch(adapter, session):
+        session.browser = session.context = context
 
-
-class FakeChromium:
-    def __init__(self) -> None:
-        self.launch_kwargs: dict[str, object] = {}
-        self.cdp_endpoint = ""
-        self.context = FakeContext()
-
-    async def launch_persistent_context(self, **kwargs: object) -> FakeContext:
-        self.launch_kwargs = dict(kwargs)
-        return self.context
-
-    async def connect_over_cdp(self, endpoint: str) -> FakeBrowser:
-        self.cdp_endpoint = endpoint
-        return FakeBrowser(self.context)
-
-
-class FakePlaywright:
-    def __init__(self) -> None:
-        self.chromium = FakeChromium()
-        self.stopped = False
-
-    async def stop(self) -> None:
-        self.stopped = True
-
-
-class FakeStarter:
-    def __init__(self, playwright: FakePlaywright) -> None:
-        self.playwright = playwright
-
-    async def start(self) -> FakePlaywright:
-        return self.playwright
+    monkeypatch.setattr(host_browser_session_module._CDPRuntimeAdapter, "_launch", launch)
+    return context
 
 
 def test_discover_profiles_reads_local_state_names(tmp_path: Path) -> None:
@@ -313,7 +279,7 @@ def test_a0_managed_user_data_dir_is_separate_from_default_chrome_dir(
     assert path != tmp_path / "config" / "google-chrome"
 
 
-def test_safari_profile_is_selectable_without_playwright(
+def test_safari_profile_is_selectable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -328,7 +294,6 @@ def test_safari_profile_is_selectable_without_playwright(
         candidate_provider=lambda: [
             BrowserCandidate("safari", "Safari", str(executable), Path())
         ],
-        playwright_available=False,
     )
 
     metadata = manager.hello_metadata(
@@ -510,7 +475,6 @@ async def test_safari_manager_releases_stale_session_for_new_context(
         candidate_provider=lambda: [
             BrowserCandidate("safari", "Safari", str(executable), Path())
         ],
-        playwright_available=False,
     )
 
     first = await manager.handle_op(
@@ -827,7 +791,6 @@ def test_selected_profile_prefers_user_allowed_remote_debugging_over_a0_profile(
         candidate_provider=lambda: [
             BrowserCandidate("chrome-a0", "Google Chrome (A0 controlled profile)", str(executable), a0_root)
         ],
-        playwright_available=True,
     )
 
     selected = manager.selected_profile(profile_mode="existing")
@@ -836,14 +799,13 @@ def test_selected_profile_prefers_user_allowed_remote_debugging_over_a0_profile(
     assert selected.family == "chrome-cdp"
 
 
-def test_remote_debugging_profile_does_not_require_playwright(tmp_path: Path) -> None:
+def test_remote_debugging_profile_is_supported(tmp_path: Path) -> None:
     root = tmp_path / "google-chrome"
     root.mkdir()
     (root / "DevToolsActivePort").write_text("9222\n/devtools/browser/test\n", encoding="utf-8")
     manager = HostBrowserManager(
         CLIConfig(host_browser_enabled=True),
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", "/bin/chrome", root)],
-        playwright_available=False,
     )
 
     metadata = manager.hello_metadata()
@@ -851,39 +813,6 @@ def test_remote_debugging_profile_does_not_require_playwright(tmp_path: Path) ->
     assert metadata["supported"] is True
     assert metadata["browser_family"] == "chrome-cdp"
     assert metadata["cdp_endpoint"] == "ws://localhost:9222/devtools/browser/test"
-
-
-def test_playwright_install_command_targets_a0_python_with_uv(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        host_browser_common.shutil,
-        "which",
-        lambda name: "/opt/uv/bin/uv" if name == "uv" else None,
-    )
-
-    assert host_browser_common.playwright_python_install_command("/tmp/a0-python") == [
-        "/opt/uv/bin/uv",
-        "pip",
-        "install",
-        "--python",
-        "/tmp/a0-python",
-        "playwright",
-    ]
-
-
-def test_playwright_install_command_falls_back_to_python_pip(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(host_browser_common.shutil, "which", lambda name: None)
-
-    assert host_browser_common.playwright_python_install_command("/tmp/a0-python") == [
-        "/tmp/a0-python",
-        "-m",
-        "pip",
-        "install",
-        "playwright",
-    ]
 
 
 def test_saved_default_profile_uses_authorized_remote_debugging(tmp_path: Path) -> None:
@@ -897,7 +826,6 @@ def test_saved_default_profile_uses_authorized_remote_debugging(tmp_path: Path) 
             host_browser_profile_label="Default",
         ),
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", "/bin/chrome", root)],
-        playwright_available=False,
     )
 
     selected = manager.selected_profile(profile_mode="existing")
@@ -915,7 +843,6 @@ def test_hello_metadata_advertises_host_browser_inventory(tmp_path: Path) -> Non
     manager = HostBrowserManager(
         CLIConfig(host_browser_enabled=True),
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", "/bin/chrome", root)],
-        playwright_available=True,
     )
 
     metadata = manager.hello_metadata()
@@ -936,7 +863,6 @@ def test_discovered_remote_debugging_id_resolves_latest_endpoint(tmp_path: Path)
     manager = HostBrowserManager(
         CLIConfig(host_browser_enabled=True),
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", "/bin/chrome", root)],
-        playwright_available=False,
     )
 
     selection = manager.hello_metadata()["browser_id"]
@@ -958,7 +884,6 @@ def test_browser_selection_accepts_family_id(tmp_path: Path) -> None:
     manager = HostBrowserManager(
         CLIConfig(host_browser_enabled=True),
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", "/bin/chrome", root)],
-        playwright_available=False,
     )
 
     selected = manager.selected_profile(profile_mode="existing", browser_selection="chrome")
@@ -968,7 +893,7 @@ def test_browser_selection_accepts_family_id(tmp_path: Path) -> None:
     assert selected.cdp_endpoint == "ws://localhost:9222/devtools/browser/test"
 
 
-async def test_browser_selection_uses_advertised_profile_id(tmp_path: Path) -> None:
+async def test_browser_selection_uses_advertised_profile_id(tmp_path: Path, browser_context) -> None:
     root = tmp_path / "google-chrome"
     (root / "Default").mkdir(parents=True)
     (root / "Profile 1").mkdir()
@@ -977,8 +902,6 @@ async def test_browser_selection_uses_advertised_profile_id(tmp_path: Path) -> N
     manager = HostBrowserManager(
         CLIConfig(host_browser_enabled=True),
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", str(executable), root)],
-        playwright_available=True,
-        playwright_starter=lambda: FakeStarter(FakePlaywright()),
     )
 
     result = await manager.handle_op(
@@ -999,7 +922,6 @@ def test_browser_selection_accepts_explicit_cdp_endpoint() -> None:
     manager = HostBrowserManager(
         CLIConfig(host_browser_enabled=True),
         candidate_provider=lambda: [],
-        playwright_available=False,
     )
 
     selected = manager.selected_profile(
@@ -1040,7 +962,6 @@ async def test_browser_prepare_waits_for_remote_debugging_startup(
     manager = HostBrowserManager(
         CLIConfig(host_browser_enabled=True),
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", "/bin/chrome", root)],
-        playwright_available=False,
     )
 
     result = await manager.ensure_available(profile_mode="existing")
@@ -1054,7 +975,6 @@ def test_browser_selection_accepts_cdp_discovery_address() -> None:
     manager = HostBrowserManager(
         CLIConfig(host_browser_enabled=True),
         candidate_provider=lambda: [],
-        playwright_available=False,
     )
 
     selected = manager.selected_profile(
@@ -1066,7 +986,7 @@ def test_browser_selection_accepts_cdp_discovery_address() -> None:
     assert selected.cdp_endpoint == "http://localhost:9333"
 
 
-async def test_unknown_browser_selection_does_not_fall_back_to_first_profile(tmp_path: Path) -> None:
+async def test_unknown_browser_selection_does_not_fall_back_to_first_profile(tmp_path: Path, browser_context) -> None:
     root = tmp_path / "google-chrome"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
@@ -1074,8 +994,6 @@ async def test_unknown_browser_selection_does_not_fall_back_to_first_profile(tmp
     manager = HostBrowserManager(
         CLIConfig(host_browser_enabled=True),
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", str(executable), root)],
-        playwright_available=True,
-        playwright_starter=lambda: FakeStarter(FakePlaywright()),
     )
 
     result = await manager.handle_op(
@@ -1197,7 +1115,7 @@ def test_remote_debugging_restriction_blocks_default_chrome_profile(
 
     reason = remote_debugging_restriction_reason(profile)
 
-    assert "blocks Playwright remote debugging" in reason
+    assert "blocks command-line remote debugging" in reason
     assert "chrome://inspect/#remote-debugging" in reason
     assert "Allow remote debugging for this browser instance" in reason
     assert "/browser profile chrome-a0 Default" in reason
@@ -1235,7 +1153,6 @@ def test_selected_profile_keeps_existing_profile_as_default_when_restricted(
             BrowserCandidate("chrome", "Google Chrome", str(executable), default_root),
             BrowserCandidate("chrome-a0", "Google Chrome (A0 controlled profile)", str(executable), a0_root),
         ],
-        playwright_available=True,
     )
 
     selected = manager.selected_profile(profile_mode="existing")
@@ -1265,7 +1182,6 @@ def test_agent_profile_mode_selects_supported_a0_profile_when_default_is_restric
             BrowserCandidate("chrome", "Google Chrome", str(executable), default_root),
             BrowserCandidate("chrome-a0", "Google Chrome (A0 controlled profile)", str(executable), a0_root),
         ],
-        playwright_available=True,
     )
 
     selected = manager.selected_profile(profile_mode="agent")
@@ -1274,7 +1190,7 @@ def test_agent_profile_mode_selects_supported_a0_profile_when_default_is_restric
     assert selected.family == "chrome-a0"
 
 
-def test_hello_metadata_marks_missing_playwright_as_preparable(tmp_path: Path) -> None:
+def test_hello_metadata_advertises_native_profile_support(tmp_path: Path) -> None:
     root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
@@ -1289,17 +1205,14 @@ def test_hello_metadata_marks_missing_playwright_as_preparable(tmp_path: Path) -
         candidate_provider=lambda: [
             BrowserCandidate("chrome-a0", "Google Chrome (A0 controlled profile)", str(executable), root)
         ],
-        playwright_available=False,
     )
 
     metadata = manager.hello_metadata()
 
-    assert metadata["supported"] is False
+    assert metadata["supported"] is True
     assert metadata["can_prepare"] is True
-    assert metadata["can_repair"] is True
-    assert metadata["status"] == "unsupported"
-    assert "Browser support is incomplete" in metadata["support_reason"]
-    assert "Browser setup action" in metadata["support_reason"]
+    assert metadata["can_repair"] is False
+    assert "cdp" in metadata["features"]
 
 
 def test_hello_metadata_marks_restricted_saved_profile_as_preparable(
@@ -1327,7 +1240,6 @@ def test_hello_metadata_marks_restricted_saved_profile_as_preparable(
             BrowserCandidate("chrome", "Google Chrome", str(executable), default_root),
             BrowserCandidate("chrome-a0", "Google Chrome (A0 controlled profile)", str(executable), managed_root),
         ],
-        playwright_available=True,
     )
 
     metadata = manager.hello_metadata()
@@ -1338,12 +1250,11 @@ def test_hello_metadata_marks_restricted_saved_profile_as_preparable(
     assert "A0-controlled local profile" in metadata["support_reason"]
 
 
-async def test_host_browser_manager_dispatches_open_and_screenshot_artifact(tmp_path: Path) -> None:
+async def test_host_browser_manager_dispatches_open_and_screenshot_artifact(tmp_path: Path, browser_context) -> None:
     root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    playwright = FakePlaywright()
     config = CLIConfig(
         host_browser_enabled=True,
         host_browser_family="chrome",
@@ -1353,8 +1264,6 @@ async def test_host_browser_manager_dispatches_open_and_screenshot_artifact(tmp_
     manager = HostBrowserManager(
         config,
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", str(executable), root)],
-        playwright_available=True,
-        playwright_starter=lambda: FakeStarter(playwright),
     )
 
     opened = await manager.handle_op(
@@ -1373,44 +1282,39 @@ async def test_host_browser_manager_dispatches_open_and_screenshot_artifact(tmp_
     assert artifact["data"]
     assert screenshot["result"]["ephemeral"] is True
     assert "host_path" not in screenshot["result"]
-    assert playwright.chromium.launch_kwargs["user_data_dir"] == str(root)
 
 
-async def test_parallel_host_browser_open_reuses_startup_blank_page(tmp_path: Path) -> None:
-    playwright = FakePlaywright()
+async def test_parallel_host_browser_open_reuses_startup_blank_page(tmp_path: Path, browser_context) -> None:
     initial_page = FakePage()
-    playwright.chromium.context.pages.append(initial_page)
+    browser_context.pages.append(initial_page)
     session = HostBrowserSession(
         context_id="chat-1",
         profile=BrowserProfile("chrome-a0", "Chrome", "/bin/chrome", tmp_path, "Default", "Default"),
-        playwright_starter=lambda: FakeStarter(playwright),
     )
     urls = ["https://example.com/", "https://example.org/"]
     try:
         results = await asyncio.gather(*(session.open(url) for url in urls))
 
         assert len({result["id"] for result in results}) == 2
-        assert len(playwright.chromium.context.pages) == 2
-        assert {page.url for page in playwright.chromium.context.pages} == set(urls)
+        assert len(browser_context.pages) == 2
+        assert {page.url for page in browser_context.pages} == set(urls)
         assert session.pages[results[0]["id"]].page is initial_page
     finally:
         await session.close()
 
 
-async def test_host_browser_readiness_waits_for_helper_installation(tmp_path: Path) -> None:
+async def test_host_browser_readiness_waits_for_helper_installation(tmp_path: Path, browser_context) -> None:
     installing = asyncio.Event()
     release = asyncio.Event()
-    playwright = FakePlaywright()
 
     async def install_helper(**kwargs):
         installing.set()
         await release.wait()
 
-    playwright.chromium.context.add_init_script = install_helper
+    browser_context.add_init_script = install_helper
     session = HostBrowserSession(
         context_id="chat-1",
         profile=BrowserProfile("chrome-a0", "Chrome", "/bin/chrome", tmp_path, "Default", "Default"),
-        playwright_starter=lambda: FakeStarter(playwright),
     )
     await session.set_dom_helper_source(MINIMAL_DOM_HELPER_SOURCE)
     first = asyncio.create_task(session.ensure_started())
@@ -1429,12 +1333,12 @@ async def test_host_browser_readiness_waits_for_helper_installation(tmp_path: Pa
 async def test_host_browser_rejects_oversized_screenshot_before_base64(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    browser_context,
 ) -> None:
     root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    playwright = FakePlaywright()
     monkeypatch.setattr(host_browser_session_module, "_SCREENSHOT_ARTIFACT_MAX_BYTES", 4)
     monkeypatch.setattr(FakePage, "screenshot", lambda self, **kwargs: _oversized_screenshot(kwargs))
     manager = HostBrowserManager(
@@ -1445,8 +1349,6 @@ async def test_host_browser_rejects_oversized_screenshot_before_base64(
             host_browser_profile_label="Default",
         ),
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", str(executable), root)],
-        playwright_available=True,
-        playwright_starter=lambda: FakeStarter(playwright),
     )
 
     await manager.handle_op(
@@ -1465,12 +1367,11 @@ async def _oversized_screenshot(_kwargs: dict[str, object]) -> bytes:
     return b"12345"
 
 
-async def test_host_browser_manager_uses_agent_zero_supplied_content_helper(tmp_path: Path) -> None:
+async def test_host_browser_manager_uses_agent_zero_supplied_content_helper(tmp_path: Path, browser_context) -> None:
     root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    playwright = FakePlaywright()
     manager = HostBrowserManager(
         CLIConfig(
             host_browser_enabled=True,
@@ -1479,8 +1380,6 @@ async def test_host_browser_manager_uses_agent_zero_supplied_content_helper(tmp_
             host_browser_profile_label="Default",
         ),
         candidate_provider=lambda: [BrowserCandidate("chrome", "Google Chrome", str(executable), root)],
-        playwright_available=True,
-        playwright_starter=lambda: FakeStarter(playwright),
     )
     dom_helper_hash = content_helper_sha256(MINIMAL_DOM_HELPER_SOURCE)
     helper_hash = content_helper_sha256(MINIMAL_CONTENT_HELPER_SOURCE)
@@ -1505,10 +1404,10 @@ async def test_host_browser_manager_uses_agent_zero_supplied_content_helper(tmp_
     assert opened["ok"] is True
     assert manager.metadata()["dom_helper_sha256"] == dom_helper_hash
     assert manager.metadata()["content_helper_sha256"] == helper_hash
-    assert MINIMAL_DOM_HELPER_SOURCE in playwright.chromium.context.init_scripts
-    assert MINIMAL_CONTENT_HELPER_SOURCE in playwright.chromium.context.init_scripts
-    dom_helper_index = playwright.chromium.context.init_scripts.index(MINIMAL_DOM_HELPER_SOURCE)
-    content_helper_index = playwright.chromium.context.init_scripts.index(
+    assert MINIMAL_DOM_HELPER_SOURCE in browser_context.init_scripts
+    assert MINIMAL_CONTENT_HELPER_SOURCE in browser_context.init_scripts
+    dom_helper_index = browser_context.init_scripts.index(MINIMAL_DOM_HELPER_SOURCE)
+    content_helper_index = browser_context.init_scripts.index(
         MINIMAL_CONTENT_HELPER_SOURCE
     )
     assert dom_helper_index < content_helper_index
@@ -1517,6 +1416,7 @@ async def test_host_browser_manager_uses_agent_zero_supplied_content_helper(tmp_
 async def test_relaunch_session_is_adopted_by_first_browser_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    browser_context,
 ) -> None:
     import agent_zero_cli.host_browser_common as host_browser_common_module
 
@@ -1524,7 +1424,6 @@ async def test_relaunch_session_is_adopted_by_first_browser_context(
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    playwright = FakePlaywright()
     manager = HostBrowserManager(
         CLIConfig(
             host_browser_enabled=True,
@@ -1535,8 +1434,6 @@ async def test_relaunch_session_is_adopted_by_first_browser_context(
         candidate_provider=lambda: [
             BrowserCandidate("chrome-a0", "Google Chrome (A0 controlled profile)", str(executable), root)
         ],
-        playwright_available=True,
-        playwright_starter=lambda: FakeStarter(playwright),
     )
     await manager.relaunch()
     monkeypatch.setattr(
@@ -1582,21 +1479,15 @@ async def test_parallel_host_browser_startup_uses_one_profile_launch(
     launched = asyncio.Event()
     release = asyncio.Event()
     launches = []
-    drivers = []
+    context = FakeContext()
 
-    class SlowChromium(FakeChromium):
-        async def launch_persistent_context(self, **kwargs: object) -> FakeContext:
-            launches.append(kwargs)
-            launched.set()
-            await release.wait()
-            return await super().launch_persistent_context(**kwargs)
+    async def launch(adapter, session):
+        launches.append(session.profile)
+        launched.set()
+        await release.wait()
+        session.browser = session.context = context
 
-    def starter():
-        playwright = FakePlaywright()
-        playwright.chromium = SlowChromium()
-        drivers.append(playwright)
-        return FakeStarter(playwright)
-
+    monkeypatch.setattr(host_browser_session_module._CDPRuntimeAdapter, "_launch", launch)
     executable = tmp_path / "chrome"
     executable.touch()
     profile = BrowserProfile("chrome-a0", "Chrome", str(executable), tmp_path, "Default", "Default")
@@ -1604,8 +1495,6 @@ async def test_parallel_host_browser_startup_uses_one_profile_launch(
         CLIConfig(host_browser_enabled=True),
         persist_enabled=False,
         candidate_provider=lambda: [],
-        playwright_available=True,
-        playwright_starter=starter,
     )
     monkeypatch.setattr(manager, "selected_profile", lambda *args, **kwargs: profile)
     monkeypatch.setattr(manager, "_auto_start_profile", lambda **kwargs: profile)
@@ -1626,7 +1515,7 @@ async def test_parallel_host_browser_startup_uses_one_profile_launch(
         assert len(launches) == 1
         if second_action == "shutdown":
             assert manager._sessions == {}
-            assert all(driver.stopped and driver.chromium.context.closed for driver in drivers)
+            assert context.closed
             return
         assert first_result["ok"] is True
         if second_context == "chat-1":
@@ -1650,6 +1539,7 @@ async def test_remote_debugging_session_attaches_without_closing_user_context(
     instances = []
 
     class FakeCDPConnection:
+        is_connected = True
         def __init__(self, endpoint: str) -> None:
             self.endpoint = endpoint
             self.closed = False
@@ -1670,6 +1560,8 @@ async def test_remote_debugging_session_attaches_without_closing_user_context(
             timeout: float = 30.0,
         ) -> dict[str, object]:
             del session_id, timeout
+            if method == "Target.getTargetInfo":
+                return {"targetInfo": {"targetId": "target-1", "url": "https://example.com/", "title": "Example"}}
             if method == "Target.getTargets":
                 return {
                     "targetInfos": [
@@ -1682,6 +1574,8 @@ async def test_remote_debugging_session_attaches_without_closing_user_context(
                 return {}
             if method == "Runtime.evaluate":
                 expression = str((params or {}).get("expression") or "")
+                if "document.readyState" in expression:
+                    return {"result": {"type": "string", "value": "complete"}}
                 if "location.href" in expression:
                     return {"result": {"type": "string", "value": "https://example.com/"}}
                 if "document.title" in expression:
@@ -1769,6 +1663,7 @@ async def test_remote_debugging_connection_retries_changed_active_port(
     instances = []
 
     class RefreshingCDPConnection:
+        is_connected = True
         def __init__(self, endpoint: str) -> None:
             self.endpoint = endpoint
             self.closed = False
@@ -1826,6 +1721,7 @@ async def test_remote_debugging_session_opens_lists_and_reads_content(
     instances = []
 
     class FakeCDPConnection:
+        is_connected = True
         def __init__(self, endpoint: str) -> None:
             self.endpoint = endpoint
             self.closed = False
@@ -1850,6 +1746,8 @@ async def test_remote_debugging_session_opens_lists_and_reads_content(
         ) -> dict[str, object]:
             del timeout
             params = params or {}
+            if method == "Target.getTargetInfo":
+                return {"targetInfo": {"url": self.targets[params["targetId"]]["url"], "title": "Example"}}
             if method == "Target.getTargets":
                 return {
                     "targetInfos": [
@@ -1885,6 +1783,8 @@ async def test_remote_debugging_session_opens_lists_and_reads_content(
                 expression = str(params.get("expression") or "")
                 target_id = self.sessions[str(session_id)]
                 url = self.targets[target_id]["url"]
+                if "document.readyState" in expression:
+                    return {"result": {"type": "string", "value": "complete"}}
                 if "location.href" in expression:
                     return {"result": {"type": "string", "value": url}}
                 if "document.title" in expression:
@@ -1928,19 +1828,19 @@ async def test_remote_debugging_session_opens_lists_and_reads_content(
     assert reopened["reused"] is True
     assert content == {"document": "[button 1] Continue"}
     assert listed["browsers"][0]["content"] == {"document": "[button 1] Continue"}
-    assert closed == {"browsers": [], "last_interacted_browser_id": None}
+    assert closed == {"closed": opened["id"]}
     assert instances[0].closed_targets == ["target-1"]
     assert instances[0].closed is True
 
 
 async def test_remote_ensure_respects_disabled_state_while_local_preparation_can_enable(
     tmp_path: Path,
+    browser_context,
 ) -> None:
     root = tmp_path / "ChromeData"
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    playwright = FakePlaywright()
     manager = HostBrowserManager(
         CLIConfig(
             host_browser_enabled=False,
@@ -1951,8 +1851,6 @@ async def test_remote_ensure_respects_disabled_state_while_local_preparation_can
         candidate_provider=lambda: [
             BrowserCandidate("chrome-a0", "Google Chrome (A0 controlled profile)", str(executable), root)
         ],
-        playwright_available=True,
-        playwright_starter=lambda: FakeStarter(playwright),
     )
 
     remote_result = await manager.handle_op(
@@ -1979,6 +1877,7 @@ async def test_remote_ensure_respects_disabled_state_while_local_preparation_can
 async def test_ensure_existing_mode_reports_restricted_saved_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    browser_context,
 ) -> None:
     import agent_zero_cli.host_browser_common as host_browser_common_module
 
@@ -2001,8 +1900,6 @@ async def test_ensure_existing_mode_reports_restricted_saved_profile(
             BrowserCandidate("chrome", "Google Chrome", str(executable), default_root),
             BrowserCandidate("chrome-a0", "Google Chrome (A0 controlled profile)", str(executable), managed_root),
         ],
-        playwright_available=True,
-        playwright_starter=lambda: FakeStarter(FakePlaywright()),
     )
 
     result = await manager.handle_op(
@@ -2024,6 +1921,7 @@ async def test_ensure_existing_mode_reports_restricted_saved_profile(
 async def test_ensure_agent_mode_auto_selects_supported_managed_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    browser_context,
 ) -> None:
     import agent_zero_cli.host_browser_common as host_browser_common_module
 
@@ -2046,8 +1944,6 @@ async def test_ensure_agent_mode_auto_selects_supported_managed_profile(
             BrowserCandidate("chrome", "Google Chrome", str(executable), default_root),
             BrowserCandidate("chrome-a0", "Google Chrome (A0 controlled profile)", str(executable), managed_root),
         ],
-        playwright_available=True,
-        playwright_starter=lambda: FakeStarter(FakePlaywright()),
     )
 
     result = await manager.handle_op(
@@ -2070,6 +1966,7 @@ async def test_locked_profile_owned_by_active_context_reports_context_conflict(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     has_other_profile: bool,
+    browser_context,
 ) -> None:
     import agent_zero_cli.host_browser_common as host_browser_common_module
 
@@ -2077,7 +1974,6 @@ async def test_locked_profile_owned_by_active_context_reports_context_conflict(
     (root / "Default").mkdir(parents=True)
     executable = tmp_path / "chrome"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    playwright = FakePlaywright()
     manager = HostBrowserManager(
         CLIConfig(
             host_browser_enabled=True,
@@ -2088,8 +1984,6 @@ async def test_locked_profile_owned_by_active_context_reports_context_conflict(
         candidate_provider=lambda: [
             BrowserCandidate("chrome-a0", "Google Chrome (A0 controlled profile)", str(executable), root)
         ],
-        playwright_available=True,
-        playwright_starter=lambda: FakeStarter(playwright),
     )
     await manager.handle_op(
         {
@@ -2131,27 +2025,18 @@ async def test_locked_profile_owned_by_active_context_reports_context_conflict(
         assert other_context.closed is False
 
 
-async def test_host_browser_session_stops_playwright_after_launch_failure(tmp_path: Path) -> None:
-    class FailingChromium(FakeChromium):
-        async def launch_persistent_context(self, **kwargs: object) -> FakeContext:
-            self.launch_kwargs = dict(kwargs)
-            raise RuntimeError("launch boom")
-
-    playwright = FakePlaywright()
-    playwright.chromium = FailingChromium()
+async def test_host_browser_session_cleans_up_after_launch_failure(tmp_path, monkeypatch) -> None:
     profile = BrowserProfile("chrome", "Chrome", "/bin/chrome", tmp_path, "Default", "Default")
-    session = HostBrowserSession(
-        context_id="ctx-launch-failure",
-        profile=profile,
-        playwright_starter=lambda: FakeStarter(playwright),
-    )
-
-    with pytest.raises(RuntimeError, match="launch boom"):
+    process = SimpleNamespace(returncode=3)
+    spawn = AsyncMock(return_value=process)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    session = HostBrowserSession("ctx-launch-failure", profile)
+    with pytest.raises(RuntimeError, match="exited during startup"):
         await session.ensure_started()
-
-    assert playwright.stopped is True
-    assert session.playwright is None
-    assert session.context is None
+    args = spawn.await_args.args
+    assert f"--user-data-dir={tmp_path}" in args
+    assert "--remote-debugging-address=127.0.0.1" in args and "--remote-debugging-port=0" in args
+    assert session.process is session.context is None
 
 
 @pytest.mark.parametrize(
@@ -2182,7 +2067,6 @@ async def test_host_browser_opens_allowlisted_remote_debugging_page_while_disabl
     manager = HostBrowserManager(
         CLIConfig(host_browser_enabled=False),
         candidate_provider=lambda: candidates,
-        playwright_available=True,
     )
 
     result = await manager.handle_op(
@@ -2214,7 +2098,6 @@ async def test_host_browser_uses_macos_open_for_internal_setup_urls(
         candidate_provider=lambda: [
             BrowserCandidate("chrome", "Google Chrome", str(tmp_path / "chrome"), tmp_path)
         ],
-        playwright_available=True,
     )
 
     result = await manager.handle_op(
@@ -2242,7 +2125,6 @@ async def test_host_browser_rejects_arbitrary_remote_debugging_target(tmp_path: 
         candidate_provider=lambda: [
             BrowserCandidate("chrome", "Google Chrome", str(tmp_path / "chrome"), tmp_path)
         ],
-        playwright_available=True,
     )
 
     result = await manager.handle_op(
@@ -2276,7 +2158,7 @@ async def test_set_checked_dispatch_parses_false_string(tmp_path: Path) -> None:
 
 
 async def test_manager_preserves_error_payload_shape_for_unknown_action(tmp_path: Path) -> None:
-    manager = HostBrowserManager(CLIConfig(host_browser_enabled=True), playwright_available=True)
+    manager = HostBrowserManager(CLIConfig(host_browser_enabled=True))
 
     result = await manager.handle_op(
         {"op_id": "op-unknown", "context_id": "ctx-error-shape", "action": "dance"}
@@ -2317,7 +2199,7 @@ async def test_goto_surfaces_navigation_failures(tmp_path: Path) -> None:
 async def test_manager_recreates_session_when_profile_changes(tmp_path: Path) -> None:
     profile_one = BrowserProfile("chrome", "Chrome", "/bin/chrome", tmp_path / "one", "Default", "One")
     profile_two = BrowserProfile("chrome", "Chrome", "/bin/chrome", tmp_path / "two", "Default", "Two")
-    manager = HostBrowserManager(CLIConfig(host_browser_enabled=True), playwright_available=True)
+    manager = HostBrowserManager(CLIConfig(host_browser_enabled=True))
     session_one = await manager._session("ctx-profile", profile=profile_one)
     closed = False
 
@@ -2334,98 +2216,131 @@ async def test_manager_recreates_session_when_profile_changes(tmp_path: Path) ->
     assert session_two.profile == profile_two
 
 
-async def test_host_browser_manager_can_repair_missing_playwright(tmp_path: Path) -> None:
-    del tmp_path
-    calls: list[list[str]] = []
+@pytest.mark.parametrize("while_claiming", [False, True])
+def test_owned_marker_retirement_preserves_replacement(tmp_path, monkeypatch, while_claiming):
+    marker = tmp_path / "DevToolsActivePort"
+    marker.write_text("43500\n/devtools/browser/old")
+    identity = host_browser_session_module._marker_identity(marker)
+    endpoint = remote_debugging_endpoint_from_active_port_file(marker)
+    replacement = tmp_path / "replacement"
+    replacement.write_text("43501\n/devtools/browser/new")
+    if while_claiming:
+        replace = Path.replace
 
-    async def fake_installer(command: list[str]) -> tuple[int, str]:
-        calls.append(command)
-        manager._playwright_available = True
-        return 0, "installed"
+        def switch(source, target):
+            if source == marker:
+                replace(replacement, marker)
+            return replace(source, target)
 
-    manager = HostBrowserManager(
-        CLIConfig(host_browser_enabled=True),
-        playwright_available=False,
-        playwright_installer=fake_installer,
-    )
-
-    result = await manager.ensure_playwright_dependency()
-
-    assert result["installed"] is True
-    assert calls == [manager.playwright_install_command()]
-    assert manager.has_playwright_dependency() is True
-
-
-async def test_browser_preparation_repairs_playwright_before_reporting_no_browser() -> None:
-    calls: list[list[str]] = []
-
-    async def fake_installer(command: list[str]) -> tuple[int, str]:
-        calls.append(command)
-        manager._playwright_available = True
-        return 0, "installed"
-
-    manager = HostBrowserManager(
-        CLIConfig(host_browser_enabled=True),
-        candidate_provider=lambda: [],
-        playwright_available=False,
-        playwright_installer=fake_installer,
-    )
-
-    metadata = manager.hello_metadata(profile_mode="existing")
-    assert metadata["can_prepare"] is False
-    assert metadata["can_repair"] is True
-
-    with pytest.raises(RuntimeError, match="No supported host browser"):
-        await manager.ensure_available(profile_mode="existing")
-
-    assert calls == [manager.playwright_install_command()]
-    assert manager.hello_metadata(profile_mode="existing")["can_repair"] is False
+        monkeypatch.setattr(Path, "replace", switch)
+    else:
+        replacement.replace(marker)
+    host_browser_session_module._retire_owned_marker(tmp_path, identity, endpoint)
+    assert marker.read_text() == "43501\n/devtools/browser/new"
 
 
-async def test_host_browser_manager_bootstraps_pip_when_uv_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    pip_command = [host_browser_manager_module.sys.executable, "-m", "pip", "install", "playwright"]
-    ensurepip_command = [host_browser_manager_module.sys.executable, "-m", "ensurepip", "--upgrade"]
-    calls: list[list[str]] = []
+@pytest.mark.skipif(not os.environ.get("A0_TEST_CHROMIUM"), reason="set A0_TEST_CHROMIUM to run a headed Chromium")
+async def test_native_chromium_profile_and_attach(tmp_path: Path) -> None:
+    from aiohttp import web
+    from PIL import Image
+    from io import BytesIO
 
-    async def fake_installer(command: list[str]) -> tuple[int, str]:
-        calls.append(command)
-        if command == pip_command and calls.count(pip_command) == 1:
-            return 1, "No module named pip"
-        if command == ensurepip_command:
-            return 0, "pip installed"
-        manager._playwright_available = True
-        return 0, "installed"
+    app = web.Application()
 
-    monkeypatch.setattr(
-        host_browser_manager_module,
-        "playwright_python_install_commands",
-        lambda python_executable: [[python_executable, "-m", "pip", "install", "playwright"]],
-    )
-    manager = HostBrowserManager(
-        CLIConfig(host_browser_enabled=True),
-        playwright_available=False,
-        playwright_installer=fake_installer,
-    )
+    async def index(request):
+        return web.Response(text='<title>CDP check</title><input id="text"><input type="file" id="file">'
+                                 '<div style="height:3200px"></div>', content_type="text/html")
 
-    result = await manager.ensure_playwright_dependency()
+    app.router.add_get("/{page}", index)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    origin = f"http://127.0.0.1:{runner.addresses[0][1]}"
+    profile = BrowserProfile("chrome-a0", "Chrome", os.environ["A0_TEST_CHROMIUM"], tmp_path, "Default", "Test")
+    owner = HostBrowserSession("owned", profile)
+    try:
+        opened = await owner.open(origin + "/first")
+        browser_id = opened["id"]
+        assert opened["state"]["title"] == "CDP check"
+        process = owner.process
+        assert process is not None
+        marker = tmp_path / "DevToolsActivePort"
+        assert marker.is_file()
+        for script in ("() => 7", "(async () => 7)", "function () {return 7}", "(() => 7)()"):
+            assert (await owner.evaluate(browser_id, script))["result"] == 7
+        for suffix in ("", ";"):
+            result = await owner.evaluate(browser_id,
+                "(() => {globalThis.runs = (globalThis.runs || 0) + 1; return {count: runs}})()" + suffix)
+            assert result["result"] == {"count": 2 if suffix else 1}
+        await owner.evaluate(browser_id, "document.querySelector('#text').focus()")
+        await owner.keyboard(browser_id, text="replace me")
+        await owner.key_chord(browser_id, ["Control", "a"])
+        await owner.keyboard(browser_id, text="typed")
+        assert (await owner.evaluate(browser_id, "document.querySelector('#text').value"))["result"] == "typed"
 
-    assert result["installed"] is True
-    assert calls == [pip_command, ensurepip_command, pip_command]
-    assert manager.has_playwright_dependency() is True
+        upload = tmp_path / "upload.txt"
+        upload.write_text("CDP upload", encoding="utf-8")
+        await owner.set_content_helper_source("""
+            globalThis.__spaceBrowserPageContent__ = {
+                ready: () => true, capture: () => ({version: 1}), fileInputFor: () => ({selector: "#file"}),
+                fileInputElementFor: () => document.querySelector("#file")
+            }
+        """)
+        await owner.upload_file(browser_id, 1, str(upload))
+        assert (await owner.evaluate(browser_id, "document.querySelector('#file').files[0].name"))["result"] == upload.name
+        assert (await owner.content(browser_id))["version"] == 1
+        await owner.set_content_helper_source("""
+            globalThis.__spaceBrowserPageContent__ = {ready: () => true, capture: () => ({version: 2})}
+        """)
+        assert (await owner.content(browser_id))["version"] == 2
+        captures = await owner.dispatch({"action": "multi", "calls": [
+            {"action": "screenshot", "browser_id": browser_id, "image_format": "png"},
+            {"action": "screenshot_file", "browser_id": browser_id},
+        ]})
+        for capture, fmt, suffix in zip(captures, ["png", "jpeg"], [".png", ".jpg"], strict=True):
+            assert capture["ok"]
+            result = capture["result"]
+            artifact = result["artifact"]
+            assert result["ephemeral"] and "host_path" not in result
+            assert artifact["filename"].endswith(suffix)
+            assert artifact["mime"] == result["mime"] == f"image/{fmt}"
+            assert Image.open(BytesIO(base64.b64decode(artifact["data"]))).format == fmt.upper()
+        shot = await owner.screenshot_file(browser_id, full_page=True)
+        assert Image.open(BytesIO(base64.b64decode(shot["artifact"]["data"]))).height >= 3200
+        assert (await owner.navigate(browser_id, origin + "/second"))["currentUrl"].endswith("/second")
+        back = await owner.back(browser_id)
+        assert back["currentUrl"].endswith("/first") and back["canGoForward"]
+        assert (await owner.forward(browser_id))["currentUrl"].endswith("/second")
 
+        page = owner.pages[browser_id].page
+        await page.evaluate("setTimeout(() => alert('Temporary test dialog'), 50); true")
+        await asyncio.sleep(0.15)
+        try:
+            during_dialog = await asyncio.wait_for(owner.open(origin + "/unrelated"), 4)
+            assert during_dialog["state"]["title"] == "CDP check"
+            assert await owner.close_browser(during_dialog["id"]) == {"closed": during_dialog["id"]}
+        finally:
+            await page.send("Page.handleJavaScriptDialog", {"accept": False})
+        external = (await owner.open(origin + "/manual-close"))["id"]
+        await owner.browser.command("Target.closeTarget", {"targetId": owner.pages[external].page.target_id})
+        async with asyncio.timeout(2):
+            while external in owner.pages:
+                await asyncio.sleep(0.01)
+        with pytest.raises(KeyError):
+            await owner.state(external)
 
-async def test_host_browser_manager_reports_repair_failure() -> None:
-    async def fake_installer(command: list[str]) -> tuple[int, str]:
-        del command
-        return 2, "boom"
-
-    manager = HostBrowserManager(
-        CLIConfig(host_browser_enabled=True),
-        playwright_available=False,
-        playwright_installer=fake_installer,
-    )
-
-    with pytest.raises(RuntimeError, match="install failed"):
-        await manager.ensure_playwright_dependency()
+        attached = HostBrowserSession("attached", BrowserProfile(
+            "chrome-cdp", "Chrome", "", Path(), "localhost", "Test", cdp_endpoint=owner.browser.endpoint
+        ))
+        try:
+            assert any(item["title"] == "CDP check" for item in (await attached.list())["browsers"])
+            assert (await attached.open(origin + "/second"))["reused"]
+        finally:
+            await attached.close()
+        assert marker.is_file()
+        assert process.returncode is None and (await owner.state(browser_id))["title"] == "CDP check"
+    finally:
+        await owner.close()
+        await runner.cleanup()
+    assert process.returncode is not None and not marker.exists()
