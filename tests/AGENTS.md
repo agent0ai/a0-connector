@@ -50,6 +50,7 @@
 
 - The autouse preference fixture redirects the CLI settings and remembered sessions into each test’s temporary directory.
 - Native host Chromium integration uses a disposable profile. Set `A0_TEST_CHROMIUM` to an installed headed Chromium-family executable and run `./.venv/bin/python -m pytest tests/test_host_browser.py tests/test_host_browser_keyboard.py -k native_chromium`.
+- `test_host_browser_history.py` uses the same executable in headless mode. Its loopback server holds a parser-blocking response until the test releases it, including for a cross-site iframe.
 - Full suite: `./.venv/bin/python -m pytest tests/ -v`.
 - Async fallback: `./.venv/bin/python -m pytest tests/ -v -p anyio --anyio-backends=asyncio`.
 - Large-payload soak: `A0_RUN_LARGE_PAYLOAD_SOAK=1 ./.venv/bin/python -m pytest tests/test_client.py -m large_payload_soak -v`.

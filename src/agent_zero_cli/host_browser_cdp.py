@@ -21,6 +21,12 @@ class CDPError(RuntimeError):
     pass
 
 
+_HISTORY_EVENTS = {
+    "Page.frameStartedNavigating", "Page.frameNavigated", "Page.frameDetached", "Page.navigatedWithinDocument",
+    "Page.lifecycleEvent", "Target.attachedToTarget", "Target.detachedFromTarget",
+}
+
+
 class CDPConnection:
     def __init__(self, endpoint: str) -> None:
         self.endpoint = endpoint
@@ -30,6 +36,7 @@ class CDPConnection:
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._send_lock = asyncio.Lock()
+        self._history_events: dict[str, asyncio.Queue] = {}
         self.on_detached: Callable[[str | None], None] | None = None
 
     @property
@@ -137,11 +144,25 @@ class CDPConnection:
                         future = self._pending.get(msg_id)
                         if future is not None and not future.done():
                             future.set_result(payload)
-                    elif payload.get("method") == "Target.detachedFromTarget" and self.on_detached:
-                        self.on_detached(payload["params"]["sessionId"])
+                    elif (method := payload.get("method")) in _HISTORY_EVENTS:
+                        params = payload["params"]
+                        events = self._history_events.get(payload.get("sessionId"))
+                        if method == "Target.detachedFromTarget":
+                            session_id = params["sessionId"]
+                            events = self._history_events.pop(session_id, events)
+                            if self.on_detached:
+                                self.on_detached(session_id)
+                        elif method == "Target.attachedToTarget" and events is not None:
+                            self._history_events[params["sessionId"]] = events
+                        if method == "Page.lifecycleEvent" and params["name"] != "DOMContentLoaded":
+                            continue
+                        if events is not None:
+                            events.put_nowait((method, params))
                 elif message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
                     break
         finally:
+            for events in set(self._history_events.values()):
+                events.put_nowait(("disconnected", {}))
             if self.on_detached:
                 self.on_detached(None)
             for future in list(self._pending.values()):
@@ -307,6 +328,7 @@ class CDPPage:
         self.viewport_size = dict(DEFAULT_VIEWPORT)
         self._handlers: dict[str, Any] = {}
         self._closed = False
+        self._history_lock = asyncio.Lock()
 
     def on(self, event: str, callback: Any) -> None:
         self._handlers[event] = callback
@@ -322,17 +344,75 @@ class CDPPage:
         await self.wait_for_load_state(timeout=timeout)
 
     async def _traverse(self, offset: int, timeout: int) -> None:
-        async with asyncio.timeout(timeout / 1000):
+        async with asyncio.timeout(timeout / 1000), self._history_lock:
             history = await self.send("Page.getNavigationHistory")
             index = history["currentIndex"] + offset
             if 0 <= index < len(history["entries"]):
-                entry_id = history["entries"][index]["id"]
-                await self.send("Page.navigateToHistoryEntry", {"entryId": entry_id})
-                while True:
-                    history = await self.send("Page.getNavigationHistory")
-                    if history["entries"][history["currentIndex"]]["id"] == entry_id:
-                        break
-                    await asyncio.sleep(0.05)
+                await self._wait_for_history_entry(history["entries"][index]["id"])
+
+    async def _wait_for_history_entry(self, entry_id: int) -> None:
+        events = asyncio.Queue()
+        subscriptions = self.connection._history_events
+        subscriptions[self.session_id] = events
+        attach = {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True,
+                  "filter": [{"type": "iframe"}, {"exclude": True}]}
+
+        async def watch(session_id: str) -> None:
+            if session_id != self.session_id:
+                await self.connection.command("Page.enable", session_id=session_id)
+            await self.connection.command("Page.setLifecycleEventsEnabled", {"enabled": True}, session_id=session_id)
+            await self.connection.command("Target.setAutoAttach", attach, session_id=session_id)
+
+        try:
+            await watch(self.session_id)
+            navigating = False
+            frame_id = loader_id = None
+            while True:
+                # Chromium reports existing child targets before acknowledging setAutoAttach.
+                if not navigating and events.empty():
+                    await self.send("Page.navigateToHistoryEntry", {"entryId": entry_id})
+                    navigating = True
+                method, params = await events.get()
+                if method == "Target.attachedToTarget":
+                    child = params["sessionId"]
+                    if child in subscriptions:
+                        try:
+                            await watch(child)
+                        except CDPError:
+                            # The iframe can disappear while enabling its observer.
+                            if child in subscriptions:
+                                raise
+                elif method == "disconnected" or (
+                    method == "Target.detachedFromTarget" and params["sessionId"] == self.session_id
+                ):
+                    raise CDPError("The host browser tab closed during history navigation.")
+                elif not navigating:
+                    continue
+                elif method == "Page.frameStartedNavigating" and params["navigationType"].startswith("history"):
+                    frame_id, loader_id = params["frameId"], params.get("loaderId")
+                elif (method == "Page.frameDetached" and params["frameId"] == frame_id
+                      and params["reason"] == "remove"):
+                    raise CDPError("The frame was removed during host browser history navigation.")
+                elif method == "Page.navigatedWithinDocument" and params["frameId"] == frame_id:
+                    return
+                elif method == "Page.frameNavigated" and params["frame"]["id"] == frame_id:
+                    if params.get("type") == "BackForwardCacheRestore":
+                        return
+                    loader_id = params["frame"]["loaderId"]
+                elif (method == "Page.lifecycleEvent" and params["frameId"] == frame_id
+                      and params["loaderId"] == loader_id):
+                    return
+        finally:
+            for session_id, queue in list(subscriptions.items()):
+                if queue is events:
+                    del subscriptions[session_id]
+            if self.connection.is_connected:
+                # Disabling auto-attach also releases its child debugger sessions.
+                with contextlib.suppress(CDPError, aiohttp.ClientError, ConnectionError, TimeoutError):
+                    await self.send("Target.setAutoAttach", {"autoAttach": False, "waitForDebuggerOnStart": False},
+                                    timeout=1)
+                with contextlib.suppress(CDPError, aiohttp.ClientError, ConnectionError, TimeoutError):
+                    await self.send("Page.setLifecycleEventsEnabled", {"enabled": False}, timeout=1)
 
     async def go_back(self, *, timeout: int = 10000, **_: object) -> None:
         await self._traverse(-1, timeout)
