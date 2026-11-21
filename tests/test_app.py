@@ -5086,7 +5086,6 @@ async def test_browser_host_on_off_syncs_agent_zero_browser_mode(
     assert dummy_app._host_browser.enabled is False
     assert "Host browser enabled." in notices[0][0]
     assert "Browser set to Bring Your Own Browser for project Research." in notices[0][0]
-    assert "Browser model-use settings" in notices[0][0]
     assert "Host browser disabled." in notices[1][0]
     assert "Browser set to Docker browser for project Research." in notices[1][0]
 
@@ -5141,7 +5140,6 @@ async def test_browser_runtime_commands_update_agent_zero_config(
     ]
     assert "Browser set to Bring Your Own Browser for project Research." in notices[0][0]
     assert "Browser set to Docker browser for project Research." in notices[1][0]
-    assert all("Browser model-use settings" in notice[0] for notice in notices)
 
 
 async def test_browser_direct_command_sets_host_browser_selection(

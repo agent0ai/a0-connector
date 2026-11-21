@@ -1119,7 +1119,7 @@ def test_browser_runtime_endpoint_updates_browser_plugin_config() -> None:
     assert payload["ok"] is True
     assert payload["runtime_backend"] == "host_required"
     assert payload["host_browser_profile_mode"] == "existing"
-    assert "Browser model-use settings" in payload["privacy_notice"]
+    assert "privacy_notice" not in payload
     assert saved[0][3].pop("annotation_screenshots", False) is False
     assert saved == [
         (
@@ -1133,7 +1133,6 @@ def test_browser_runtime_endpoint_updates_browser_plugin_config() -> None:
                 "max_open_tabs": 32,
                 "evaluate_timeout_seconds": 30.0,
                 "runtime_backend": "host_required",
-                "host_browser_privacy_policy": "warn",
                 "host_browser_profile_mode": "existing",
                 "host_browser_selection": "",
                 "proxy_server": "",
@@ -1157,7 +1156,6 @@ def test_browser_runtime_endpoint_defaults_missing_profile_mode() -> None:
         "default_homepage": "https://example.com",
         "autofocus_active_page": False,
         "runtime_backend": "host_required",
-        "host_browser_privacy_policy": "warn",
         "model_preset": "Research",
     }
     _reload("plugins._a0_connector.api.v1.base")

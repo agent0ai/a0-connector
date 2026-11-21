@@ -13,10 +13,6 @@ if TYPE_CHECKING:
     from agent_zero_cli.app import AgentZeroCLI
 
 
-_CONTENT_POLICY_NOTICE = (
-    "For Browser model-use settings, visit Agent Zero WebUI > Browser settings to choose "
-    "Local models only, Warn when using cloud, or Allow."
-)
 _AUTO_SELECTION_ALIASES = {"auto", "automatic", "default", "clear", "none"}
 
 
@@ -53,10 +49,6 @@ async def cmd_browser(app: "AgentZeroCLI", query: str = "") -> None:
     if command == "repair":
         await _refresh_browser_metadata_notice(app, "Host browser discovery refreshed.")
         return
-    if command == "privacy":
-        app._show_notice(_CONTENT_POLICY_NOTICE)
-        return
-
     await _cmd_browser_select(app, tokens)
 
 
@@ -111,7 +103,7 @@ async def _cmd_browser_runtime(app: "AgentZeroCLI", runtime_backend: str) -> Non
 
     label = _browser_mode_label(payload.get("runtime_backend"))
     scope = _browser_scope_label(payload)
-    app._show_notice(f"Browser set to {label}{scope}. {_CONTENT_POLICY_NOTICE}")
+    app._show_notice(f"Browser set to {label}{scope}.")
 
 
 async def _cmd_browser_host(app: "AgentZeroCLI", args: list[str]) -> None:
@@ -147,8 +139,6 @@ async def _cmd_browser_host(app: "AgentZeroCLI", args: list[str]) -> None:
         label = _browser_mode_label(runtime_payload.get("runtime_backend"))
         scope = _browser_scope_label(runtime_payload)
         message += f" Browser set to {label}{scope}."
-        if enabled:
-            message += f" {_CONTENT_POLICY_NOTICE}"
     elif runtime_message:
         message += f" {runtime_message}"
     app._show_notice(message)
@@ -289,7 +279,7 @@ async def _cmd_browser_select(app: "AgentZeroCLI", args: list[str]) -> None:
 
     label = _host_browser_selection_label(selection, choices)
     scope = _browser_scope_label(payload)
-    app._show_notice(f"Browser host target set to {label}{scope}. {_CONTENT_POLICY_NOTICE}")
+    app._show_notice(f"Browser host target set to {label}{scope}.")
 
 
 async def _cmd_browser_relaunch(app: "AgentZeroCLI") -> None:

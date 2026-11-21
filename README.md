@@ -161,7 +161,6 @@ In **F6 Chats**, type in **Search** to find chat titles or message text. Matchin
 | `/browser auto` / `/browser <number>` / `/browser <id>` / `/browser <host:port>` / `/browser ws://...` | Choose the current Agent Zero Browser host target |
 | `/browser relaunch` | Prepare the selected host browser now |
 | `/browser repair` | Refresh host browser discovery and publish its status |
-| `/browser privacy` | Show where host-browser content policy is configured |
 | `/disconnect` | Disconnect and return to the current host connection flow |
 | `/keys` | Toggle key help |
 | `/quit` | Exit |
