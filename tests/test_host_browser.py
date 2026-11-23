@@ -19,7 +19,6 @@ from agent_zero_cli.config import CLIConfig
 from agent_zero_cli.host_browser import (
     BrowserCandidate,
     BrowserProfile,
-    CONTENT_HELPER_PATH,
     HostBrowserManager,
     HostBrowserSession,
     ProfileLockState,
@@ -549,7 +548,7 @@ def test_linux_candidate_detection_includes_major_chromium_browsers(
 
 
 def test_content_helper_source_is_owned_by_agent_zero_browser_plugin() -> None:
-    assert not CONTENT_HELPER_PATH.exists()
+    assert not (Path(__file__).resolve().parents[1] / "src/agent_zero_cli/assets/browser-page-content.js").exists()
 
     agent_zero_asset = (
         Path(__file__).resolve().parents[2]
@@ -1213,7 +1212,8 @@ def test_hello_metadata_advertises_native_profile_support(tmp_path: Path) -> Non
     assert metadata["supported"] is True
     assert metadata["can_prepare"] is True
     assert metadata["can_repair"] is False
-    assert {"cdp", "browser_file_scopes_v1"} <= set(metadata["features"])
+    assert metadata["contract_version"] == 3
+    assert "cdp" in metadata["features"]
 
 
 def test_hello_metadata_marks_restricted_saved_profile_as_preparable(
@@ -1865,6 +1865,8 @@ async def test_remote_ensure_respects_disabled_state_while_local_preparation_can
 
     assert remote_result["ok"] is False
     assert remote_result["code"] == "HOST_BROWSER_DISABLED"
+    raw = await manager.handle_op({"op_id": "raw", "action": "cdp", "cdp_method": "Browser.getVersion"})
+    assert raw["code"] == "HOST_BROWSER_DISABLED"
     assert manager.enabled is False
     assert manager._sessions == {}
 
@@ -2539,6 +2541,25 @@ async def test_native_chromium_profile_and_attach(tmp_path: Path, monkeypatch) -
         try:
             assert any(item["title"] == "CDP check" for item in (await attached.list())["browsers"])
             assert (await attached.open(origin + "/second"))["reused"]
+            version = await owner.dispatch({"action": "cdp", "cdp_method": "Browser.getVersion"})
+            assert version["result"]["product"]
+            enabled = await owner.cdp({"cdp_method": "Runtime.enable", "browser_id": browser_id})
+            sid = enabled["session_id"]
+            await owner.cdp({"cdp_method": "Runtime.evaluate", "session_id": sid,
+                             "params": {"expression": "console.log('host-cdp-regression')"}})
+            events = (await owner.cdp({}))["events"]
+            assert any(event["method"] == "Runtime.consoleAPICalled" and event["sessionId"] == sid
+                       and event["params"]["args"][0].get("value") == "host-cdp-regression" for event in events)
+            with pytest.raises(ValueError, match="Unknown CDP session_id"):
+                await attached.cdp({"cdp_method": "Page.getLayoutMetrics", "session_id": sid})
+            nested = await owner.cdp({"cdp_method": "Target.attachToTarget",
+                                      "params": {"targetId": owner.pages[browser_id].page.target_id, "flatten": True}})
+            metrics = await owner.cdp({"cdp_method": "Page.getLayoutMetrics", "session_id": nested["result"]["sessionId"]})
+            assert metrics["result"]["cssLayoutViewport"]["clientWidth"] > 0
+            await owner.browser.release_raw()
+            with pytest.raises(ValueError, match="Unknown CDP session_id"):
+                await owner.cdp({"cdp_method": "Page.getLayoutMetrics", "session_id": sid})
+            assert (await owner.cdp({}))["events"] == []
         finally:
             await attached.close()
         assert marker.is_file()

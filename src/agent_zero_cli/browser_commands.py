@@ -113,6 +113,8 @@ async def _cmd_browser_host(app: "AgentZeroCLI", args: list[str]) -> None:
 
     enabled = args[0].lower() in {"on", "enable"}
     app._host_browser.set_enabled(enabled)
+    if not enabled:
+        await app._host_browser.release_cdp()
     synced = await app._refresh_remote_tool_metadata()
     state = "enabled" if enabled else "disabled"
     if not synced:

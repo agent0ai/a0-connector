@@ -517,6 +517,7 @@ class FakeHostBrowserManager:
     def __init__(self) -> None:
         self.enabled = False
         self.disconnect_calls = 0
+        self.cdp_releases = 0
         self.handled_ops: list[dict[str, object]] = []
         self.remote_debugging = False
         self.profile_selections: list[tuple[str, str]] = []
@@ -576,6 +577,9 @@ class FakeHostBrowserManager:
 
     async def disconnect(self) -> None:
         self.disconnect_calls += 1
+
+    async def release_cdp(self) -> None:
+        self.cdp_releases += 1
 
     async def handle_op(self, data: dict[str, object]) -> dict[str, object]:
         self.handled_ops.append(dict(data))
@@ -5084,6 +5088,7 @@ async def test_browser_host_on_off_syncs_agent_zero_browser_mode(
         ("ctx-browser", "container"),
     ]
     assert dummy_app._host_browser.enabled is False
+    assert dummy_app._host_browser.cdp_releases == 1
     assert "Host browser enabled." in notices[0][0]
     assert "Browser set to Bring Your Own Browser for project Research." in notices[0][0]
     assert "Host browser disabled." in notices[1][0]

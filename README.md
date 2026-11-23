@@ -13,7 +13,7 @@ Terminal connector for [Agent Zero](https://github.com/frdel/agent-zero). It pai
 
 The CLI requires an Agent Zero build that includes the builtin `_a0_connector` plugin.
 
-Core builds advertising `composer_controls` can supply plugin-defined controls beside the provider/model bar. The connector renders choice popovers with optional custom input; labels, values, defaults, validation, and persistence belong to the server. Escape or clicking outside cancels. Older Core builds and chats without controls keep the existing bar unchanged.
+Core builds advertising `composer_controls` can supply plugin-defined controls beside the provider/model bar. The connector renders choice popovers with optional custom input; labels, values, defaults, validation, and persistence belong to the server. Escape or clicking outside cancels.
 
 ## Install
 
@@ -212,14 +212,14 @@ Happy path:
    - Safari: open **Safari > Settings > Advanced**, enable **Show features for web developers**, then open **Developer** and enable **Allow remote automation**. Select `safari:default` in Launcher or run `/browser safari`.
    - An already-open Chromium-family browser: visit its remote debugging page, such as `chrome://inspect/#remote-debugging` or `opera://inspect/#remote-debugging`, and click **Allow**.
 
-3. In Agent Zero Browser settings, choose `host_when_available` or `host_required`.
+3. In Agent Zero Browser settings, select **Bring Your Own Browser**.
 4. Ask the agent to use the browser.
 
-When a subscribed CLI supports host-browser control, the first browser action can enable and prepare the local browser automatically. The CLI slash commands remain available for diagnostics and manual override.
+With Host Browser access enabled, the first browser action prepares the selected browser. The CLI slash commands remain available for diagnostics and manual override.
 
 The CLI does not bundle a browser and it does not copy credentials, cookies, or profile data out of a browser profile. For Safari, A0 uses Apple's bundled `/usr/bin/safaridriver` and opens a Safari automation window for one Agent Zero browser context at a time. It never enables Safari's remote-automation setting silently. Safari WebDriver provides viewport screenshots; a full-page screenshot request fails explicitly.
 
-Browser settings limit JavaScript `evaluate` to 30 seconds by default (0.1–60 seconds). A timeout first interrupts execution in place, preserving the page and unsaved edits. Only unresolved async execution requires reloading the affected tab; that fallback preserves cookies and tab storage but loses unsaved page edits. The error reports any reload or fallback closure. Safari rejects `evaluate` because its backend cannot forcibly interrupt JavaScript. Updated Core requires a connector that advertises timeout support before sending a host evaluate script.
+Browser settings limit JavaScript `evaluate` to 30 seconds by default (0.1–60 seconds). A timeout first interrupts execution in place, preserving the page and unsaved edits. Only unresolved async execution requires reloading the affected tab; that fallback preserves cookies and tab storage but loses unsaved page edits. The error reports any reload or fallback closure. Safari rejects `evaluate` because its backend cannot forcibly interrupt JavaScript.
 
 For Chromium-family browsers, if the browser's Remote debugging page has been allowed, A0 reads the local `DevToolsActivePort` file and keeps one DevTools Protocol connection open for browser actions. Status checks and profile listing do not connect to either browser runtime, so they should not create repeated permission prompts.
 
@@ -231,7 +231,7 @@ Chrome 136+ restricts command-line remote debugging against the default personal
 
 For host file uploads, choose a file in the shared Files folder and submit the form before closing the tab or disconnecting. The CLI keeps up to 100 MiB of pending upload copies per browser session. Saving a screenshot on the host also requires write access to that folder. Capturing a screenshot for the chat uses the Browser permission.
 
-The CLI uses the Chrome DevTools Protocol for both attached and A0-launched Chromium profiles. The Docker browser uses its own profile inside Agent Zero.
+Enabling Host Browser grants the agent Chrome DevTools Protocol commands and events on the selected Chromium profile, including its signed-in tabs. The same Browser tool works with an attached or A0-launched browser. The Docker browser uses its own profile inside Agent Zero.
 
 - macOS: detects Safari through its system WebDriver, plus Chrome, Chromium, Edge, Brave, Opera, and Vivaldi apps in `/Applications` and profile data in `~/Library/Application Support`.
 - Windows: detects Chrome, Chromium, Edge, Brave, Opera, and Vivaldi under `%LOCALAPPDATA%`/Program Files profile conventions.
@@ -241,7 +241,6 @@ The CLI uses the Chrome DevTools Protocol for both attached and A0-launched Chro
 
 - `404` on `/api/plugins/_a0_connector/v1/capabilities`: the running Agent Zero build does not include the builtin `_a0_connector` plugin, or the local Core checkout/runtime copy is out of sync.
 - Browser UI works but `a0` does not: the core web UI can run without the connector plugin; the CLI cannot.
-- `Connector contract mismatch`: the server is advertising an older connector auth contract. Update Agent Zero Core so its builtin `_a0_connector` plugin matches the CLI.
 - WebSocket connection rejected: ensure proxies forward both `/socket.io` and `/api/plugins/` unchanged, and that `AGENT_ZERO_HOST` exactly matches the real host seen by Agent Zero. If Docker discovery shows `localhost`, prefer `localhost` over `127.0.0.1`.
 - `a0 update` says `uv` is required: Install `uv` or rerun the existing installer.
 - `a0` prints `No pyvenv.cfg file`: the uv tool environment is incomplete, often after an interrupted Windows self-update from an older release. Close any still-open A0 CLI terminal windows, then rerun the installer; the installer rebuilds the tool environment with `uv tool install --force`.

@@ -337,6 +337,8 @@ class HostBrowserSession:
 
     async def dispatch(self, payload: dict[str, Any]) -> Any:
         action = normalize_action(payload.get("action"))
+        if action == "cdp":
+            return await self.cdp(payload)
         if action == "open":
             return await self.open(str(payload.get("url") or ""))
         if action == "list":
@@ -356,6 +358,24 @@ class HostBrowserSession:
         if action in {"screenshot", "screenshot_file", "close", "close_all", "multi"}:
             return await self._dispatch_session_action(action, payload)
         raise ValueError(f"Unsupported host browser action: {action}")
+
+    async def cdp(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.profile.is_safari:
+            raise ValueError("CDP requires a Chromium browser.")
+        method, params = payload.get("cdp_method"), payload.get("params")
+        browser_id, session_id = payload.get("browser_id"), payload.get("session_id")
+        if method is None:
+            if any(value is not None for value in (browser_id, params, session_id)):
+                raise ValueError("Supply cdp_method to send a command, or omit all arguments to read CDP events")
+            return self.browser.raw.drain()
+        if not isinstance(method, str) or not method.strip():
+            raise ValueError("cdp_method must be a non-empty protocol method name")
+        if params is not None and not isinstance(params, dict):
+            raise ValueError("CDP params must be a JSON object")
+        if browser_id is not None and session_id is not None:
+            raise ValueError("Choose either browser_id or session_id")
+        target = self._page(self._resolve_browser_id(browser_id)).target_id if browser_id is not None else None
+        return await self.browser.raw.send(method, params, target, session_id)
 
     async def _dispatch_navigation_action(self, action: str, payload: dict[str, Any]) -> Any:
         browser_id = payload.get("browser_id")

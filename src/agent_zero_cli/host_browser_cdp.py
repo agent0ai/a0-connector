@@ -10,6 +10,7 @@ from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
+from agent_zero_cli.raw_cdp import RawCDPClient
 
 from agent_zero_cli.host_browser_common import (
     DEFAULT_VIEWPORT,
@@ -34,10 +35,16 @@ class CDPConnection:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._next_id = 1
-        self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._pending: dict[int, tuple[str | None, asyncio.Future[dict[str, Any]]]] = {}
+        self.raw_sessions: dict[str, RawCDPClient] = {}
+        self.raw = RawCDPClient(self)
         self._send_lock = asyncio.Lock()
         self._history_events: dict[str, asyncio.Queue] = {}
         self.on_detached: Callable[[str | None], None] | None = None
+
+    @property
+    def closed(self) -> bool:
+        return not self.is_connected
 
     @property
     def is_connected(self) -> bool:
@@ -89,7 +96,7 @@ class CDPConnection:
                 msg_id = self._next_id
                 self._next_id += 1
                 future = asyncio.get_running_loop().create_future()
-                self._pending[msg_id] = future
+                self._pending[msg_id] = (session_id, future)
                 payload: dict[str, Any] = {"id": msg_id, "method": method}
                 if params:
                     payload["params"] = params
@@ -122,11 +129,18 @@ class CDPConnection:
             with contextlib.suppress(Exception):
                 await self._session.close()
             self._session = None
-        for future in list(self._pending.values()):
-            if not future.done():
-                future.set_result({"error": {"message": "Chrome DevTools connection closed."}})
+        self._fail_requests()
         self._pending.clear()
         self.on_detached = None
+
+    async def release_raw(self) -> None:
+        previous, self.raw = self.raw, RawCDPClient(self)
+        await previous.close()
+
+    def _fail_requests(self, session_id: str | None = None) -> None:
+        for owner, future in self._pending.values():
+            if (session_id is None or owner == session_id) and not future.done():
+                future.set_exception(CDPError("Chrome DevTools connection or session closed."))
 
     async def _read_loop(self) -> None:
         assert self._ws is not None
@@ -141,14 +155,18 @@ class CDPConnection:
                         continue
                     msg_id = payload.get("id")
                     if isinstance(msg_id, int):
-                        future = self._pending.get(msg_id)
-                        if future is not None and not future.done():
-                            future.set_result(payload)
+                        pending = self._pending.get(msg_id)
+                        if pending is not None and not pending[1].done():
+                            pending[1].set_result(payload)
+                    elif client := self.raw_sessions.get(payload.get("sessionId")):
+                        client.receive(payload, len(message.data.encode("utf-8")))
                     elif (method := payload.get("method")) in _HISTORY_EVENTS:
                         params = payload["params"]
                         events = self._history_events.get(payload.get("sessionId"))
                         if method == "Target.detachedFromTarget":
                             session_id = params["sessionId"]
+                            if client := self.raw_sessions.get(session_id):
+                                client.detached(session_id)
                             events = self._history_events.pop(session_id, events)
                             if self.on_detached:
                                 self.on_detached(session_id)
@@ -165,9 +183,8 @@ class CDPConnection:
                 events.put_nowait(("disconnected", {}))
             if self.on_detached:
                 self.on_detached(None)
-            for future in list(self._pending.values()):
-                if not future.done():
-                    future.set_result({"error": {"message": "Chrome DevTools connection closed."}})
+            self._fail_requests()
+            self.raw_sessions.clear()
 
 
 class CDPMouse:

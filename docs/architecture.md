@@ -228,7 +228,7 @@ Freshness semantics for `patch`:
 - A changed `mtime` produces the same prompt behavior as `_text_editor` `patch_stale_read`.
 - Line-preserving in-place patches refresh the stored metadata and may be chained without rereading.
 - Insertions, deletions, or any line-count-changing patch deliberately mark the file state stale so the next patch requires a reread.
-- If the connected CLI does not support internal `stat`, the plugin returns a single explicit compatibility error (`unsupported_cli_freshness`) and does not fall back to blind patching.
+- A host patch requires a successful `stat` freshness check before writing.
 - `patch` with `patch_text` is context based. It accepts PseudoPatch-style update hunks and applies them against current CLI-side file content, so it does not require a prior line-number read. Successful context patches mark any stored line-number state stale.
 - In `patch_text`, an insert-only hunk can use a single `@@ existing line` anchor followed by `+new line`; the insert lands immediately after the anchor.
 

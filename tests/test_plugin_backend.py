@@ -685,7 +685,7 @@ def _load_text_editor_remote_tool(*, file_op_handler):
     ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
     _reset_ws_runtime_state(ws_runtime_mod)
     shared_ws_manager.ws_runtime_mod = ws_runtime_mod
-    tool_mod = _reload("plugins._a0_connector.tools.text_editor_remote")
+    tool_mod = _reload("plugins._a0_connector.helpers.host_text_editor")
     return shared_ws_manager, ws_runtime_mod, tool_mod
 
 
@@ -702,7 +702,7 @@ def _load_code_execution_remote_tool(
     ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
     _reset_ws_runtime_state(ws_runtime_mod)
     shared_ws_manager.ws_runtime_mod = ws_runtime_mod
-    tool_mod = _reload("plugins._a0_connector.tools.code_execution_remote")
+    tool_mod = _reload("plugins._a0_connector.helpers.host_execution")
     return shared_ws_manager, ws_runtime_mod, tool_mod
 
 
@@ -721,7 +721,7 @@ def _create_text_editor_remote(
     agent: _FakeRemoteAgent,
     **args,
 ):
-    return tool_mod.TextEditorRemote(agent=agent, args=args)
+    return tool_mod.HostTextEditor(agent, args)
 
 
 def _create_code_execution_remote(
@@ -729,7 +729,7 @@ def _create_code_execution_remote(
     agent: _FakeRemoteAgent,
     **args,
 ):
-    return tool_mod.CodeExecutionRemote(agent=agent, args=args)
+    return tool_mod.HostExecution(agent, args)
 
 
 def _create_computer_use_remote(
@@ -2192,23 +2192,24 @@ def test_select_remote_exec_target_sid_requires_write_enabled_for_mutating_runti
 
 
 @pytest.mark.parametrize("mode", ["disconnected", "disabled", "read_only", "allowed"])
-@pytest.mark.parametrize("keyboard", ["yes  \n", ""])
-def test_input_remote_uses_execution_gates_and_terminal_transport(mode: str, keyboard: str) -> None:
+@pytest.mark.parametrize("code", ["yes", ""])
+def test_host_terminal_input_uses_execution_gates(mode: str, code: str) -> None:
     manager, ws_runtime, tool_mod = _load_code_execution_remote_tool(
         exec_handler=lambda payload: {"op_id": payload["op_id"], "ok": True, "result": {"output": "replied"}}
     )
-    input_mod = _reload("plugins._a0_connector.tools.input_remote")
     agent = _FakeRemoteAgent()
     if mode != "disconnected":
         ws_runtime.register_sid("sid-cli")
         ws_runtime.subscribe_sid_to_context("sid-cli", agent.context.id)
         ws_runtime.store_sid_remote_exec_metadata("sid-cli", {"enabled": mode != "disabled"})
         ws_runtime.store_sid_remote_file_metadata("sid-cli", {"enabled": True, "write_enabled": mode == "allowed"})
-    result = asyncio.run(input_mod.InputRemote(agent=agent, args={"session": 3}).execute(keyboard=keyboard))
+    result = asyncio.run(tool_mod.HostExecution(
+        agent, {"runtime": "terminal", "code": code, "session": 3}, allow_running=True,
+    ).execute())
     if mode == "allowed":
         assert result.message == "replied"
         payload = manager.calls[0]["payload"]
-        assert (payload["runtime"], payload["code"], payload["session"], payload["allow_running"]) == ("terminal", keyboard.rstrip(), 3, True)
+        assert (payload["runtime"], payload["code"], payload["session"], payload["allow_running"]) == ("terminal", code, 3, True)
         assert "keyboard" not in payload
     else:
         assert manager.calls == []
@@ -2216,14 +2217,13 @@ def test_input_remote_uses_execution_gates_and_terminal_transport(mode: str, key
 
 
 @pytest.mark.skipif(os.name == "nt", reason="uses POSIX shell quoting")
-def test_input_remote_reaches_real_program_through_execution_transport(tmp_path: Path, monkeypatch) -> None:
+def test_host_terminal_input_reaches_real_program(tmp_path: Path, monkeypatch) -> None:
     import shlex
     from agent_zero_cli.remote_exec import RemoteExecManager
 
     async def check():
         remote = RemoteExecManager(cwd=str(tmp_path), poll_interval=0.01)
         _, ws_runtime, tool_mod = _load_code_execution_remote_tool(exec_handler=remote.handle_exec_op)
-        input_mod = _reload("plugins._a0_connector.tools.input_remote")
         agent = _FakeRemoteAgent()
         ws_runtime.register_sid("sid-cli")
         ws_runtime.subscribe_sid_to_context("sid-cli", agent.context.id)
@@ -2237,7 +2237,9 @@ def test_input_remote_reaches_real_program_through_execution_transport(tmp_path:
                 tool_mod, agent, runtime="terminal", code=f"{shlex.quote(sys.executable)} -u -c {shlex.quote(code)}"
             ).execute()
             assert "Continue?" in started.message
-            result = await input_mod.InputRemote(agent=agent, args={"session": 0}).execute(keyboard="yes  \n")
+            result = await tool_mod.HostExecution(
+                agent, {"runtime": "terminal", "code": "yes", "session": 0}, allow_running=True,
+            ).execute()
             assert "REPLY=yes" in result.message
         finally:
             await remote.close()
@@ -2265,7 +2267,7 @@ def test_code_execution_remote_rejects_mutating_runtime_when_only_read_only_cli_
     _install_fake_helpers()
     ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
     _reset_ws_runtime_state(ws_runtime_mod)
-    tool_mod = _reload("plugins._a0_connector.tools.code_execution_remote")
+    tool_mod = _reload("plugins._a0_connector.helpers.host_execution")
     agent = _FakeRemoteAgent()
 
     ws_runtime_mod.register_sid("sid-cli")
@@ -4549,6 +4551,6 @@ def test_text_editor_remote_requires_cli_stat_support_for_fresh_patching(tmp_pat
         ).execute()
     )
 
-    assert "Upgrade the CLI" in response.message
+    assert "could not verify file state before patching" in response.message
     assert shared_ws_manager.ops == ["stat"]
     assert target.read_text(encoding="utf-8") == "line-1\nline-2\n"

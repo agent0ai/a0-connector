@@ -102,6 +102,7 @@ class HostBrowserManager:
             browser_selection=browser_selection,
         )
         return {
+            "contract_version": 3,
             "supported": bool(status["supported"]),
             "can_prepare": bool(status["can_prepare"]),
             "can_repair": False,
@@ -120,15 +121,12 @@ class HostBrowserManager:
                 "existing_profile",
                 "dedicated_profile",
                 "user_authorized_remote_debugging",
-                "cdp",
                 *(["safari_webdriver"] if profile and profile.is_safari else []),
                 "artifacts",
                 "background_tabs",
                 "content_helper_rpc",
                 "dom_helper_rpc",
-                "evaluate_timeout_v1",
                 "local_upload_paths",
-                "browser_file_scopes_v1",
                 *sorted(_SUPPORTED_ACTIONS),
             ],
             "support_reason": status["support_reason"],
@@ -494,6 +492,12 @@ class HostBrowserManager:
         for session in list(self._sessions.values()):
             await session._uploads.release()
 
+    async def release_cdp(self, context_id: str | None = None) -> None:
+        async with self._session_lock:
+            for key, session in self._sessions.items():
+                if (context_id is None or key == context_id) and session.browser and not session.profile.is_safari:
+                    await session.browser.release_raw()
+
     async def disconnect(self) -> None:
         await self.close()
 
@@ -548,6 +552,9 @@ class HostBrowserManager:
 
         if not op_id:
             return {"op_id": "", "ok": False, "error": "op_id is required", "code": "MISSING_OP_ID"}
+        if action == "release_cdp":
+            await self.release_cdp(context_id)
+            return self._success(op_id, {})
         if action not in _SUPPORTED_ACTIONS:
             return self._error(op_id, "UNKNOWN_ACTION", f"Unknown host browser action: {action!r}")
         if action == "status":

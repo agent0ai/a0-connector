@@ -17,9 +17,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 from agent_zero_cli.text_utils import coerce_bool
 
-# Legacy location kept as a public constant for compatibility. The helper source is
-# owned by Agent Zero's Browser plugin and is delivered over the connector protocol.
-CONTENT_HELPER_PATH = Path(__file__).resolve().parent / "assets" / "browser-page-content.js"
 CONTENT_HELPER_PAYLOAD_KEY = "content_helper"
 DOM_HELPER_PAYLOAD_KEY = "dom_helper"
 DEFAULT_VIEWPORT = {"width": 1280, "height": 800}
@@ -38,6 +35,7 @@ RELAUNCH_CONTEXT_ID = "_a0_cli_browser_check"
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z\d+\-.]*:", re.I)
 _SAFE_CONTEXT_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SUPPORTED_ACTIONS = {
+    "cdp",
     "open",
     "open_remote_debugging",
     "list",
@@ -78,7 +76,6 @@ _SUPPORTED_ACTIONS = {
 }
 _VALID_MODIFIERS = {"Control", "Shift", "Alt", "Meta"}
 BROWSER_REEXPORTS = [
-    "CONTENT_HELPER_PATH",
     "CONTENT_HELPER_PAYLOAD_KEY",
     "DOM_HELPER_PAYLOAD_KEY",
     "DEFAULT_VIEWPORT",

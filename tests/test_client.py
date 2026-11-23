@@ -159,7 +159,7 @@ async def test_chat_search_uses_the_existing_authenticated_client_and_preserves_
 
 
 @pytest.mark.parametrize("payload,message", [
-    ({"contexts": []}, "Update Agent Zero"),
+    ({"contexts": []}, "Invalid chat search response"),
     ({"matches": {}}, "Invalid chat search response"),
     ({"matches": [None]}, "Invalid chat search response"),
 ])

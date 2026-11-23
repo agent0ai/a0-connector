@@ -30,6 +30,7 @@
 - Connector/plugin tests should not require a live Agent Zero server unless a test is explicitly designed as live/integration coverage.
 - Instance-discovery scenarios must stub every competing runtime path they do not exercise, including Docker CLI, local sockets, HTTP APIs, and WSL, so a developer's running containers cannot change expected results.
 - `tests/test_plugin_backend.py` may resolve a plugin root from `A0_CONNECTOR_PLUGIN_ROOT`, a local `plugin/`, or a sibling Agent Zero checkout. Keep fake Agent Zero helper modules isolated and reset between tests.
+- Host file and shell transport tests use Core's `HostTextEditor` and `HostExecution`. Core tests the agent-facing input normalization, destination selection, and saved tool permissions.
 - Its `helpers.tool` stub includes Core's boolean argument parsing, preserving caller defaults for missing or unrecognized values.
 - Certificate fixtures are test assets only; do not replace them with real secrets.
 - Transcript image widget tests use fake renderers backed by ordinary Textual widgets; focused tests must not instantiate native terminal-image controls or emit terminal graphics sequences.
@@ -50,6 +51,7 @@
 
 - The autouse preference fixture redirects the CLI settings and remembered sessions into each test’s temporary directory.
 - Native host Chromium integration uses a disposable profile. Set `A0_TEST_CHROMIUM` to an installed headed Chromium-family executable and run `./.venv/bin/python -m pytest tests/test_host_browser.py tests/test_host_browser_keyboard.py -k native_chromium`.
+- The native profile-and-attach test covers raw browser and tab commands, console events, nested sessions, rejection of another chat's session IDs, and cleanup alongside the ordinary page helpers.
 - `test_host_browser_history.py` uses the same executable in headless mode. Its loopback server holds a parser-blocking response until the test releases it, including for a cross-site iframe.
 - Full suite: `./.venv/bin/python -m pytest tests/ -v`.
 - Async fallback: `./.venv/bin/python -m pytest tests/ -v -p anyio --anyio-backends=asyncio`.

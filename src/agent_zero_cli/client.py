@@ -727,9 +727,8 @@ class A0Client:
         if any(marker in reason_lower for marker in _TLS_CERTIFICATE_ERROR_MARKERS):
             return (
                 f"Socket.IO transport probe succeeded, but the {WS_NAMESPACE} namespace "
-                f"connection failed TLS certificate verification: {reason}. Update the CLI so "
-                "its Socket.IO transport uses the connector TLS settings, or fix the server "
-                "certificate chain if strict verification is enabled."
+                f"connection failed TLS certificate verification: {reason}. Check the server "
+                "certificate chain and the connector TLS settings."
             )
 
         guidance = (
@@ -1568,10 +1567,7 @@ class A0Client:
         response = await self._post("capabilities")
         if response.status_code == 404:
             raise A0ConnectorPluginMissingError(
-                "HTTP 404 — the builtin _a0_connector plugin is not available on this Agent Zero server.\n"
-                "\n"
-                "The web UI can work while this endpoint is missing: the CLI needs the plugin.\n"
-                "On a remote host, update Agent Zero before retrying."
+                "HTTP 404 — check the Agent Zero URL and enable the builtin _a0_connector plugin."
             )
         response.raise_for_status()
         data = self._json(response)
@@ -2038,9 +2034,7 @@ class A0Client:
         response = await self._post("chats_list", {"query": query})
         response.raise_for_status()
         data = self._json(response)
-        if "matches" not in data:
-            raise A0ProtocolError("Update Agent Zero to search chat messages from the CLI.")
-        matches = data["matches"]
+        matches = data.get("matches")
         if not isinstance(matches, list) or any(not isinstance(match, dict) for match in matches):
             raise A0ProtocolError("Invalid chat search response.")
         return matches

@@ -10,7 +10,7 @@
 
 ## Troubleshooting
 
-**404 on `/api/plugins/_a0_connector/v1/capabilities`** The running Agent Zero build does not currently expose the builtin `_a0_connector` plugin. Update Agent Zero Core to a version that includes it, or for local Core development edit the builtin plugin directly under `<agent-zero>/plugins/_a0_connector` (Docker: `/a0/plugins/_a0_connector`) and restart Agent Zero. There is no separate plugin copy in this repo to sync from.
+**404 on `/api/plugins/_a0_connector/v1/capabilities`** Check the Agent Zero URL and enable the builtin `_a0_connector` plugin.
 
 **Works in browser, fails in CLI** Same cause — the browser uses Agent Zero's built-in UI, not the connector API.
 
