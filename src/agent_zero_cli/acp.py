@@ -76,11 +76,18 @@ class _SessionState:
     failure: str = ""
     cancelled: bool = False
     completed: asyncio.Event = field(default_factory=asyncio.Event)
+    # A0 assistant_message events carry CUMULATIVE streaming snapshots
+    # (the WebUI renders them by replacement). ACP agent_message_chunk
+    # updates are APPEND-only, so each snapshot must be reduced to the
+    # delta before forwarding - otherwise every streamed reply is glued
+    # out of overlapping cumulative copies.
+    sent_text: str = ""
 
     def begin_turn(self) -> None:
         self.final_text = ""
         self.failure = ""
         self.cancelled = False
+        self.sent_text = ""
         self.completed.clear()
 
 
@@ -412,7 +419,21 @@ class AgentZeroACPAgent:
         text = str(data.get("text") or "")
         if event_type == "assistant_message" and text:
             state.final_text = text
-            await self._send_text(context_id, text)
+            # A0 streams assistant_message as CUMULATIVE snapshots; ACP
+            # chunks are append-only. Forward only the NEW tail - sending
+            # the whole snapshot every time glued overlapping copies into
+            # every streamed reply.
+            if text.startswith(state.sent_text):
+                delta = text[len(state.sent_text) :]
+            elif not state.sent_text:
+                delta = text
+            else:
+                # Snapshot changed shape mid-turn (rewritten/truncated):
+                # keep every byte by separating the new full text.
+                delta = "\n" + text
+            state.sent_text = text
+            if delta:
+                await self._send_text(context_id, delta)
             return
         if historical or event_type not in {"tool_start", "tool_output", "code_start", "code_output"}:
             return
