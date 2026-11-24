@@ -76,6 +76,8 @@ class _SessionState:
     failure: str = ""
     cancelled: bool = False
     completed: asyncio.Event = field(default_factory=asyncio.Event)
+    # Last agent profile successfully applied via a session directive.
+    directive_profile: str = ""
 
     def begin_turn(self) -> None:
         self.final_text = ""
@@ -232,6 +234,11 @@ class AgentZeroACPAgent:
             return PromptResponse(stop_reason="refusal", user_message_id=message_id)
 
         text, uploads = _prompt_parts(prompt)
+        # Session directive: a first line "# a0:profile=<name>" selects the
+        # server-side agent profile for this session. The directive is
+        # stripped before dispatch, so it never reaches the model. Harnesses
+        # that do not send directives are unaffected.
+        text = await self._apply_session_directives(session_id, state, text)
         if not text and not uploads:
             return PromptResponse(stop_reason="end_turn", user_message_id=message_id)
         client = _require_client(state)
@@ -244,6 +251,49 @@ class AgentZeroACPAgent:
         if state.failure:
             await self._send_text(session_id, f"Error: {state.failure}")
         return PromptResponse(stop_reason="end_turn", user_message_id=message_id)
+
+    async def _apply_session_directives(
+        self, session_id: str, state: "_SessionState", text: str
+    ) -> str:
+        """Apply leading ``# a0:key=value`` session directives and return
+        the remaining text. Unknown directives are left in place.
+
+        ``# a0:profile=<name>`` maps to the server-side agent profile via
+        ``set_agent_profile``. A rejected or failed call is not recorded,
+        so a later prompt carrying the same directive retries it; an
+        already-active profile is not re-applied.
+        """
+        lines = text.split("\n")
+        index = 0
+        while index < len(lines) and lines[index].startswith("# a0:"):
+            line = lines[index][len("# a0:"):].strip()
+            key, sep, value = line.partition("=")
+            if not sep or key.strip() != "profile" or not value.strip():
+                break  # unknown or malformed directive: leave the text alone
+            profile = value.strip()
+            if state.directive_profile == profile:
+                index += 1
+                continue
+            try:
+                client = _require_client(state)
+                response = await client.set_agent_profile(session_id, profile)
+                if isinstance(response, dict) and response.get("ok") is False:
+                    logger.debug(
+                        "Agent profile %s rejected for session %s: %s",
+                        profile, session_id, response.get("message"),
+                    )
+                else:
+                    state.directive_profile = profile
+                    logger.info(
+                        "ACP session %s: agent profile set to %s",
+                        session_id, profile,
+                    )
+            except Exception:
+                logger.debug(
+                    "Could not set agent profile for session", exc_info=True
+                )
+            index += 1
+        return "\n".join(lines[index:]) if index else text
 
     async def cancel(self, session_id: str, **_: Any) -> None:
         state = self._sessions.get(session_id)
