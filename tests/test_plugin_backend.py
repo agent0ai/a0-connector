@@ -712,7 +712,7 @@ def _load_computer_use_remote_tool(*, computer_use_handler):
     ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
     _reset_ws_runtime_state(ws_runtime_mod)
     shared_ws_manager.ws_runtime_mod = ws_runtime_mod
-    tool_mod = _reload("plugins._a0_connector.tools.computer_use_remote")
+    tool_mod = _reload("plugins._a0_connector.helpers.host_computer_use")
     return shared_ws_manager, ws_runtime_mod, tool_mod
 
 
@@ -2018,136 +2018,6 @@ def test_remote_file_structure_is_injected_as_extras_not_system_prompt() -> None
     assert "REMOTE_TREE_EXTRAS" in remote_tree_prompt
     assert r"C:\workspace\a0-connector" in remote_tree_prompt
     assert "pyproject.toml" in remote_tree_prompt
-
-
-def _install_fake_extension_helper() -> None:
-    extension_mod = types.ModuleType("helpers.extension")
-
-    class Extension:
-        def __init__(self, agent=None, **kwargs) -> None:
-            self.agent = agent
-            self.kwargs = kwargs
-
-    extension_mod.Extension = Extension
-    sys.modules["helpers.extension"] = extension_mod
-    sys.modules["helpers"].extension = extension_mod
-
-
-def _load_remote_tool_stubs_extension():
-    _install_fake_extension_helper()
-    return _reload(
-        "plugins._a0_connector.extensions.python._functions._11_tools_prompt."
-        "build_prompt.end._70_include_remote_tool_stubs"
-    )
-
-
-def test_legacy_remote_tool_stubs_gate_is_noop_when_cli_capabilities_are_available() -> None:
-    _install_fake_helpers()
-    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
-    _reset_ws_runtime_state(ws_runtime_mod)
-    include_mod = _load_remote_tool_stubs_extension()
-
-    sid = "sid-all-remote-tools"
-    context_id = "ctx-all-remote-tools"
-    ws_runtime_mod.register_sid(sid)
-    ws_runtime_mod.subscribe_sid_to_context(sid, context_id)
-    ws_runtime_mod.store_sid_remote_file_metadata(
-        sid,
-        {"enabled": True, "write_enabled": True, "mode": "read_write"},
-    )
-    ws_runtime_mod.store_sid_remote_exec_metadata(sid, {"enabled": True})
-    ws_runtime_mod.store_sid_computer_use_metadata(
-        sid,
-        {
-            "supported": True,
-            "enabled": True,
-            "trust_mode": "allow",
-            "backend_id": "wayland",
-            "backend_family": "linux",
-            "features": ["inline-png-capture", "pointer-injection"],
-        },
-    )
-
-    class FakeContext:
-        id = context_id
-
-    class FakeAgent:
-        context = FakeContext()
-
-        def read_prompt(self, file: str, **kwargs) -> str:
-            raise AssertionError(f"read_prompt should not be called, got {file!r}")
-
-    data = {"result": "## available tools\nbase_tool"}
-    include_mod.IncludeRemoteToolStubs(agent=FakeAgent()).execute(data=data)
-
-    assert data["result"] == "## available tools\nbase_tool"
-
-
-def test_legacy_remote_tool_stubs_gate_is_noop_for_read_only_file_access() -> None:
-    _install_fake_helpers()
-    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
-    _reset_ws_runtime_state(ws_runtime_mod)
-    include_mod = _load_remote_tool_stubs_extension()
-
-    sid = "sid-read-only"
-    context_id = "ctx-read-only"
-    ws_runtime_mod.register_sid(sid)
-    ws_runtime_mod.subscribe_sid_to_context(sid, context_id)
-    ws_runtime_mod.store_sid_remote_file_metadata(
-        sid,
-        {"enabled": True, "write_enabled": False, "mode": "read_only"},
-    )
-    ws_runtime_mod.store_sid_remote_exec_metadata(sid, {"enabled": True})
-
-    class FakeContext:
-        id = context_id
-
-    class FakeAgent:
-        context = FakeContext()
-
-        def read_prompt(self, file: str, **kwargs) -> str:
-            raise AssertionError(f"read_prompt should not be called, got {file!r}")
-
-    data = {"result": "## available tools\nbase_tool"}
-    include_mod.IncludeRemoteToolStubs(agent=FakeAgent()).execute(data=data)
-
-    assert data["result"] == "## available tools\nbase_tool"
-
-
-def test_remote_tool_stubs_are_not_injected_without_enabled_cli_capabilities() -> None:
-    _install_fake_helpers()
-    ws_runtime_mod = _reload("plugins._a0_connector.helpers.ws_runtime")
-    _reset_ws_runtime_state(ws_runtime_mod)
-    include_mod = _load_remote_tool_stubs_extension()
-
-    sid = "sid-disabled"
-    context_id = "ctx-disabled"
-    ws_runtime_mod.register_sid(sid)
-    ws_runtime_mod.subscribe_sid_to_context(sid, context_id)
-    ws_runtime_mod.store_sid_remote_file_metadata(sid, {"enabled": False})
-    ws_runtime_mod.store_sid_remote_exec_metadata(sid, {"enabled": False})
-    ws_runtime_mod.store_sid_computer_use_metadata(
-        sid,
-        {
-            "supported": True,
-            "enabled": False,
-            "trust_mode": "allow",
-        },
-    )
-
-    class FakeContext:
-        id = context_id
-
-    class FakeAgent:
-        context = FakeContext()
-
-        def read_prompt(self, file: str, **kwargs) -> str:
-            raise AssertionError(f"read_prompt should not be called, got {file!r}")
-
-    data = {"result": "## available tools\nbase_tool"}
-    include_mod.IncludeRemoteToolStubs(agent=FakeAgent()).execute(data=data)
-
-    assert data["result"] == "## available tools\nbase_tool"
 
 
 def test_select_remote_exec_target_sid_ignores_disabled_clients() -> None:
